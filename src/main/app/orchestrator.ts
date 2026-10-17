@@ -269,25 +269,52 @@ export class Orchestrator implements AppService {
     return this.deps.tmux.listWindows(session)
   }
 
-  // File viewer: stubs, implemented by track L.
+  // File viewer. Read-only, so these skip the mutation queue.
 
-  async listFiles(): Promise<string[]> {
-    throw new Error('not implemented')
+  /** The folder the file viewer shows for a target; throws if it is gone from disk. */
+  private resolveRoot(target: Target): { root: string; isRepo: boolean; baseRef?: string } {
+    const item = m.getItem(this.state, target.themeId, target.itemId)
+    let resolved: { root: string; isRepo: boolean; baseRef?: string }
+    if (item.kind === 'folder') {
+      resolved = { root: item.path, isRepo: false }
+    } else {
+      if (!target.taskId) throw new Error('Choose a task to open')
+      const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
+      resolved = { root: task.worktreePath, isRepo: true, baseRef: task.baseRef }
+    }
+    if (!this.deps.pathExists(resolved.root)) throw new Error(`Folder not found: ${resolved.root}`)
+    return resolved
   }
 
-  async readFile(): Promise<FileContent> {
-    throw new Error('not implemented')
+  /** Like resolveRoot, but only for repo tasks, which have a base ref to diff against. */
+  private resolveTask(target: Target): { root: string; baseRef: string } {
+    const { root, baseRef } = this.resolveRoot(target)
+    if (baseRef === undefined) throw new Error('Changes are only available for repository tasks')
+    return { root, baseRef }
   }
 
-  async readImage(): Promise<string | null> {
-    throw new Error('not implemented')
+  async listFiles(target: Target): Promise<string[]> {
+    const { root, isRepo } = this.resolveRoot(target)
+    return this.deps.files.listFiles(root, isRepo)
   }
 
-  async listChanges(): Promise<ChangeList> {
-    throw new Error('not implemented')
+  async readFile(target: Target, path: string): Promise<FileContent> {
+    const { root } = this.resolveRoot(target)
+    return this.deps.files.readFile(root, path)
   }
 
-  async fileDiff(): Promise<string> {
-    throw new Error('not implemented')
+  async readImage(target: Target, path: string): Promise<string | null> {
+    const { root } = this.resolveRoot(target)
+    return this.deps.files.readImage(root, path)
+  }
+
+  async listChanges(target: Target): Promise<ChangeList> {
+    const { root, baseRef } = this.resolveTask(target)
+    return this.deps.files.listChanges(root, baseRef)
+  }
+
+  async fileDiff(target: Target, path: string): Promise<string> {
+    const { root, baseRef } = this.resolveTask(target)
+    return this.deps.files.fileDiff(root, baseRef, path)
   }
 }
