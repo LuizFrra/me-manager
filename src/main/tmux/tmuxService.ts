@@ -5,6 +5,15 @@ import type { TmuxApi } from '../contracts'
 import { CommandError, run } from '../exec'
 import { TMUX_CONF } from './tmuxConf'
 
+/**
+ * tmux format-expands the -c start directory: `#(cmd)` would run a shell command and
+ * `#S` etc. would be replaced. `##` is a literal `#`, so escape every one.
+ * (Session names are slugs and window names are fixed strings, so only cwd carries user input.)
+ */
+export function escapeFormat(value: string): string {
+  return value.replace(/#/g, '##')
+}
+
 export class TmuxService implements TmuxApi {
   constructor(
     private readonly socket: string,
@@ -45,7 +54,7 @@ export class TmuxService implements TmuxApi {
   }
 
   async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
-    await this.tmux(['new-session', '-d', '-s', name, '-c', cwd, '-n', windowName, command])
+    await this.tmux(['new-session', '-d', '-s', name, '-c', escapeFormat(cwd), '-n', windowName, command])
   }
 
   async killSession(name: string): Promise<void> {
@@ -70,7 +79,7 @@ export class TmuxService implements TmuxApi {
   }
 
   async newWindow(session: string, cwd: string, windowName: string, command?: string): Promise<void> {
-    await this.tmux(['new-window', '-t', `=${session}:`, '-c', cwd, '-n', windowName, ...(command ? [command] : [])])
+    await this.tmux(['new-window', '-t', `=${session}:`, '-c', escapeFormat(cwd), '-n', windowName, ...(command ? [command] : [])])
   }
 
   async selectWindow(session: string, index: number): Promise<void> {
@@ -82,6 +91,6 @@ export class TmuxService implements TmuxApi {
   }
 
   attachCommand(session: string): { file: string; args: string[] } {
-    return { file: 'tmux', args: [...this.baseArgs(), 'attach-session', '-t', `=${session}`] }
+    return { file: 'tmux', args: [...this.baseArgs(), '-u', 'attach-session', '-t', `=${session}`] }
   }
 }
