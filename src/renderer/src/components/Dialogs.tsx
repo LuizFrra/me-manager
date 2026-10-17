@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { UnsavedWork } from '../../../shared/types'
 
 export function NameDialog(props: {
@@ -55,7 +55,21 @@ export function RemoveTaskDialog(props: {
   onCancel: () => void
 }): React.JSX.Element {
   const [deleteBranch, setDeleteBranch] = useState(false)
+  const [busy, setBusy] = useState(false)
+  // The ref blocks a second click that lands before React re-renders with the buttons disabled.
+  const busyRef = useRef(false)
   const { uncommittedFiles, unpushedCommits } = props.work
+  const confirm = async (): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onConfirm(deleteBranch)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
   return (
     <div className="overlay">
       <div className="dialog" role="dialog" aria-label={`Remove ${props.taskName}`}>
@@ -86,11 +100,11 @@ export function RemoveTaskDialog(props: {
           Also delete the branch
         </label>
         <div className="dialog-actions">
-          <button type="button" onClick={props.onCancel}>
+          <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="button" className="danger" onClick={() => props.onConfirm(deleteBranch)}>
-            Remove anyway
+          <button type="button" className="danger" onClick={() => void confirm()} disabled={busy}>
+            {busy ? 'Removing…' : 'Remove anyway'}
           </button>
         </div>
       </div>
