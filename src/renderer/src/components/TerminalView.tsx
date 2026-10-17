@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { ClipboardAddon, type IClipboardProvider } from '@xterm/addon-clipboard'
+import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import type { MeManagerApi } from '../../../shared/types'
+import { createWriteOnlyClipboard } from '../lib/clipboardProvider'
 
 export interface TerminalViewProps {
   api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'>
@@ -14,12 +15,7 @@ export interface TerminalViewProps {
 const isMac = navigator.userAgent.includes('Mac')
 
 // OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
-const writeOnlyClipboard: IClipboardProvider = {
-  readText: () => '',
-  writeText: async (selection, text) => {
-    if ((selection as string) === 'c') await navigator.clipboard.writeText(text)
-  }
-}
+const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboard.writeText(text))
 
 export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
