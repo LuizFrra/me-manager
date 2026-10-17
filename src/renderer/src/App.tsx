@@ -101,8 +101,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
 
+  // Reads the ref, not `selected`: callers run after an await, when the selection may have changed.
   const clearSelectionIf = (pred: (t: Target) => boolean): void => {
-    if (selected && pred(selected)) {
+    const current = selectedRef.current
+    if (current && pred(current)) {
       select(null)
       setTabs([])
     }

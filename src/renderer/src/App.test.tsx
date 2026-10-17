@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from './App'
@@ -172,6 +172,30 @@ describe('App', () => {
     })
     expect(screen.queryByRole('tab', { name: 'task A tab' })).not.toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
+  })
+
+  it('keeps a selection made while a task was being removed', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const base = repoApi()
+    const api: MeManagerApi = {
+      ...base,
+      removeTask: async (...args) => {
+        await gate.promise
+        return base.removeTask(...args)
+      },
+    }
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task B', 'task T') // task T ends up selected
+    expect(await screen.findByText('my-api › task T')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Remove task task T' }))
+    await user.click(taskButton('task B'))
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+
+    gate.resolve()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove task task T' })).not.toBeInTheDocument())
+    expect(screen.getByText('my-api › task B')).toBeInTheDocument()
   })
 
   it('shows backend errors as toasts', async () => {
