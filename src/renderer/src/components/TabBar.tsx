@@ -1,4 +1,5 @@
 import type { TabInfo } from '../../../shared/types'
+import { PANEL_SHORTCUT_LABEL } from '../lib/shortcuts'
 
 export function TabBar(props: {
   tabs: TabInfo[]
@@ -6,6 +7,8 @@ export function TabBar(props: {
   onClose: (index: number) => void
   onNew: () => void
   onRestartClaude: () => void
+  panelOpen: boolean
+  onTogglePanel: () => void
 }): React.JSX.Element {
   const hasClaude = props.tabs.some((t) => t.name === 'claude')
   return (
@@ -23,11 +26,21 @@ export function TabBar(props: {
       <button className="tab-new" aria-label="New shell tab" onClick={props.onNew}>
         +
       </button>
+      <span className="tabbar-spacer" />
       {!hasClaude && props.tabs.length > 0 && (
         <button className="restart" onClick={props.onRestartClaude}>
           Restart Claude
         </button>
       )}
+      <button
+        className={props.panelOpen ? 'panel-toggle active' : 'panel-toggle'}
+        aria-label="Toggle files panel"
+        aria-pressed={props.panelOpen}
+        title={`Files panel (${PANEL_SHORTCUT_LABEL})`}
+        onClick={props.onTogglePanel}
+      >
+        ⊞
+      </button>
     </div>
   )
 }
