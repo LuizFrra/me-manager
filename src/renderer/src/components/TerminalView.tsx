@@ -5,14 +5,13 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import type { MeManagerApi } from '../../../shared/types'
 import { createWriteOnlyClipboard } from '../lib/clipboardProvider'
+import { isMac, isPanelShortcut } from '../lib/shortcuts'
 
 export interface TerminalViewProps {
   api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'>
   /** Changes whenever the attached session changes; the terminal resets. */
   sessionKey: string
 }
-
-const isMac = navigator.userAgent.includes('Mac')
 
 // OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
 const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboard.writeText(text))
@@ -40,6 +39,7 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
     // Linux has no app menu (it would steal Ctrl+C), so handle Ctrl+Shift+C/V here.
     // On macOS the Edit menu handles Cmd+C/V.
     term.attachCustomKeyEventHandler((e) => {
+      if (isPanelShortcut(e)) return false // App's window listener toggles the files panel; don't send it to tmux
       if (isMac || e.type !== 'keydown' || !(e.ctrlKey && e.shiftKey)) return true
       const key = e.key.toLowerCase()
       if (key === 'c') {
