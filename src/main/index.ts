@@ -9,7 +9,7 @@ import { GitService } from './git/gitService'
 import { registerIpc } from './ipc'
 import { stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
 import { PtyService } from './pty/ptyService'
-import { loadLoginShellPath } from './shellEnv'
+import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
 import { TmuxService } from './tmux/tmuxService'
 
@@ -69,6 +69,8 @@ async function bootstrap(): Promise<void> {
   // If launched from inside a Claude Code session, don't let `claude` think it is nested.
   delete process.env.CLAUDECODE
   await loadLoginShellPath()
+  // Before any tmux command, so the tmux server and `claude` inherit a UTF-8 locale.
+  ensureUtf8Locale()
 
   const tmux = new TmuxService(TMUX_SOCKET, tmuxConfFile())
   await tmux.ensureConfig()

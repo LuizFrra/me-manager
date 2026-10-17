@@ -91,6 +91,6 @@ export class TmuxService implements TmuxApi {
   }
 
   attachCommand(session: string): { file: string; args: string[] } {
-    return { file: 'tmux', args: [...this.baseArgs(), 'attach-session', '-t', `=${session}`] }
+    return { file: 'tmux', args: [...this.baseArgs(), '-u', 'attach-session', '-t', `=${session}`] }
   }
 }
