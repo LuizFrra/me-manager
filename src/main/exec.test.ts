@@ -21,6 +21,16 @@ describe('run', () => {
     )
     expect(out).toBe('yes:true')
   })
+  it('resolves with stdout when the exit code is in okExitCodes', async () => {
+    await expect(
+      run(process.execPath, ['-e', "process.stdout.write('x'); process.exit(1)"], { okExitCodes: [1] }),
+    ).resolves.toBe('x')
+  })
+  it('still rejects exit codes not in okExitCodes', async () => {
+    const err = await run(process.execPath, ['-e', 'process.exit(2)'], { okExitCodes: [1] }).catch((e) => e)
+    expect(err).toBeInstanceOf(CommandError)
+    expect(err.code).toBe(2)
+  })
   it('explains a missing binary', async () => {
     const err = await run('definitely-not-a-real-binary-xyz', []).catch((e) => e)
     expect(err).toBeInstanceOf(CommandError)
