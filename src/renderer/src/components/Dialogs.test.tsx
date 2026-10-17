@@ -29,4 +29,19 @@ describe('RemoveTaskDialog', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
   })
 
+  it('shows the warning when the check could not run fully', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn(async () => {})
+    render(
+      <RemoveTaskDialog
+        taskName="t"
+        work={{ uncommittedFiles: [], unpushedCommits: [], warning: 'repo missing' }}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('repo missing')
+    await user.click(screen.getByRole('button', { name: 'Remove anyway' }))
+    expect(onConfirm).toHaveBeenCalledWith(false)
+  })
 })
