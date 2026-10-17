@@ -79,7 +79,16 @@ export class TmuxService implements TmuxApi {
   }
 
   async newWindow(session: string, cwd: string, windowName: string, command?: string): Promise<void> {
-    await this.tmux(['new-window', '-t', `=${session}:`, '-c', escapeFormat(cwd), '-n', windowName, ...(command ? [command] : [])])
+    await this.tmux([
+      'new-window',
+      '-t',
+      `=${session}:`,
+      '-c',
+      escapeFormat(cwd),
+      '-n',
+      windowName,
+      ...(command ? [command] : []),
+    ])
   }
 
   async selectWindow(session: string, index: number): Promise<void> {

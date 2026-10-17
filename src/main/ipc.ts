@@ -1,5 +1,13 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
-import { INVOKE_METHODS, invokeChannel, PTY_DATA, PTY_EXIT, PTY_RESIZE, PTY_WRITE, type InvokeMethod } from '../shared/ipc'
+import {
+  INVOKE_METHODS,
+  invokeChannel,
+  PTY_DATA,
+  PTY_EXIT,
+  PTY_RESIZE,
+  PTY_WRITE,
+  type InvokeMethod,
+} from '../shared/ipc'
 import type { AppService, PtyApi } from './contracts'
 import { checkPrereqs } from './prereqs'
 

@@ -25,7 +25,7 @@ class FakePty {
   constructor(
     readonly file: string,
     readonly args: string[],
-    readonly opts: Record<string, unknown>
+    readonly opts: Record<string, unknown>,
   ) {}
   onData(cb: (d: string) => void): { dispose(): void } {
     this.dataCb = cb

@@ -30,7 +30,7 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
       fontSize: 13,
       cursorBlink: true,
       macOptionClickForcesSelection: true,
-      theme: { background: '#1e1e1e' }
+      theme: { background: '#1e1e1e' },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)

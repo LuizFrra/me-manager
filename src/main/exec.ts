@@ -26,7 +26,12 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
     execFile(
       file,
       args,
-      { cwd: opts.cwd, timeout: opts.timeoutMs ?? 0, maxBuffer: 16 * 1024 * 1024, env: opts.env ? { ...process.env, ...opts.env } : process.env },
+      {
+        cwd: opts.cwd,
+        timeout: opts.timeoutMs ?? 0,
+        maxBuffer: 16 * 1024 * 1024,
+        env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      },
       (err, stdout, stderr) => {
         if (!err) {
           resolve(String(stdout))

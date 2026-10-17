@@ -6,7 +6,11 @@ export async function checkPrereqs(): Promise<PrereqResult> {
   const tools = [
     { tool: 'git', args: ['--version'], hint: mac ? 'xcode-select --install' : 'sudo apt install git' },
     { tool: 'tmux', args: ['-V'], hint: mac ? 'brew install tmux' : 'sudo apt install tmux' },
-    { tool: 'claude', args: ['--version'], hint: 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup' },
+    {
+      tool: 'claude',
+      args: ['--version'],
+      hint: 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup',
+    },
   ]
   const missing: PrereqResult['missing'] = []
   for (const t of tools) {

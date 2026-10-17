@@ -12,9 +12,13 @@ describe('run', () => {
     expect(err.code).toBe(3)
   })
   it('merges extra env vars over process.env', async () => {
-    const out = await run(process.execPath, ['-e', 'process.stdout.write(`${process.env.MM_X}:${!!process.env.PATH}`)'], {
-      env: { MM_X: 'yes' },
-    })
+    const out = await run(
+      process.execPath,
+      ['-e', 'process.stdout.write(`${process.env.MM_X}:${!!process.env.PATH}`)'],
+      {
+        env: { MM_X: 'yes' },
+      },
+    )
     expect(out).toBe('yes:true')
   })
   it('explains a missing binary', async () => {
