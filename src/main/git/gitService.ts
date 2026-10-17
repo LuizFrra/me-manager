@@ -12,6 +12,22 @@ const NON_INTERACTIVE_ENV = {
   GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes',
 }
 
+/**
+ * Paths from `git status --porcelain -z`: "XY path" entries separated by NUL, never quoted.
+ * Renames and copies are followed by an extra entry with the old path, which is skipped.
+ */
+export function parsePorcelainZ(out: string): string[] {
+  const entries = out.split('\0')
+  const files: string[] = []
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]
+    if (!entry) continue // trailing NUL
+    files.push(entry.slice(3))
+    if (/[RC]/.test(entry.slice(0, 2))) i++
+  }
+  return files
+}
+
 export class GitService implements GitApi {
   private git(cwd: string, args: string[]): Promise<string> {
     return run('git', ['-C', cwd, ...args])
@@ -117,10 +133,7 @@ export class GitService implements GitApi {
     let warning: string | undefined
     if (existsSync(worktreePath)) {
       try {
-        uncommittedFiles = (await this.git(worktreePath, ['status', '--porcelain']))
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => line.slice(3))
+        uncommittedFiles = parsePorcelainZ(await this.git(worktreePath, ['status', '--porcelain', '-z']))
       } catch {
         warning = `git status failed in ${worktreePath}, so uncommitted changes in it could not be checked.`
       }
