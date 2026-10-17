@@ -198,6 +198,22 @@ describe('App', () => {
     expect(screen.getByText('my-api › task B')).toBeInTheDocument()
   })
 
+  it('shows the warning when unsaved work could not be checked, and still removes', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [], warning: 'repo missing' }),
+    })
+    const removeTask = vi.spyOn(api, 'removeTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Remove task fix login bug' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('repo missing')
+    await user.click(within(dialog).getByRole('button', { name: 'Remove anyway' }))
+    expect(removeTask).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('shows backend errors as toasts', async () => {
     const user = userEvent.setup()
     const api = createMockApi({
