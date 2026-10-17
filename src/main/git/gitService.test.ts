@@ -92,6 +92,19 @@ describe('getUnsavedWork', () => {
     expect(work.unpushedCommits).toHaveLength(1)
     expect(work.unpushedCommits[0]).toContain('add a')
   })
+  it('reports file names with spaces and non-ASCII verbatim', async () => {
+    const { clone, wt, branch } = await withTask()
+    await writeFile(join(wt, 'my file ç.txt'), 'x')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual(['my file ç.txt'])
+  })
+  it('reports only the new name of a renamed file', async () => {
+    const { clone, wt, branch } = await withTask()
+    await git(wt, 'mv', 'README.md', 'read me ç.md')
+    await writeFile(join(wt, 'other.txt'), 'x')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual(['read me ç.md', 'other.txt'])
+  })
   it('treats pushed commits as safe', async () => {
     const { clone, wt, branch } = await withTask()
     await commitFile(wt, 'a.txt', 'a', 'add a')
