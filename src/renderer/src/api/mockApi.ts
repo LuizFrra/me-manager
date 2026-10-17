@@ -1,0 +1,81 @@
+import type { AppState, MeManagerApi, TabInfo, Theme } from '../../../shared/types'
+import { branchName, slugify } from '../../../shared/naming'
+
+const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
+const baseName = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
+
+/** In-memory MeManagerApi for tests and for running the UI in a browser. */
+export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerApi {
+  let state: AppState = { version: 1, themes: [] }
+  let counter = 0
+  const id = (): string => `id-${++counter}`
+  const tabs: TabInfo[] = [{ index: 0, name: 'claude', active: true }]
+
+  const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
+    const next = clone(state)
+    const theme = next.themes.find((t) => t.id === themeId)
+    if (!theme) throw new Error(`Theme not found: ${themeId}`)
+    fn(theme)
+    state = next
+    return state
+  }
+
+  const api: MeManagerApi = {
+    getState: async () => state,
+    getStatus: async () => ({ running: [], missing: [] }),
+    checkPrereqs: async () => ({ ok: true, missing: [] }),
+    createTheme: async (name) => {
+      state = { ...state, themes: [...state.themes, { id: id(), name, slug: slugify(name), items: [] }] }
+      return state
+    },
+    removeTheme: async (themeId) => {
+      state = { ...state, themes: state.themes.filter((t) => t.id !== themeId) }
+      return state
+    },
+    pickDirectory: async () => `/home/demo/project-${++counter}`,
+    addRepo: (themeId, path) =>
+      edit(themeId, (t) => {
+        t.items.push({ id: id(), kind: 'repo', name: baseName(path), slug: slugify(baseName(path)), path, tasks: [] })
+      }),
+    addFolder: (themeId, path) =>
+      edit(themeId, (t) => {
+        t.items.push({ id: id(), kind: 'folder', name: baseName(path), slug: slugify(baseName(path)), path })
+      }),
+    removeItem: (themeId, itemId) =>
+      edit(themeId, (t) => {
+        t.items = t.items.filter((i) => i.id !== itemId)
+      }),
+    createTask: (themeId, repoId, name) =>
+      edit(themeId, (t) => {
+        const repo = t.items.find((i) => i.id === repoId)
+        if (repo?.kind !== 'repo') throw new Error('Repository not found')
+        const slug = slugify(name)
+        repo.tasks.push({
+          id: id(),
+          name,
+          slug,
+          branch: branchName(t.slug, slug),
+          worktreePath: `/home/demo/.me-manager/worktrees/${t.slug}/${repo.slug}/${slug}`,
+          baseRef: 'origin/main',
+          createdAt: new Date().toISOString(),
+        })
+      }),
+    checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
+    removeTask: (themeId, repoId, taskId) =>
+      edit(themeId, (t) => {
+        const repo = t.items.find((i) => i.id === repoId)
+        if (repo?.kind === 'repo') repo.tasks = repo.tasks.filter((k) => k.id !== taskId)
+      }),
+    openTarget: async () => tabs,
+    listTabs: async () => tabs,
+    newTab: async () => tabs,
+    selectTab: async () => tabs,
+    closeTab: async () => tabs,
+    restartClaude: async () => tabs,
+    ptyWrite: () => {},
+    ptyResize: () => {},
+    onPtyData: () => () => {},
+    onPtyExit: () => () => {},
+  }
+  return { ...api, ...overrides }
+}
