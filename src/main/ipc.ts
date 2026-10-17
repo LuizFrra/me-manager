@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import {
   INVOKE_METHODS,
   invokeChannel,
@@ -23,6 +23,12 @@ export function registerIpc(opts: { app: AppService; pty: PtyApi; getWindow: () 
       const options = { properties: ['openDirectory' as const] }
       const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
       return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    openExternal: async (url) => {
+      const parsed = new URL(String(url))
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+        throw new Error('Only http(s) links can be opened')
+      await shell.openExternal(parsed.toString())
     },
   }
 

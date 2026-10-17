@@ -17,6 +17,8 @@ export interface RunOptions {
   timeoutMs?: number
   /** Extra variables merged over process.env. */
   env?: NodeJS.ProcessEnv
+  /** Non-zero exit codes that still count as success (e.g. 1 for `git diff --no-index` with differences). */
+  okExitCodes?: number[]
 }
 
 /** Runs a binary without a shell and resolves with stdout. Rejects with CommandError. */
@@ -43,6 +45,10 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
           return
         }
         const code = typeof err.code === 'number' ? err.code : null
+        if (code !== null && opts.okExitCodes?.includes(code)) {
+          resolve(String(stdout))
+          return
+        }
         const detail = String(stderr).trim() || `exit code ${code}`
         reject(new CommandError(command, code, String(stderr), `${command} failed: ${detail}`))
       },
