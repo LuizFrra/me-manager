@@ -5,7 +5,8 @@ export interface MermaidBlockProps {
   code: string
 }
 
-type State = { status: 'loading' } | { status: 'ok'; svg: string } | { status: 'error'; message: string }
+/** The outcome of rendering `code`; a state for a different `code` than the current prop means "still loading". */
+type Result = { code: string } & ({ status: 'ok'; svg: string } | { status: 'error'; message: string })
 
 const XLINK = 'http://www.w3.org/1999/xlink'
 
@@ -47,22 +48,22 @@ function neutralizeLinks(root: HTMLElement): void {
 }
 
 export function MermaidBlock({ code }: MermaidBlockProps): React.JSX.Element {
-  const [state, setState] = useState<State>({ status: 'loading' })
+  const [result, setResult] = useState<Result | null>(null)
+  const state = result?.code === code ? result : null
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let cancelled = false
     const id = `mermaid-${++nextId}`
-    setState({ status: 'loading' })
     loadMermaid()
       .then((mermaid) => mermaid.render(id, code))
       .then(
         ({ svg }) => {
-          if (!cancelled) setState({ status: 'ok', svg })
+          if (!cancelled) setResult({ code, status: 'ok', svg })
         },
         (err: unknown) => {
           document.getElementById(`d${id}`)?.remove() // mermaid's temporary render node, if left behind
-          if (!cancelled) setState({ status: 'error', message: errorMessage(err) })
+          if (!cancelled) setResult({ code, status: 'error', message: errorMessage(err) })
         },
       )
     return () => {
@@ -72,13 +73,13 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.JSX.Element {
 
   useLayoutEffect(() => {
     const el = containerRef.current
-    if (!el || state.status !== 'ok') return
+    if (!el || state?.status !== 'ok') return
     // Mermaid output is sanitized by mermaid itself (securityLevel: 'strict').
     el.innerHTML = state.svg
     neutralizeLinks(el)
   }, [state])
 
-  if (state.status === 'error') {
+  if (state?.status === 'error') {
     return (
       <div className="mermaid-error">
         <div className="mermaid-error-message">{state.message}</div>
@@ -88,7 +89,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.JSX.Element {
   }
   return (
     <div
-      className={state.status === 'loading' ? 'mermaid-block mermaid-loading' : 'mermaid-block'}
+      className={state ? 'mermaid-block' : 'mermaid-block mermaid-loading'}
       ref={containerRef}
       onClickCapture={(e) => {
         if ((e.target as Element).closest('a')) e.preventDefault()
