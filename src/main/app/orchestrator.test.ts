@@ -308,3 +308,88 @@ describe('Orchestrator: fetch timeout', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+describe('Orchestrator: file viewer', () => {
+  async function withTaskAndFolder(): Promise<Ctx & { task: Task; taskTarget: Target; folderTarget: Target }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    const s = await ctx.orch.addFolder(ctx.themeId, '/docs/notes')
+    const folderId = s.themes[0].items[1].id
+    return {
+      ...ctx,
+      task,
+      taskTarget: { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id },
+      folderTarget: { themeId: ctx.themeId, itemId: folderId },
+    }
+  }
+
+  it('lists a task worktree as a repo', async () => {
+    const { orch, files, taskTarget } = await withTaskAndFolder()
+    await orch.listFiles(taskTarget)
+    expect(files.calls).toEqual(['listFiles /wt/client-x/my-api/fix true'])
+  })
+
+  it('lists a folder as a plain folder', async () => {
+    const { orch, files, folderTarget } = await withTaskAndFolder()
+    await orch.listFiles(folderTarget)
+    expect(files.calls).toEqual(['listFiles /docs/notes false'])
+  })
+
+  it('returns what the files service returns', async () => {
+    const { orch, files, taskTarget } = await withTaskAndFolder()
+    files.listFiles = async () => ['a.ts', 'b/c.md']
+    await expect(orch.listFiles(taskTarget)).resolves.toEqual(['a.ts', 'b/c.md'])
+  })
+
+  it('reads files and images relative to the root', async () => {
+    const { orch, files, taskTarget, folderTarget } = await withTaskAndFolder()
+    await orch.readFile(taskTarget, 'src/a.ts')
+    await orch.readImage(folderTarget, 'img/logo.png')
+    expect(files.calls).toEqual(['readFile /wt/client-x/my-api/fix src/a.ts', 'readImage /docs/notes img/logo.png'])
+  })
+
+  it("passes the task's baseRef to listChanges and fileDiff", async () => {
+    const { orch, files, taskTarget } = await withTaskAndFolder()
+    await orch.listChanges(taskTarget)
+    await orch.fileDiff(taskTarget, 'src/a.ts')
+    expect(files.calls).toEqual([
+      'listChanges /wt/client-x/my-api/fix origin/main',
+      'fileDiff /wt/client-x/my-api/fix origin/main src/a.ts',
+    ])
+  })
+
+  it('rejects changes and diffs for folders', async () => {
+    const { orch, files, folderTarget } = await withTaskAndFolder()
+    await expect(orch.listChanges(folderTarget)).rejects.toThrow('Changes are only available for repository tasks')
+    await expect(orch.fileDiff(folderTarget, 'a.md')).rejects.toThrow('Changes are only available for repository tasks')
+    expect(files.calls).toEqual([])
+  })
+
+  it('rejects a repo target without a task', async () => {
+    const { orch, files, themeId, repoId } = await withTaskAndFolder()
+    await expect(orch.listFiles({ themeId, itemId: repoId })).rejects.toThrow('Choose a task to open')
+    expect(files.calls).toEqual([])
+  })
+
+  it('rejects when the root is missing', async () => {
+    const { orch, files, deps, taskTarget, folderTarget } = await withTaskAndFolder()
+    deps.pathExists = () => false
+    await expect(orch.listFiles(taskTarget)).rejects.toThrow('Folder not found: /wt/client-x/my-api/fix')
+    await expect(orch.readFile(folderTarget, 'a.md')).rejects.toThrow('Folder not found: /docs/notes')
+    await expect(orch.readImage(folderTarget, 'a.png')).rejects.toThrow('Folder not found: /docs/notes')
+    await expect(orch.listChanges(taskTarget)).rejects.toThrow('Folder not found')
+    await expect(orch.fileDiff(taskTarget, 'a.ts')).rejects.toThrow('Folder not found')
+    expect(files.calls).toEqual([])
+  })
+
+  it('does not wait for queued mutations', async () => {
+    const { orch, files, git, themeId, repoId, taskTarget } = await withTaskAndFolder()
+    let release!: () => void
+    git.fetch = () => new Promise<void>((resolve) => (release = resolve))
+    const pending = orch.createTask(themeId, repoId, 'slow')
+    await orch.listFiles(taskTarget)
+    expect(files.calls).toEqual(['listFiles /wt/client-x/my-api/fix true'])
+    release()
+    await pending
+  })
+})
