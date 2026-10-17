@@ -1,0 +1,87 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import type { TabInfo } from '../../shared/types'
+import type { TmuxApi } from '../contracts'
+import { CommandError, run } from '../exec'
+import { TMUX_CONF } from './tmuxConf'
+
+export class TmuxService implements TmuxApi {
+  constructor(
+    private readonly socket: string,
+    private readonly configFile: string,
+  ) {}
+
+  async ensureConfig(): Promise<void> {
+    await mkdir(dirname(this.configFile), { recursive: true })
+    await writeFile(this.configFile, TMUX_CONF, 'utf8')
+  }
+
+  private baseArgs(): string[] {
+    return ['-L', this.socket, '-f', this.configFile]
+  }
+
+  private tmux(args: string[]): Promise<string> {
+    return run('tmux', [...this.baseArgs(), ...args])
+  }
+
+  async hasSession(name: string): Promise<boolean> {
+    try {
+      await this.tmux(['has-session', '-t', `=${name}`])
+      return true
+    } catch (err) {
+      if (err instanceof CommandError) return false
+      throw err
+    }
+  }
+
+  async listSessions(): Promise<string[]> {
+    try {
+      const out = await this.tmux(['list-sessions', '-F', '#{session_name}'])
+      return out.split('\n').filter(Boolean)
+    } catch (err) {
+      if (err instanceof CommandError && /no server running|error connecting/i.test(err.stderr)) return []
+      throw err
+    }
+  }
+
+  async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
+    await this.tmux(['new-session', '-d', '-s', name, '-c', cwd, '-n', windowName, command])
+  }
+
+  async killSession(name: string): Promise<void> {
+    if (await this.hasSession(name)) await this.tmux(['kill-session', '-t', `=${name}`])
+  }
+
+  async listWindows(session: string): Promise<TabInfo[]> {
+    const out = await this.tmux([
+      'list-windows',
+      '-t',
+      `=${session}`,
+      '-F',
+      '#{window_index}\t#{window_name}\t#{window_active}',
+    ])
+    return out
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [index, windowName, active] = line.split('\t')
+        return { index: Number(index), name: windowName, active: active === '1' }
+      })
+  }
+
+  async newWindow(session: string, cwd: string, windowName: string, command?: string): Promise<void> {
+    await this.tmux(['new-window', '-t', `=${session}:`, '-c', cwd, '-n', windowName, ...(command ? [command] : [])])
+  }
+
+  async selectWindow(session: string, index: number): Promise<void> {
+    await this.tmux(['select-window', '-t', `=${session}:${index}`])
+  }
+
+  async killWindow(session: string, index: number): Promise<void> {
+    await this.tmux(['kill-window', '-t', `=${session}:${index}`])
+  }
+
+  attachCommand(session: string): { file: string; args: string[] } {
+    return { file: 'tmux', args: [...this.baseArgs(), 'attach-session', '-t', `=${session}`] }
+  }
+}
