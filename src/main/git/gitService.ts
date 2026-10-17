@@ -5,6 +5,13 @@ import type { UnsavedWork } from '../../shared/types'
 import type { GitApi } from '../contracts'
 import { run } from '../exec'
 
+/** A GUI app has no terminal to answer credential prompts, so fail fast instead of hanging. */
+const FETCH_TIMEOUT_MS = 30_000
+const NON_INTERACTIVE_ENV = {
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes',
+}
+
 export class GitService implements GitApi {
   private git(cwd: string, args: string[]): Promise<string> {
     return run('git', ['-C', cwd, ...args])
@@ -33,7 +40,11 @@ export class GitService implements GitApi {
   }
 
   async fetch(repoPath: string): Promise<void> {
-    if (await this.hasOrigin(repoPath)) await this.git(repoPath, ['fetch', 'origin', '--prune'])
+    if (!(await this.hasOrigin(repoPath))) return
+    await run('git', ['-C', repoPath, 'fetch', 'origin', '--prune'], {
+      timeoutMs: FETCH_TIMEOUT_MS,
+      env: NON_INTERACTIVE_ENV,
+    })
   }
 
   async resolveBaseRef(repoPath: string): Promise<string> {

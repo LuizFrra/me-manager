@@ -15,6 +15,8 @@ export class CommandError extends Error {
 export interface RunOptions {
   cwd?: string
   timeoutMs?: number
+  /** Extra variables merged over process.env. */
+  env?: NodeJS.ProcessEnv
 }
 
 /** Runs a binary without a shell and resolves with stdout. Rejects with CommandError. */
@@ -24,7 +26,7 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
     execFile(
       file,
       args,
-      { cwd: opts.cwd, timeout: opts.timeoutMs ?? 0, maxBuffer: 16 * 1024 * 1024, env: process.env },
+      { cwd: opts.cwd, timeout: opts.timeoutMs ?? 0, maxBuffer: 16 * 1024 * 1024, env: opts.env ? { ...process.env, ...opts.env } : process.env },
       (err, stdout, stderr) => {
         if (!err) {
           resolve(String(stdout))
