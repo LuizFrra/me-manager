@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { Orchestrator, CLAUDE_CMD } from './orchestrator'
-import type { AppState, Task } from '../../shared/types'
+import { Orchestrator, CLAUDE_CMD, CLAUDE_CONTINUE_CMD } from './orchestrator'
+import type { AppState, Target, Task } from '../../shared/types'
 import { makeDeps } from './fakes'
 
 type Ctx = ReturnType<typeof makeDeps> & { orch: Orchestrator; themeId: string; repoId: string }
@@ -110,5 +110,69 @@ describe('Orchestrator: removeTask', () => {
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
     git.unsaved = { uncommittedFiles: ['a.ts'], unpushedCommits: [] }
     await expect(orch.checkTaskRemoval(themeId, repoId, task.id)).resolves.toEqual(git.unsaved)
+  })
+})
+
+describe('Orchestrator: sessions and tabs', () => {
+  async function withTask(): Promise<Ctx & { task: Task; target: Target }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
+    return { ...ctx, task, target }
+  }
+
+  it('attaches to an existing session without recreating it', async () => {
+    const { orch, tmux, pty, target } = await withTask()
+    tmux.calls = []
+    const tabs = await orch.openTarget(target)
+    expect(tmux.calls).toEqual([])
+    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+    expect(pty.attached?.cwd).toBe('/wt/client-x/my-api/fix')
+    expect(tabs).toEqual([{ index: 0, name: 'claude', active: true }])
+  })
+
+  it('recreates a missing session with claude --continue', async () => {
+    const { orch, tmux, target } = await withTask()
+    tmux.sessions.clear() // e.g. after a reboot
+    await orch.openTarget(target)
+    expect(tmux.calls).toContain(`newSession mmt_client-x_my-api_fix ${CLAUDE_CONTINUE_CMD}`)
+  })
+
+  it('refuses to open a task whose worktree is missing', async () => {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    ctx.deps.pathExists = () => false
+    await expect(ctx.orch.openTarget({ themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id })).rejects.toThrow(/Folder not found/)
+  })
+
+  it('names new shell tabs uniquely', async () => {
+    const { orch, target } = await withTask()
+    await orch.newTab(target)
+    const tabs = await orch.newTab(target)
+    expect(tabs.map((t) => t.name)).toEqual(['claude', 'shell', 'shell 2'])
+    expect(tabs[2].active).toBe(true)
+  })
+
+  it('restarts claude in a new window when it was closed', async () => {
+    const { orch, target } = await withTask()
+    await orch.newTab(target)
+    await orch.closeTab(target, 0)
+    const tabs = await orch.restartClaude(target)
+    expect(tabs.map((t) => t.name)).toEqual(['shell', 'claude'])
+  })
+
+  it('returns no tabs after the last window closes', async () => {
+    const { orch, target } = await withTask()
+    await expect(orch.closeTab(target, 0)).resolves.toEqual([])
+  })
+
+  it('reports running sessions and missing paths', async () => {
+    const ctx = await withTask()
+    let status = await ctx.orch.getStatus()
+    expect(status).toEqual({ running: [ctx.task.id], missing: [] })
+    ctx.tmux.sessions.clear()
+    ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
+    status = await ctx.orch.getStatus()
+    expect(status).toEqual({ running: [], missing: [ctx.task.id] })
   })
 })
