@@ -13,6 +13,7 @@ import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
 import { TmuxService } from './tmux/tmuxService'
+import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
 let ptyService: PtyService | null = null
@@ -35,9 +36,14 @@ function createWindow(): BrowserWindow {
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
   })
+  // Never open new windows; only http(s) links go to the system browser.
   win.webContents.setWindowOpenHandler((details) => {
-    void shell.openExternal(details.url)
+    if (isHttpUrl(details.url)) void shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+  // The window has the preload API, so it must never navigate away from the app's own page.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isAppUrl(url, win.webContents.getURL())) event.preventDefault()
   })
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
