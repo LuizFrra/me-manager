@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from './App'
@@ -6,6 +6,12 @@ import { createMockApi } from './api/mockApi'
 import type { MeManagerApi, TabInfo, Target } from '../../shared/types'
 
 vi.mock('./components/TerminalView', () => ({ TerminalView: () => <div data-testid="terminal" /> }))
+vi.mock('./components/files/MarkdownView', () => ({
+  MarkdownView: ({ source }: { source: string }) => <div data-testid="markdown">MD:{source}</div>,
+}))
+vi.mock('./components/files/DiffView', () => ({
+  DiffView: ({ diff }: { diff: string }) => <pre data-testid="diff">DIFF:{diff}</pre>,
+}))
 
 async function createTheme(user: UserEvent, name: string): Promise<void> {
   await user.click(screen.getByRole('button', { name: 'New theme' }))
@@ -245,5 +251,141 @@ describe('App', () => {
       />,
     )
     expect(await screen.findByText('Run: sudo apt install tmux')).toBeInTheDocument()
+  })
+})
+
+describe('App side panel', () => {
+  const togglePanel = (user: UserEvent): Promise<void> =>
+    user.click(screen.getByRole('button', { name: 'Toggle files panel' }))
+  const panel = (): HTMLElement => screen.getByRole('complementary', { name: 'Files panel' })
+  const codeText = (): string => document.querySelector('.code-body')?.textContent ?? ''
+
+  it('opens with the toggle button and lists, filters and shows files', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const readFile = vi.spyOn(api, 'readFile')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
+
+    await togglePanel(user)
+    expect(screen.getByRole('button', { name: 'Toggle files panel' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('separator', { name: 'Resize files panel' })).toHaveAttribute(
+      'aria-orientation',
+      'vertical',
+    )
+    expect(await within(panel()).findByRole('button', { name: 'README.md' })).toBeInTheDocument()
+    expect(within(panel()).getByRole('button', { name: 'package.json' })).toBeInTheDocument()
+
+    await user.type(within(panel()).getByRole('textbox', { name: 'Filter files' }), 'app')
+    expect(within(panel()).queryByRole('button', { name: 'README.md' })).not.toBeInTheDocument()
+    const app = within(panel()).getByRole('button', { name: /^app\.ts/ })
+    await user.click(app)
+    expect(readFile).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }), 'src/app.ts')
+    await waitFor(() => expect(codeText()).toContain('export function greetAll'))
+  })
+
+  it('renders Markdown through MarkdownView, with a Raw toggle', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await togglePanel(user)
+    await user.click(await within(panel()).findByRole('button', { name: 'README.md' }))
+    expect(await screen.findByTestId('markdown')).toHaveTextContent('MD:# Demo project')
+    await user.click(screen.getByRole('button', { name: 'Raw' }))
+    expect(screen.queryByTestId('markdown')).not.toBeInTheDocument()
+    expect(codeText()).toContain('# Demo project')
+  })
+
+  it('hides the Changes tab for a folder target', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({ pickDirectory: async () => '/home/me/notes' })
+    const listChanges = vi.spyOn(api, 'listChanges')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
+    await togglePanel(user)
+    expect(await within(panel()).findByRole('button', { name: 'README.md' })).toBeInTheDocument()
+    expect(within(panel()).getByRole('tab', { name: 'Files' })).toBeInTheDocument()
+    expect(within(panel()).queryByRole('tab', { name: /Changes/ })).not.toBeInTheDocument()
+    expect(listChanges).not.toHaveBeenCalled()
+  })
+
+  it('shows a diff in Changes and opens the file in Files', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const fileDiff = vi.spyOn(api, 'fileDiff')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await togglePanel(user)
+    await user.click(await within(panel()).findByRole('tab', { name: 'Changes 4' }))
+    await user.click(within(panel()).getByRole('button', { name: /src\/app\.ts/ }))
+    expect(fileDiff).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }), 'src/app.ts')
+    expect(await screen.findByTestId('diff')).toHaveTextContent('@@ -1,3 +1,5 @@')
+
+    await user.click(within(panel()).getByRole('button', { name: 'Open file' }))
+    expect(within(panel()).getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(panel()).getByRole('button', { name: /^app\.ts/ })).toHaveAttribute('aria-current', 'true')
+    await waitFor(() => expect(codeText()).toContain('greetAll'))
+  })
+
+  it('keeps panel state per target', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+
+    await user.click(taskButton('task A'))
+    await togglePanel(user)
+    await user.click(await within(panel()).findByRole('button', { name: 'package.json' }))
+    await waitFor(() => expect(codeText()).toContain('demo-project'))
+
+    await user.click(taskButton('task B'))
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
+
+    await user.click(taskButton('task A'))
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+    expect(await within(panel()).findByRole('button', { name: 'package.json' })).toHaveAttribute('aria-current', 'true')
+    await waitFor(() => expect(codeText()).toContain('demo-project'))
+  })
+
+  it('toggles with Ctrl+Shift+E and closes with ✕', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
+    expect(panel()).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
+    expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true })
+    await user.click(within(panel()).getByRole('button', { name: 'Close files panel' }))
+    expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
+  })
+
+  it('resizes the panel from the keyboard', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await togglePanel(user)
+    const splitter = screen.getByRole('separator', { name: 'Resize files panel' })
+    expect(splitter).toHaveAttribute('aria-valuenow', '40')
+    fireEvent.keyDown(splitter, { key: 'ArrowLeft' })
+    expect(splitter).toHaveAttribute('aria-valuenow', '42')
+    expect(panel().style.getPropertyValue('--panel-width')).toBe('42.00%')
+  })
+
+  it('shows the missing-folder message instead of the panel body', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    api.getStatus = async () => ({ running: [], missing: [taskId] })
+    await togglePanel(user)
+    await user.click(taskButton('fix login bug')) // re-open triggers a status refresh
+    expect(await within(panel()).findByText("⚠ This task's folder is missing.")).toBeInTheDocument()
   })
 })
