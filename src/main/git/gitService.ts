@@ -125,7 +125,14 @@ export class GitService implements GitApi {
     if (!(await this.refExists(repoPath, `refs/heads/${branch}`))) {
       return withWarning({ uncommittedFiles, unpushedCommits: [] })
     }
-    const range = (await this.hasOrigin(repoPath)) ? [branch, '--not', '--remotes'] : [`${baseRef}..${branch}`]
+    // Exclude baseRef too: with origin but no fetched refs, --remotes alone would list the whole history.
+    // baseRef may have been deleted/pruned since the task was created; then exclude what is still there.
+    const hasBase = await this.refExists(repoPath, baseRef)
+    const range = (await this.hasOrigin(repoPath))
+      ? [branch, '--not', '--remotes', ...(hasBase ? [baseRef] : [])]
+      : hasBase
+        ? [`${baseRef}..${branch}`]
+        : [branch, '--not', `--exclude=${branch}`, '--branches']
     const log = await this.git(repoPath, ['log', '--format=%h %s', ...range, '--'])
     return withWarning({ uncommittedFiles, unpushedCommits: log.split('\n').filter(Boolean) })
   }
