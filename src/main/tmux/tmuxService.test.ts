@@ -69,7 +69,8 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
   it('builds an attach command on our socket', () => {
     const { file, args } = svc.attachCommand('mmt_a_b_c')
     expect(file).toBe('tmux')
-    expect(args).toEqual(expect.arrayContaining(['-L', socket, 'attach-session', '-t', '=mmt_a_b_c']))
+    // -u: GUI launches (macOS Dock) have no UTF-8 locale, and tmux would print non-ASCII as '_'.
+    expect(args).toEqual(['-L', socket, '-f', join(cwd, 'tmux.conf'), '-u', 'attach-session', '-t', '=mmt_a_b_c'])
   })
 
   it('does not expand tmux formats or run #() commands in the cwd', async () => {
