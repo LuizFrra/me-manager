@@ -13,6 +13,9 @@ function parseState(raw: string): AppState {
 }
 
 export class FileStore implements StoreApi {
+  /** Set when load() fell back to .bak: the main file is corrupt and must not replace the good backup. */
+  private skipNextBackup = false
+
   constructor(private readonly file: string) {}
 
   async load(): Promise<AppState> {
@@ -21,7 +24,9 @@ export class FileStore implements StoreApi {
     } catch (err) {
       if (isNotFound(err)) return emptyState()
       try {
-        return parseState(await readFile(this.file + '.bak', 'utf8'))
+        const state = parseState(await readFile(this.file + '.bak', 'utf8'))
+        this.skipNextBackup = true
+        return state
       } catch {
         throw new Error(`Could not read ${this.file}: ${(err as Error).message}`)
       }
@@ -30,13 +35,16 @@ export class FileStore implements StoreApi {
 
   async save(state: AppState): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true })
-    try {
-      await copyFile(this.file, this.file + '.bak')
-    } catch (err) {
-      if (!isNotFound(err)) throw err
+    if (!this.skipNextBackup) {
+      try {
+        await copyFile(this.file, this.file + '.bak')
+      } catch (err) {
+        if (!isNotFound(err)) throw err
+      }
     }
     const tmp = `${this.file}.${process.pid}.tmp`
     await writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8')
     await rename(tmp, this.file)
+    this.skipNextBackup = false
   }
 }
