@@ -37,6 +37,11 @@ describe('resolveBaseRef', () => {
     const { clone } = await makeClonedRepo()
     await expect(svc.resolveBaseRef(clone)).resolves.toBe('origin/main')
   })
+  it('ignores a dangling origin/HEAD', async () => {
+    const { clone } = await makeClonedRepo()
+    await git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone')
+    await expect(svc.resolveBaseRef(clone)).resolves.toBe('origin/main')
+  })
   it('uses local main without a remote', async () => {
     const { repo } = await makeLocalRepo()
     await expect(svc.resolveBaseRef(repo)).resolves.toBe('main')
