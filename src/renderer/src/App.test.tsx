@@ -1,8 +1,9 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { createMockApi } from './api/mockApi'
+import type { MeManagerApi, TabInfo, Target } from '../../shared/types'
 
 vi.mock('./components/TerminalView', () => ({ TerminalView: () => <div data-testid="terminal" /> }))
 
@@ -13,16 +14,50 @@ async function createTheme(user: UserEvent, name: string): Promise<void> {
   await screen.findByRole('button', { name: `Remove theme ${name}` })
 }
 
-async function createRepoAndTask(user: UserEvent): Promise<void> {
-  await createTheme(user, 'Client X')
-  await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+async function createTask(user: UserEvent, name: string): Promise<void> {
   await user.click(await screen.findByRole('button', { name: 'New task in my-api' }))
-  await user.type(screen.getByRole('textbox', { name: 'Name' }), 'fix login bug')
+  await user.type(screen.getByRole('textbox', { name: 'Name' }), name)
   await user.click(screen.getByRole('button', { name: 'Create' }))
-  await screen.findByRole('button', { name: 'Remove task fix login bug' })
+  await screen.findByRole('button', { name: `Remove task ${name}` })
 }
 
-const repoApi = (extra = {}) => createMockApi({ pickDirectory: async () => '/home/me/code/my-api', ...extra })
+async function createRepoAndTask(user: UserEvent, ...names: string[]): Promise<void> {
+  await createTheme(user, 'Client X')
+  await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+  for (const name of names.length ? names : ['fix login bug']) await createTask(user, name)
+}
+
+interface Deferred {
+  promise: Promise<void>
+  resolve: () => void
+}
+
+function deferred(): Deferred {
+  let resolve = (): void => {}
+  const promise = new Promise<void>((r) => (resolve = r))
+  return { promise, resolve }
+}
+
+interface Hold {
+  task?: string
+  gate?: Deferred
+}
+
+/** The sidebar button for a task; its label may start with a status dot. */
+const taskButton = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}$`) })
+
+/** Each task reports tabs named after it; `hold` delays responses for one task until released. */
+function perTaskTabs(getApi: () => MeManagerApi, hold: Hold): (target: Target) => Promise<TabInfo[]> {
+  return async (target) => {
+    const state = await getApi().getState()
+    const repo = state.themes.flatMap((t) => t.items).find((i) => i.id === target.itemId)
+    const name = repo?.kind === 'repo' ? (repo.tasks.find((k) => k.id === target.taskId)?.name ?? '?') : '?'
+    if (hold.task === name) await hold.gate?.promise
+    return [{ index: 0, name: `${name} tab`, active: true }]
+  }
+}
+
+const repoApi = (extra: Partial<MeManagerApi> = {}): MeManagerApi => createMockApi({ pickDirectory: async () => '/home/me/code/my-api', ...extra })
 
 describe('App', () => {
   it('creates a theme', async () => {
@@ -68,6 +103,75 @@ describe('App', () => {
     expect(removeTask).not.toHaveBeenCalled()
     await user.click(within(dialog).getByRole('button', { name: 'Remove anyway' }))
     expect(removeTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String), false)
+  })
+
+  it('ignores an openTarget response that arrives after another target was selected', async () => {
+    const user = userEvent.setup()
+    const hold: Hold = {}
+    const tabsFor = perTaskTabs(() => api, hold)
+    const api: MeManagerApi = repoApi({ openTarget: tabsFor, listTabs: () => new Promise<TabInfo[]>(() => {}) })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+
+    hold.task = 'task A'
+    hold.gate = deferred()
+    await user.click(taskButton('task A'))
+    await user.click(taskButton('task B'))
+    expect(await screen.findByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
+
+    hold.gate.resolve()
+    await act(async () => {
+      await hold.gate?.promise
+    })
+    expect(screen.getByText('my-api › task B')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'task A tab' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
+  })
+
+  it('ignores a tab action response that arrives after another target was selected', async () => {
+    const user = userEvent.setup()
+    const hold: Hold = {}
+    const tabsFor = perTaskTabs(() => api, hold)
+    const api: MeManagerApi = repoApi({ openTarget: tabsFor, newTab: tabsFor, listTabs: () => new Promise<TabInfo[]>(() => {}) })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+
+    await user.click(taskButton('task A'))
+    await screen.findByRole('tab', { name: 'task A tab' })
+    hold.task = 'task A'
+    hold.gate = deferred()
+    await user.click(screen.getByRole('button', { name: 'New shell tab' }))
+    await user.click(taskButton('task B'))
+    expect(await screen.findByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
+
+    hold.gate.resolve()
+    await act(async () => {
+      await hold.gate?.promise
+    })
+    expect(screen.queryByRole('tab', { name: 'task A tab' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
+  })
+
+  it('ignores a listTabs response that arrives after another target was selected', async () => {
+    const user = userEvent.setup()
+    const holdList: Hold = {}
+    const api: MeManagerApi = repoApi({ openTarget: perTaskTabs(() => api, {}), listTabs: perTaskTabs(() => api, holdList) })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+
+    holdList.task = 'task A'
+    holdList.gate = deferred()
+    await user.click(taskButton('task A')) // the refresh after opening calls listTabs(A), which is held
+    await screen.findByRole('tab', { name: 'task A tab' })
+    await user.click(taskButton('task B'))
+    expect(await screen.findByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
+
+    holdList.gate.resolve()
+    await act(async () => {
+      await holdList.gate?.promise
+    })
+    expect(screen.queryByRole('tab', { name: 'task A tab' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'task B tab' })).toBeInTheDocument()
   })
 
   it('shows backend errors as toasts', async () => {
