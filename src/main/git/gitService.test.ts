@@ -59,6 +59,17 @@ describe('addWorktree', () => {
   })
 })
 
+describe('addWorktree with a kept branch', () => {
+  it('explains that the branch already exists', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt) // task removed, branch kept
+    await expect(svc.addWorktree(clone, wt, branch, 'origin/main')).rejects.toThrow(
+      `Branch "${branch}" already exists (kept from an earlier task). Delete it or choose another task name.`,
+    )
+    expect(existsSync(wt)).toBe(false)
+  })
+})
+
 describe('getUnsavedWork', () => {
   it('is empty for a fresh task', async () => {
     const { clone, wt, branch } = await withTask()

@@ -79,6 +79,9 @@ export class GitService implements GitApi {
   }
 
   async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {
+    if (await this.refExists(repoPath, `refs/heads/${branch}`)) {
+      throw new Error(`Branch "${branch}" already exists (kept from an earlier task). Delete it or choose another task name.`)
+    }
     await mkdir(dirname(worktreePath), { recursive: true })
     // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
     await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, baseRef])
