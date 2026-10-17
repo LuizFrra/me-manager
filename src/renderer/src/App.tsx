@@ -6,9 +6,10 @@ import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { NameDialog, RemoveTaskDialog } from './components/Dialogs'
-import { Toasts, useToasts } from './components/Toasts'
+import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
 import { describeTarget } from './lib/describe'
+import { useToasts } from './lib/toasts'
 
 type Dialog =
   | { kind: 'name'; title: string; placeholder: string; onSubmit: (name: string) => Promise<void> }
