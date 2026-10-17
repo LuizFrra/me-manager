@@ -20,6 +20,12 @@ export const INVOKE_METHODS = [
   'selectTab',
   'closeTab',
   'restartClaude',
+  'listFiles',
+  'readFile',
+  'readImage',
+  'listChanges',
+  'fileDiff',
+  'openExternal',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]
