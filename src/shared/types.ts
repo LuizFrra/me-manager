@@ -61,6 +61,8 @@ export interface TabInfo {
 export interface UnsavedWork {
   uncommittedFiles: string[]
   unpushedCommits: string[]
+  /** Set when the check could not run fully (e.g. the original repo was moved or deleted). */
+  warning?: string
 }
 
 export interface PrereqResult {
@@ -69,7 +71,7 @@ export interface PrereqResult {
 }
 
 export function hasUnsavedWork(work: UnsavedWork): boolean {
-  return work.uncommittedFiles.length > 0 || work.unpushedCommits.length > 0
+  return work.uncommittedFiles.length > 0 || work.unpushedCommits.length > 0 || Boolean(work.warning)
 }
 
 /** The API the renderer sees as `window.api`. */
