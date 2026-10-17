@@ -62,7 +62,8 @@ export class GitService implements GitApi {
     if (await this.hasOrigin(repoPath)) {
       try {
         const head = (await this.git(repoPath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim()
-        if (head) return head
+        // origin/HEAD can dangle (e.g. the default branch was renamed and older git kept the link).
+        if (head && (await this.refExists(repoPath, `refs/remotes/${head}`))) return head
       } catch {
         // origin/HEAD not set; try well-known names below
       }
