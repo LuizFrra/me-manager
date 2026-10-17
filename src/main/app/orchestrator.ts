@@ -23,6 +23,8 @@ export class Orchestrator implements AppService {
   /** Tail of the mutation queue; always resolves, so a failure never blocks later calls. */
   private queue: Promise<void> = Promise.resolve()
   private readonly fetchTimeoutMs: number
+  /** Bumped by every openTarget call, so only the latest one attaches the terminal. */
+  private openSeq = 0
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -189,18 +191,26 @@ export class Orchestrator implements AppService {
       const task = m.getTask(this.state, themeId, repoId, taskId)
       this.detachIf((t) => t.taskId === taskId)
       await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+      // GitService deletes the folder directly when the original repo was moved or deleted.
       await this.deps.git.removeWorktree(repo.path, task.worktreePath)
-      if (deleteBranch) await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+      // The branch lived in the original repo; if that is gone there is nothing to delete.
+      if (deleteBranch && this.deps.pathExists(repo.path)) {
+        await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+      }
       return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
     })
   }
 
   async openTarget(target: Target): Promise<TabInfo[]> {
+    const seq = ++this.openSeq
     const { session, cwd } = this.resolve(target)
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     if (!(await this.deps.tmux.hasSession(session))) {
       await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, CLAUDE_CONTINUE_CMD)
     }
+    // Latest wins: if the user opened something else meanwhile, attaching here would send
+    // their keystrokes to a session the UI is not showing.
+    if (seq !== this.openSeq) return this.deps.tmux.listWindows(session)
     const { file, args } = this.deps.tmux.attachCommand(session)
     this.deps.pty.attach(file, args, cwd)
     this.current = target

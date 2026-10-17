@@ -105,6 +105,17 @@ describe('Orchestrator: removeTask', () => {
     await orch.removeTask(themeId, repoId, task.id, false)
     expect(git.calls).not.toContain('deleteBranch claude/client-x/fix')
   })
+  it('removes a task whose original repo was moved or deleted, then its repo and theme', async () => {
+    const { orch, git, themeId, repoId, deps } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    deps.pathExists = (p) => p !== '/code/my-api'
+    git.calls = []
+    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    expect(taskOf(s)).toBeUndefined()
+    expect(git.calls).toEqual(['removeWorktree /wt/client-x/my-api/fix'])
+    await expect(orch.removeItem(themeId, repoId)).resolves.toBeDefined()
+    await expect(orch.removeTheme(themeId)).resolves.toEqual({ version: 1, themes: [] })
+  })
   it('reports unsaved work from git', async () => {
     const { orch, git, themeId, repoId } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
@@ -143,6 +154,36 @@ describe('Orchestrator: sessions and tabs', () => {
     const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
     ctx.deps.pathExists = () => false
     await expect(ctx.orch.openTarget({ themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id })).rejects.toThrow(/Folder not found/)
+  })
+
+  it('lets the latest openTarget win when an earlier one finishes last', async () => {
+    const ctx = await withTask()
+    const { orch, tmux, pty, themeId, repoId, target: a } = ctx
+    const repo = (await orch.createTask(themeId, repoId, 'other')).themes[0].items[0]
+    if (repo.kind !== 'repo') throw new Error('expected repo')
+    const b = { themeId, itemId: repoId, taskId: repo.tasks[1].id }
+    tmux.sessions.clear() // A must be recreated (slow path)
+
+    let releaseA: () => void = () => {}
+    const aGate = new Promise<void>((r) => (releaseA = r))
+    const hasSession = tmux.hasSession.bind(tmux)
+    tmux.hasSession = async (name: string): Promise<boolean> => {
+      if (name === 'mmt_client-x_my-api_fix') await aGate
+      return hasSession(name)
+    }
+
+    const openA = orch.openTarget(a)
+    await orch.openTarget(b)
+    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_other'])
+    releaseA()
+    const tabsA = await openA
+    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_other'])
+    expect(tabsA).toEqual([{ index: 0, name: 'claude', active: true }])
+
+    // B is still the current target: removing A must not detach the terminal.
+    const detachedBefore = pty.detached
+    await orch.removeTask(themeId, repoId, a.taskId!, false)
+    expect(pty.detached).toBe(detachedBefore)
   })
 
   it('names new shell tabs uniquely', async () => {

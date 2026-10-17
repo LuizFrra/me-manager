@@ -17,3 +17,16 @@ export async function loadLoginShellPath(): Promise<void> {
     // Keep the inherited PATH; the prerequisite check will report missing tools.
   }
 }
+
+const UTF8 = /utf-?8/i
+
+/**
+ * GUI-launched apps on macOS get no LANG/LC_*, so tmux (and `claude` inside it) assume
+ * ASCII and print non-ASCII characters as '_'. Default to a UTF-8 locale; never override
+ * a locale the user already set to UTF-8. Call before the first tmux command so the
+ * tmux server inherits it.
+ */
+export function ensureUtf8Locale(env: NodeJS.ProcessEnv = process.env): void {
+  if ([env.LC_ALL, env.LC_CTYPE, env.LANG].some((v) => v && UTF8.test(v))) return
+  env.LANG = 'en_US.UTF-8'
+}

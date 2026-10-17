@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -37,6 +37,11 @@ describe('resolveBaseRef', () => {
     const { clone } = await makeClonedRepo()
     await expect(svc.resolveBaseRef(clone)).resolves.toBe('origin/main')
   })
+  it('ignores a dangling origin/HEAD', async () => {
+    const { clone } = await makeClonedRepo()
+    await git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone')
+    await expect(svc.resolveBaseRef(clone)).resolves.toBe('origin/main')
+  })
   it('uses local main without a remote', async () => {
     const { repo } = await makeLocalRepo()
     await expect(svc.resolveBaseRef(repo)).resolves.toBe('main')
@@ -59,6 +64,17 @@ describe('addWorktree', () => {
   })
 })
 
+describe('addWorktree with a kept branch', () => {
+  it('explains that the branch already exists', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt) // task removed, branch kept
+    await expect(svc.addWorktree(clone, wt, branch, 'origin/main')).rejects.toThrow(
+      `Branch "${branch}" already exists (kept from an earlier task). Delete it or choose another task name.`,
+    )
+    expect(existsSync(wt)).toBe(false)
+  })
+})
+
 describe('getUnsavedWork', () => {
   it('is empty for a fresh task', async () => {
     const { clone, wt, branch } = await withTask()
@@ -76,6 +92,19 @@ describe('getUnsavedWork', () => {
     expect(work.unpushedCommits).toHaveLength(1)
     expect(work.unpushedCommits[0]).toContain('add a')
   })
+  it('reports file names with spaces and non-ASCII verbatim', async () => {
+    const { clone, wt, branch } = await withTask()
+    await writeFile(join(wt, 'my file ç.txt'), 'x')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual(['my file ç.txt'])
+  })
+  it('reports only the new name of a renamed file', async () => {
+    const { clone, wt, branch } = await withTask()
+    await git(wt, 'mv', 'README.md', 'read me ç.md')
+    await writeFile(join(wt, 'other.txt'), 'x')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual(['read me ç.md', 'other.txt'])
+  })
   it('treats pushed commits as safe', async () => {
     const { clone, wt, branch } = await withTask()
     await commitFile(wt, 'a.txt', 'a', 'add a')
@@ -91,6 +120,30 @@ describe('getUnsavedWork', () => {
     const work = await svc.getUnsavedWork(repo, wt, 'claude/t/x', 'main')
     expect(work.unpushedCommits).toHaveLength(1)
   })
+  it('does not report the base history when origin has no fetched refs', async () => {
+    const { root, repo } = await makeLocalRepo()
+    await git(repo, 'remote', 'add', 'origin', join(root, 'nonexistent.git'))
+    const baseRef = await svc.resolveBaseRef(repo)
+    const wt = join(root, 'wt')
+    await svc.addWorktree(repo, wt, 'claude/t/x', baseRef)
+    const work = await svc.getUnsavedWork(repo, wt, 'claude/t/x', baseRef)
+    expect(work.unpushedCommits).toEqual([])
+    await commitFile(wt, 'a.txt', 'a', 'local change')
+    const after = await svc.getUnsavedWork(repo, wt, 'claude/t/x', baseRef)
+    expect(after.unpushedCommits).toHaveLength(1)
+  })
+  it('still works when the base ref no longer exists', async () => {
+    const { clone, wt, branch } = await withTask()
+    await commitFile(wt, 'a.txt', 'a', 'add a')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/gone')
+    expect(work.unpushedCommits).toHaveLength(1)
+    const { root, repo } = await makeLocalRepo()
+    const localWt = join(root, 'wt')
+    await svc.addWorktree(repo, localWt, 'claude/t/x', 'main')
+    await commitFile(localWt, 'a.txt', 'a', 'local change')
+    const local = await svc.getUnsavedWork(repo, localWt, 'claude/t/x', 'gone')
+    expect(local.unpushedCommits).toHaveLength(1)
+  })
   it('still checks the branch when the worktree folder is gone', async () => {
     const { clone, wt, branch } = await withTask()
     await commitFile(wt, 'a.txt', 'a', 'add a')
@@ -98,6 +151,26 @@ describe('getUnsavedWork', () => {
     const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
     expect(work.uncommittedFiles).toEqual([])
     expect(work.unpushedCommits).toHaveLength(1)
+  })
+  it('warns instead of throwing when the original repo was moved', async () => {
+    const { clone, wt, branch } = await withTask()
+    await writeFile(join(wt, 'b.txt'), 'b')
+    await rename(clone, clone + '-moved')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual([])
+    expect(work.unpushedCommits).toEqual([])
+    expect(work.warning).toBe(
+      `The original repository was not found at ${clone}, so uncommitted changes and unpushed commits could not be checked.`,
+    )
+  })
+  it('warns when git status fails in an existing worktree', async () => {
+    const { clone, wt, branch } = await withTask()
+    await commitFile(wt, 'a.txt', 'a', 'add a')
+    await writeFile(join(wt, '.git'), 'gitdir: /nonexistent/worktree\n') // broken worktree link
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual([])
+    expect(work.unpushedCommits).toHaveLength(1)
+    expect(work.warning).toMatch(/uncommitted changes .* could not be checked/)
   })
 })
 
@@ -115,5 +188,12 @@ describe('removeWorktree / deleteBranch', () => {
     await rm(wt, { recursive: true, force: true })
     await svc.removeWorktree(clone, wt)
     expect(await run('git', ['-C', clone, 'worktree', 'list'])).not.toContain(wt)
+  })
+  it('deletes the worktree folder when the original repo was moved', async () => {
+    const { clone, wt } = await withTask()
+    await writeFile(join(wt, 'dirty.txt'), 'x')
+    await rename(clone, clone + '-moved')
+    await svc.removeWorktree(clone, wt)
+    expect(existsSync(wt)).toBe(false)
   })
 })

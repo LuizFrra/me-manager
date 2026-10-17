@@ -38,6 +38,21 @@ describe('FileStore', () => {
     await writeFile(file, '{ not json', 'utf8')
     await expect(store.load()).resolves.toEqual(first)
   })
+  it('does not overwrite the good .bak with the corrupt main file after falling back', async () => {
+    const store = new FileStore(file)
+    const first = addTheme(emptyState(), 'One')
+    await store.save(first)
+    await store.save(addTheme(first, 'Two'))
+    await writeFile(file, '{ not json', 'utf8')
+    const loaded = await store.load()
+    const next = addTheme(loaded, 'Three')
+    await store.save(next)
+    expect(JSON.parse(await readFile(file + '.bak', 'utf8'))).toEqual(first)
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(next)
+    // Only that one save skips the backup.
+    await store.save(addTheme(next, 'Four'))
+    expect(JSON.parse(await readFile(file + '.bak', 'utf8'))).toEqual(next)
+  })
   it('throws when both files are unreadable', async () => {
     const store = new FileStore(file)
     await store.save(emptyState())
