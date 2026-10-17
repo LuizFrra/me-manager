@@ -17,6 +17,8 @@ type Dialog =
 const EMPTY: AppState = { version: 1, themes: [] }
 const POLL_MS = 3000
 
+const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
+
 export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
@@ -26,8 +28,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [sessionEnded, setSessionEnded] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { toasts, showError, dismiss } = useToasts()
+  // Mirrors `selected` synchronously, so async responses can check whether their target is still selected.
   const selectedRef = useRef<Target | null>(null)
-  selectedRef.current = selected
+  const select = (target: Target | null): void => {
+    selectedRef.current = target
+    setSelected(target)
+  }
 
   const attempt = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -44,7 +50,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const refresh = useCallback(() => {
     api.getStatus().then(setStatus, () => {})
     const current = selectedRef.current
-    if (current) api.listTabs(current).then(setTabs, () => {})
+    if (current)
+      api.listTabs(current).then(
+        (next) => {
+          if (sameTarget(selectedRef.current, current)) setTabs(next)
+        },
+        () => {},
+      )
   }, [api])
 
   const checkPrereqs = useCallback(() => {
@@ -73,22 +85,25 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   )
 
   const open = async (target: Target): Promise<void> => {
-    setSelected(target)
+    select(target)
     setSessionEnded(false)
+    setTabs([])
     const result = await attempt(() => api.openTarget(target))
+    if (!sameTarget(selectedRef.current, target)) return
     setTabs(result ?? [])
     refresh()
   }
 
   const tabAction = async (fn: (target: Target) => Promise<TabInfo[]>): Promise<void> => {
-    if (!selected) return
-    const result = await attempt(() => fn(selected))
-    if (result) setTabs(result)
+    const target = selectedRef.current
+    if (!target) return
+    const result = await attempt(() => fn(target))
+    if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
 
   const clearSelectionIf = (pred: (t: Target) => boolean): void => {
     if (selected && pred(selected)) {
-      setSelected(null)
+      select(null)
       setTabs([])
     }
   }
