@@ -5,6 +5,7 @@ import * as nodePty from 'node-pty'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { Orchestrator } from './app/orchestrator'
+import { FilesService } from './files/filesService'
 import { GitService } from './git/gitService'
 import { registerIpc } from './ipc'
 import { stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
@@ -80,6 +81,7 @@ async function bootstrap(): Promise<void> {
     git: new GitService(),
     tmux,
     pty: ptyService,
+    files: new FilesService(),
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
   })

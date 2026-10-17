@@ -1,5 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import type { AppState, LiveStatus, TabInfo, Target, Task, UnsavedWork } from '../../shared/types'
+import type {
+  AppState,
+  ChangeList,
+  FileContent,
+  LiveStatus,
+  TabInfo,
+  Target,
+  Task,
+  UnsavedWork,
+} from '../../shared/types'
 import { branchName, sessionName } from '../../shared/naming'
 import type { AppService, OrchestratorDeps } from '../contracts'
 import { taskWorktreePath } from '../paths'
@@ -258,5 +267,27 @@ export class Orchestrator implements AppService {
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
     else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, CLAUDE_CONTINUE_CMD)
     return this.deps.tmux.listWindows(session)
+  }
+
+  // File viewer: stubs, implemented by track L.
+
+  async listFiles(): Promise<string[]> {
+    throw new Error('not implemented')
+  }
+
+  async readFile(): Promise<FileContent> {
+    throw new Error('not implemented')
+  }
+
+  async readImage(): Promise<string | null> {
+    throw new Error('not implemented')
+  }
+
+  async listChanges(): Promise<ChangeList> {
+    throw new Error('not implemented')
+  }
+
+  async fileDiff(): Promise<string> {
+    throw new Error('not implemented')
   }
 }

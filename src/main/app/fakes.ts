@@ -1,5 +1,5 @@
-import type { AppState, TabInfo, UnsavedWork } from '../../shared/types'
-import type { GitApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
+import type { AppState, ChangeList, FileContent, TabInfo, UnsavedWork } from '../../shared/types'
+import type { FilesApi, GitApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
 import { emptyState } from '../store/mutations'
 
 export class MemoryStore implements StoreApi {
@@ -110,17 +110,52 @@ export class FakePty implements PtyApi {
   }
 }
 
+export class FakeFiles implements FilesApi {
+  calls: string[] = []
+  async listFiles(root: string, isRepo: boolean): Promise<string[]> {
+    this.calls.push(`listFiles ${root} ${isRepo}`)
+    return []
+  }
+  async readFile(root: string, relPath: string): Promise<FileContent> {
+    this.calls.push(`readFile ${root} ${relPath}`)
+    return { kind: 'missing' }
+  }
+  async readImage(root: string, relPath: string): Promise<string | null> {
+    this.calls.push(`readImage ${root} ${relPath}`)
+    return null
+  }
+  async listChanges(worktree: string, baseRef: string): Promise<ChangeList> {
+    this.calls.push(`listChanges ${worktree} ${baseRef}`)
+    return { files: [] }
+  }
+  async fileDiff(worktree: string, baseRef: string, relPath: string): Promise<string> {
+    this.calls.push(`fileDiff ${worktree} ${baseRef} ${relPath}`)
+    return ''
+  }
+}
+
 export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   deps: OrchestratorDeps
   store: MemoryStore
   git: FakeGit
   tmux: FakeTmux
   pty: FakePty
+  files: FakeFiles
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
   const tmux = new FakeTmux()
   const pty = new FakePty()
-  const deps: OrchestratorDeps = { store, git, tmux, pty, worktreesRoot: '/wt', pathExists: () => true, ...overrides }
-  return { deps, store, git, tmux, pty }
+  const files = new FakeFiles()
+  const deps: OrchestratorDeps = {
+    store,
+    git,
+    tmux,
+    pty,
+    files,
+    worktreesRoot: '/wt',
+    pathExists: () => true,
+    ...overrides,
+  }
+  return { deps, store, git, tmux, pty, files }
 }
