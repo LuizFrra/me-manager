@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Task } from '../../shared/types'
+import type { AppState, Task } from '../../shared/types'
 import * as m from './mutations'
 
 const task = (slug: string): Task => ({
@@ -12,7 +12,7 @@ const task = (slug: string): Task => ({
   createdAt: '2026-01-01T00:00:00.000Z',
 })
 
-function setup() {
+function setup(): { s: AppState; themeId: string; repoId: string } {
   let s = m.addTheme(m.emptyState(), 'Client X')
   const themeId = s.themes[0].id
   s = m.addRepo(s, themeId, '/code/my-api')
