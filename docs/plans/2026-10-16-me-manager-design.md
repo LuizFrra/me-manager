@@ -135,8 +135,33 @@ never modified.
 - **tmux sessions not created by the app** are ignored.
 - **Failed git or tmux commands**: one exec helper captures stderr; the UI
   shows a toast with the real error.
-- **Folder trust**: worktrees live under `$HOME`, which is already trusted, so
-  Claude shows no trust prompt (verified).
+- **Folder trust**: worktrees live under `$HOME`. On the dev machine `$HOME` is
+  already trusted, so Claude shows no trust prompt (verified on Linux). See the
+  macOS notes in "Platforms".
+
+## Platforms: Linux and macOS
+
+The app must run on both.
+
+- **tmux config**: use `screen-256color`, not `tmux-256color`, because macOS's
+  ncurses has no `tmux-256color` terminfo entry.
+- **PATH**: GUI apps on macOS get a minimal PATH that lacks `/opt/homebrew/bin`.
+  The login-shell PATH lookup handles this (the default shell is zsh on macOS
+  and bash on Ubuntu).
+- **Menus and shortcuts**:
+  - macOS gets the standard app, Edit, View and Window menus, so Cmd+C and
+    Cmd+V work. Ctrl+C still reaches the terminal.
+  - Linux gets **no** app menu, because menu accelerators would steal Ctrl+C
+    and Ctrl+R from the terminal. Copy and paste use Ctrl+Shift+C and
+    Ctrl+Shift+V, handled in the terminal component.
+- **Folder trust**: on a Mac where `$HOME` isn't trusted, Claude asks "Do you
+  trust this folder?" once per new worktree. That's acceptable for v1.
+- **Install hints** in the startup check are platform-specific
+  (`brew install tmux` and `xcode-select --install` on macOS; `apt` on Linux).
+- **Native module**: node-pty is rebuilt for Electron on install. That needs
+  `build-essential` on Linux or the Xcode Command Line Tools on macOS.
+- **Packaging**: electron-builder produces a dmg on macOS (built on a Mac) and
+  an AppImage and deb on Linux. Code signing and notarization are out of scope.
 
 ## Testing
 
@@ -155,4 +180,6 @@ reordering.
 
 ## Prerequisites
 
-`sudo apt install tmux`
+- Linux: `sudo apt install tmux git build-essential`
+- macOS: `xcode-select --install && brew install tmux`
+- Both: Claude Code (`claude`) and Node.js 20 or newer
