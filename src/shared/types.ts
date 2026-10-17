@@ -99,8 +99,43 @@ export interface MeManagerApi {
   closeTab(target: Target, index: number): Promise<TabInfo[]>
   restartClaude(target: Target): Promise<TabInfo[]>
 
+  listFiles(target: Target): Promise<string[]>
+  readFile(target: Target, path: string): Promise<FileContent>
+  /** data: URL for an image inside the target's folder, or null if too large / not an image / outside. */
+  readImage(target: Target, path: string): Promise<string | null>
+  /** Repo tasks only; rejects for folders. */
+  listChanges(target: Target): Promise<ChangeList>
+  /** Unified diff text for one changed file; '' if unchanged. Repo tasks only. */
+  fileDiff(target: Target, path: string): Promise<string>
+  /** Opens an http(s) URL in the system browser; rejects other schemes. */
+  openExternal(url: string): Promise<void>
+
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
   onPtyData(cb: (data: string) => void): () => void
   onPtyExit(cb: (code: number) => void): () => void
+}
+
+export type FileContent =
+  | { kind: 'text'; content: string; size: number; truncated: boolean }
+  | { kind: 'binary'; size: number }
+  | { kind: 'missing' }
+
+/** A added, M modified, D deleted, R renamed, U untracked. */
+export type ChangeStatus = 'A' | 'M' | 'D' | 'R' | 'U'
+
+export interface ChangedFile {
+  path: string
+  /** Set for renames. */
+  oldPath?: string
+  status: ChangeStatus
+  added: number
+  removed: number
+  binary: boolean
+}
+
+export interface ChangeList {
+  files: ChangedFile[]
+  /** Set when the base ref was missing and only uncommitted changes vs HEAD are shown. */
+  fallback?: 'uncommitted-only'
 }

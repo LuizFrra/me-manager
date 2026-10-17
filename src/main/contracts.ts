@@ -1,4 +1,4 @@
-import type { AppState, MeManagerApi, TabInfo, UnsavedWork } from '../shared/types'
+import type { AppState, ChangeList, FileContent, MeManagerApi, TabInfo, UnsavedWork } from '../shared/types'
 
 export interface StoreApi {
   load(): Promise<AppState>
@@ -47,10 +47,19 @@ export interface PtyApi {
   onExit(cb: (code: number) => void): () => void
 }
 
+export interface FilesApi {
+  /** Relative paths (POSIX separators), sorted. Repos: tracked + untracked-not-ignored. Folders: walk minus .git/node_modules. */
+  listFiles(root: string, isRepo: boolean): Promise<string[]>
+  readFile(root: string, relPath: string): Promise<FileContent>
+  readImage(root: string, relPath: string): Promise<string | null>
+  listChanges(worktree: string, baseRef: string): Promise<ChangeList>
+  fileDiff(worktree: string, baseRef: string, relPath: string): Promise<string>
+}
+
 /** What the orchestrator implements: everything except renderer/pty-only calls. */
 export type AppService = Omit<
   MeManagerApi,
-  'checkPrereqs' | 'pickDirectory' | 'ptyWrite' | 'ptyResize' | 'onPtyData' | 'onPtyExit'
+  'checkPrereqs' | 'pickDirectory' | 'ptyWrite' | 'ptyResize' | 'onPtyData' | 'onPtyExit' | 'openExternal'
 >
 
 export interface OrchestratorDeps {
@@ -58,6 +67,7 @@ export interface OrchestratorDeps {
   git: GitApi
   tmux: TmuxApi
   pty: PtyApi
+  files: FilesApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
 }
