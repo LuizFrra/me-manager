@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { UnsavedWork } from '../../shared/types'
 import type { GitApi } from '../contracts'
 import { run } from '../exec'
@@ -53,19 +56,36 @@ export class GitService implements GitApi {
     throw new Error(`Could not find a base branch in ${repoPath}`)
   }
 
-  async addWorktree(): Promise<void> {
-    throw new Error('not implemented')
+  async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {
+    await mkdir(dirname(worktreePath), { recursive: true })
+    // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
+    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, baseRef])
   }
 
-  async removeWorktree(): Promise<void> {
-    throw new Error('not implemented')
+  async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    if (existsSync(worktreePath)) {
+      await this.git(repoPath, ['worktree', 'remove', '--force', worktreePath])
+    } else {
+      await this.git(repoPath, ['worktree', 'prune'])
+    }
   }
 
-  async deleteBranch(): Promise<void> {
-    throw new Error('not implemented')
+  async deleteBranch(repoPath: string, branch: string): Promise<void> {
+    await this.git(repoPath, ['branch', '-D', branch])
   }
 
-  async getUnsavedWork(): Promise<UnsavedWork> {
-    throw new Error('not implemented')
+  async getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork> {
+    const uncommittedFiles = existsSync(worktreePath)
+      ? (await this.git(worktreePath, ['status', '--porcelain']))
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => line.slice(3))
+      : []
+    if (!(await this.refExists(repoPath, `refs/heads/${branch}`))) {
+      return { uncommittedFiles, unpushedCommits: [] }
+    }
+    const range = (await this.hasOrigin(repoPath)) ? [branch, '--not', '--remotes'] : [`${baseRef}..${branch}`]
+    const log = await this.git(repoPath, ['log', '--format=%h %s', ...range, '--'])
+    return { uncommittedFiles, unpushedCommits: log.split('\n').filter(Boolean) }
   }
 }
