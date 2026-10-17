@@ -10,6 +10,7 @@ import {
 } from '../shared/ipc'
 import type { AppService, PtyApi } from './contracts'
 import { checkPrereqs } from './prereqs'
+import { isHttpUrl } from './urls'
 
 type Handler = (...args: unknown[]) => unknown
 
@@ -25,10 +26,8 @@ export function registerIpc(opts: { app: AppService; pty: PtyApi; getWindow: () 
       return result.canceled ? null : (result.filePaths[0] ?? null)
     },
     openExternal: async (url) => {
-      const parsed = new URL(String(url))
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-        throw new Error('Only http(s) links can be opened')
-      await shell.openExternal(parsed.toString())
+      if (!isHttpUrl(String(url))) throw new Error('Only http(s) links can be opened')
+      await shell.openExternal(new URL(String(url)).toString())
     },
   }
 
