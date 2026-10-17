@@ -17,4 +17,19 @@ describe('createMockApi', () => {
     const api = createMockApi({ checkPrereqs: async () => ({ ok: false, missing: [] }) })
     await expect(api.checkPrereqs()).resolves.toEqual({ ok: false, missing: [] })
   })
+
+  it('serves a demo file set with changes for tasks', async () => {
+    const api = createMockApi()
+    const task = { themeId: 't', itemId: 'r', taskId: 'k' }
+    const files = await api.listFiles(task)
+    expect(files).toEqual(expect.arrayContaining(['README.md', 'src/app.ts']))
+    await expect(api.readFile(task, 'README.md')).resolves.toMatchObject({ kind: 'text', truncated: false })
+    await expect(api.readFile(task, 'assets/icon.png')).resolves.toEqual({ kind: 'binary', size: 2048 })
+    await expect(api.readFile(task, 'nope.ts')).resolves.toEqual({ kind: 'missing' })
+    await expect(api.readImage(task, 'assets/logo.svg')).resolves.toMatch(/^data:image\/svg\+xml;base64,/)
+    const changes = await api.listChanges(task)
+    expect(changes.files.map((f) => f.status)).toEqual(['U', 'M', 'D', 'A'])
+    await expect(api.fileDiff(task, 'src/app.ts')).resolves.toContain('@@')
+    await expect(api.listChanges({ themeId: 't', itemId: 'f' })).rejects.toThrow('repository tasks')
+  })
 })
