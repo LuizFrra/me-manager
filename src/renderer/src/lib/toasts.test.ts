@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanError } from './Toasts'
+import { cleanError } from './toasts'
 
 describe('cleanError', () => {
   it('strips the Electron IPC prefix', () => {
