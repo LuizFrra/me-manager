@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -16,6 +17,8 @@ let cwd: string
 describe.skipIf(!hasTmux)('TmuxService', () => {
   beforeAll(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'mm-tmux-'))
+    // Set before the server starts so #() jobs (run by the server) see it; keeps the marker in our temp dir.
+    process.env.MM_TEST_MARKER = join(cwd, 'PWNED')
     svc = new TmuxService(socket, join(cwd, 'tmux.conf'))
     await svc.ensureConfig()
   })
@@ -67,6 +70,24 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     const { file, args } = svc.attachCommand('mmt_a_b_c')
     expect(file).toBe('tmux')
     expect(args).toEqual(expect.arrayContaining(['-L', socket, 'attach-session', '-t', '=mmt_a_b_c']))
+  })
+
+  it('does not expand tmux formats or run #() commands in the cwd', async () => {
+    // tmux format-expands -c; #(cmd) would run a shell command and #S would become the session name.
+    const marker = join(cwd, 'PWNED')
+    const evil = join(cwd, 'x#(touch "$MM_TEST_MARKER")y C#Sharp ##')
+    await mkdir(evil)
+    const real = await realpath(evil)
+    const pathOf = async (target: string): Promise<string> =>
+      (await run('tmux', ['-L', socket, 'display', '-p', '-t', target, '#{pane_current_path}'])).trim()
+
+    await svc.newSession('mmt_evil_x_y', evil, 'claude', 'sh')
+    await svc.newWindow('mmt_evil_x_y', evil, 'shell')
+    await new Promise((r) => setTimeout(r, 500)) // #() jobs run asynchronously
+    expect(existsSync(marker)).toBe(false)
+    await expect(pathOf('=mmt_evil_x_y:0')).resolves.toBe(real)
+    await expect(pathOf('=mmt_evil_x_y:1')).resolves.toBe(real)
+    await svc.killSession('mmt_evil_x_y')
   })
 
   it('kills sessions and ignores missing ones', async () => {
