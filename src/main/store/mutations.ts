@@ -78,12 +78,25 @@ function addItem(state: AppState, themeId: string, item: Repo | Folder): AppStat
 
 export function addRepo(state: AppState, themeId: string, repoPath: string): AppState {
   const name = basename(repoPath)
-  return addItem(state, themeId, { id: randomUUID(), kind: 'repo', name, slug: requireSlug(name, 'Repository'), path: repoPath, tasks: [] })
+  return addItem(state, themeId, {
+    id: randomUUID(),
+    kind: 'repo',
+    name,
+    slug: requireSlug(name, 'Repository'),
+    path: repoPath,
+    tasks: [],
+  })
 }
 
 export function addFolder(state: AppState, themeId: string, folderPath: string): AppState {
   const name = basename(folderPath)
-  return addItem(state, themeId, { id: randomUUID(), kind: 'folder', name, slug: requireSlug(name, 'Folder'), path: folderPath })
+  return addItem(state, themeId, {
+    id: randomUUID(),
+    kind: 'folder',
+    name,
+    slug: requireSlug(name, 'Folder'),
+    path: folderPath,
+  })
 }
 
 export function removeItem(state: AppState, themeId: string, itemId: string): AppState {

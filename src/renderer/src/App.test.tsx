@@ -57,7 +57,8 @@ function perTaskTabs(getApi: () => MeManagerApi, hold: Hold): (target: Target) =
   }
 }
 
-const repoApi = (extra: Partial<MeManagerApi> = {}): MeManagerApi => createMockApi({ pickDirectory: async () => '/home/me/code/my-api', ...extra })
+const repoApi = (extra: Partial<MeManagerApi> = {}): MeManagerApi =>
+  createMockApi({ pickDirectory: async () => '/home/me/code/my-api', ...extra })
 
 describe('App', () => {
   it('creates a theme', async () => {
@@ -132,7 +133,11 @@ describe('App', () => {
     const user = userEvent.setup()
     const hold: Hold = {}
     const tabsFor = perTaskTabs(() => api, hold)
-    const api: MeManagerApi = repoApi({ openTarget: tabsFor, newTab: tabsFor, listTabs: () => new Promise<TabInfo[]>(() => {}) })
+    const api: MeManagerApi = repoApi({
+      openTarget: tabsFor,
+      newTab: tabsFor,
+      listTabs: () => new Promise<TabInfo[]>(() => {}),
+    })
     render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B')
 
@@ -155,7 +160,10 @@ describe('App', () => {
   it('ignores a listTabs response that arrives after another target was selected', async () => {
     const user = userEvent.setup()
     const holdList: Hold = {}
-    const api: MeManagerApi = repoApi({ openTarget: perTaskTabs(() => api, {}), listTabs: perTaskTabs(() => api, holdList) })
+    const api: MeManagerApi = repoApi({
+      openTarget: perTaskTabs(() => api, {}),
+      listTabs: perTaskTabs(() => api, holdList),
+    })
     render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B')
 
@@ -218,7 +226,7 @@ describe('App', () => {
     const user = userEvent.setup()
     const api = createMockApi({
       createTheme: async () => {
-        throw new Error("Error invoking remote method 'api:createTheme': Error: A theme named \"X\" already exists")
+        throw new Error('Error invoking remote method \'api:createTheme\': Error: A theme named "X" already exists')
       },
     })
     render(<App api={api} />)

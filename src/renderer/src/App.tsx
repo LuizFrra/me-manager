@@ -111,7 +111,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
   }
 
-  const askName = (title: string, placeholder: string, submit: (name: string) => Promise<AppState>, after?: (s: AppState, name: string) => void): void =>
+  const askName = (
+    title: string,
+    placeholder: string,
+    submit: (name: string) => Promise<AppState>,
+    after?: (s: AppState, name: string) => void,
+  ): void =>
     setDialog({
       kind: 'name',
       title,
@@ -213,10 +218,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         )}
       </main>
       {dialog?.kind === 'name' && (
-        <NameDialog title={dialog.title} placeholder={dialog.placeholder} onSubmit={dialog.onSubmit} onCancel={() => setDialog(null)} />
+        <NameDialog
+          title={dialog.title}
+          placeholder={dialog.placeholder}
+          onSubmit={dialog.onSubmit}
+          onCancel={() => setDialog(null)}
+        />
       )}
       {dialog?.kind === 'removeTask' && (
-        <RemoveTaskDialog taskName={dialog.taskName} work={dialog.work} onConfirm={dialog.onConfirm} onCancel={() => setDialog(null)} />
+        <RemoveTaskDialog
+          taskName={dialog.taskName}
+          work={dialog.work}
+          onConfirm={dialog.onConfirm}
+          onCancel={() => setDialog(null)}
+        />
       )}
       <Toasts toasts={toasts} onDismiss={dismiss} />
     </div>

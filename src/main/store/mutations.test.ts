@@ -48,7 +48,13 @@ describe('themes', () => {
 describe('items', () => {
   it('adds a repo named after the folder', () => {
     const { s } = setup()
-    expect(s.themes[0].items[0]).toMatchObject({ kind: 'repo', name: 'my-api', slug: 'my-api', path: '/code/my-api', tasks: [] })
+    expect(s.themes[0].items[0]).toMatchObject({
+      kind: 'repo',
+      name: 'my-api',
+      slug: 'my-api',
+      path: '/code/my-api',
+      tasks: [],
+    })
   })
   it('rejects the same path twice in one theme', () => {
     const { s, themeId } = setup()

@@ -153,7 +153,9 @@ describe('Orchestrator: sessions and tabs', () => {
     const ctx = await setup()
     const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
     ctx.deps.pathExists = () => false
-    await expect(ctx.orch.openTarget({ themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id })).rejects.toThrow(/Folder not found/)
+    await expect(ctx.orch.openTarget({ themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id })).rejects.toThrow(
+      /Folder not found/,
+    )
   })
 
   it('lets the latest openTarget win when an earlier one finishes last', async () => {

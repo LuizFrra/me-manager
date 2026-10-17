@@ -23,7 +23,7 @@ export class PtyService implements PtyApi {
       cols: this.cols,
       rows: this.rows,
       cwd,
-      env
+      env,
     })
     this.proc = proc
     proc.onData((data) => {

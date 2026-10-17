@@ -11,6 +11,11 @@ export const stateFile = (): string => join(appHome(), 'state.json')
 export const tmuxConfFile = (): string => join(appHome(), 'tmux.conf')
 export const worktreesRoot = (): string => join(appHome(), 'worktrees')
 
-export function taskWorktreePath(themeSlug: string, repoSlug: string, taskSlug: string, root = worktreesRoot()): string {
+export function taskWorktreePath(
+  themeSlug: string,
+  repoSlug: string,
+  taskSlug: string,
+  root = worktreesRoot(),
+): string {
   return join(root, themeSlug, repoSlug, taskSlug)
 }

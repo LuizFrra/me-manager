@@ -167,7 +167,15 @@ export class Orchestrator implements AppService {
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
         await tmux.newSession(session, worktreePath, CLAUDE_WINDOW, CLAUDE_CMD)
-        const task: Task = { id: randomUUID(), name: name.trim(), slug, branch, worktreePath, baseRef, createdAt: new Date().toISOString() }
+        const task: Task = {
+          id: randomUUID(),
+          name: name.trim(),
+          slug,
+          branch,
+          worktreePath,
+          baseRef,
+          createdAt: new Date().toISOString(),
+        }
         return await this.commit(m.addTask(this.state, themeId, repoId, task))
       } catch (err) {
         await tmux.killSession(session).catch(() => {})

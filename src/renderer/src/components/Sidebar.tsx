@@ -29,11 +29,17 @@ export function Sidebar(p: SidebarProps): React.JSX.Element {
   const arrow = (id: string): string => (collapsed.has(id) ? '▶' : '▼')
   const dot = (id: string): React.JSX.Element =>
     missing.has(id) ? (
-      <span className="dot missing" title="Path missing">⚠</span>
+      <span className="dot missing" title="Path missing">
+        ⚠
+      </span>
     ) : running.has(id) ? (
-      <span className="dot running" title="Session running">●</span>
+      <span className="dot running" title="Session running">
+        ●
+      </span>
     ) : (
-      <span className="dot idle" title="No session">○</span>
+      <span className="dot idle" title="No session">
+        ○
+      </span>
     )
   const isSelected = (itemId: string, taskId?: string): boolean =>
     p.selected?.itemId === itemId && p.selected?.taskId === taskId
@@ -54,13 +60,25 @@ export function Sidebar(p: SidebarProps): React.JSX.Element {
               {arrow(theme.id)} {theme.name}
             </button>
             <span className="row-actions">
-              <button aria-label={`Add repository to ${theme.name}`} title="Add repository" onClick={() => p.onAddRepo(theme.id)}>
+              <button
+                aria-label={`Add repository to ${theme.name}`}
+                title="Add repository"
+                onClick={() => p.onAddRepo(theme.id)}
+              >
                 📦+
               </button>
-              <button aria-label={`Add folder to ${theme.name}`} title="Add folder" onClick={() => p.onAddFolder(theme.id)}>
+              <button
+                aria-label={`Add folder to ${theme.name}`}
+                title="Add folder"
+                onClick={() => p.onAddFolder(theme.id)}
+              >
                 📁+
               </button>
-              <button aria-label={`Remove theme ${theme.name}`} title="Remove theme" onClick={() => p.onRemoveTheme(theme.id)}>
+              <button
+                aria-label={`Remove theme ${theme.name}`}
+                title="Remove theme"
+                onClick={() => p.onRemoveTheme(theme.id)}
+              >
                 ×
               </button>
             </span>
@@ -73,7 +91,11 @@ export function Sidebar(p: SidebarProps): React.JSX.Element {
                     {dot(item.id)} 📁 {item.name}
                   </button>
                   <span className="row-actions">
-                    <button aria-label={`Remove ${item.name}`} title="Remove folder" onClick={() => p.onRemoveItem(theme.id, item.id)}>
+                    <button
+                      aria-label={`Remove ${item.name}`}
+                      title="Remove folder"
+                      onClick={() => p.onRemoveItem(theme.id, item.id)}
+                    >
                       ×
                     </button>
                   </span>
@@ -85,10 +107,18 @@ export function Sidebar(p: SidebarProps): React.JSX.Element {
                       {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}📦 {item.name}
                     </button>
                     <span className="row-actions">
-                      <button aria-label={`New task in ${item.name}`} title="New task" onClick={() => p.onAddTask(theme.id, item.id)}>
+                      <button
+                        aria-label={`New task in ${item.name}`}
+                        title="New task"
+                        onClick={() => p.onAddTask(theme.id, item.id)}
+                      >
                         +
                       </button>
-                      <button aria-label={`Remove ${item.name}`} title="Remove repository" onClick={() => p.onRemoveItem(theme.id, item.id)}>
+                      <button
+                        aria-label={`Remove ${item.name}`}
+                        title="Remove repository"
+                        onClick={() => p.onRemoveItem(theme.id, item.id)}
+                      >
                         ×
                       </button>
                     </span>
