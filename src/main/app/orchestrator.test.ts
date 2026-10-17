@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { Orchestrator, CLAUDE_CMD, CLAUDE_CONTINUE_CMD } from './orchestrator'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Orchestrator, CLAUDE_CMD, CLAUDE_CONTINUE_CMD, FETCH_TIMEOUT_MS } from './orchestrator'
 import type { AppState, Target, Task } from '../../shared/types'
 import { makeDeps } from './fakes'
 
@@ -174,5 +174,94 @@ describe('Orchestrator: sessions and tabs', () => {
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
     expect(status).toEqual({ running: [], missing: [ctx.task.id] })
+  })
+})
+
+describe('Orchestrator: serialized mutations', () => {
+  it('lets only one of two concurrent identical createTask calls succeed', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    const results = await Promise.allSettled([
+      orch.createTask(themeId, repoId, 'fix'),
+      orch.createTask(themeId, repoId, 'fix'),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(rejected).toHaveLength(1)
+    expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/already exists/)
+    expect(git.calls.filter((c) => c.startsWith('addWorktree'))).toHaveLength(1)
+    expect(git.calls).not.toContain('removeWorktree /wt/client-x/my-api/fix')
+    expect(taskOf(await orch.getState()).slug).toBe('fix')
+  })
+
+  it('never runs two store saves at once and loses no update', async () => {
+    const ctx = makeDeps()
+    let inFlight = 0
+    let maxInFlight = 0
+    const save = ctx.store.save.bind(ctx.store)
+    ctx.store.save = async (state): Promise<void> => {
+      maxInFlight = Math.max(maxInFlight, ++inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      await save(state)
+      inFlight--
+    }
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    await Promise.all([orch.createTheme('A'), orch.createTheme('B'), orch.createTheme('C')])
+    expect(maxInFlight).toBe(1)
+    expect((await orch.getState()).themes.map((t) => t.name)).toEqual(['A', 'B', 'C'])
+    expect(ctx.store.saved.at(-1)?.themes).toHaveLength(3)
+  })
+
+  it('does not let a rejected operation block the next one', async () => {
+    const { orch, themeId } = await setup()
+    const [dup, next] = await Promise.allSettled([orch.createTheme('Client X'), orch.createTheme('Other')])
+    expect(dup.status).toBe('rejected')
+    expect(next.status).toBe('fulfilled')
+    await expect(orch.addRepo(themeId, '/not/a/repo')).rejects.toThrow(/Not a git repository/)
+    await expect(orch.addFolder(themeId, '/docs/notes')).resolves.toBeDefined()
+    expect((await orch.getState()).themes.map((t) => t.name)).toEqual(['Client X', 'Other'])
+  })
+})
+
+describe('Orchestrator: fetch timeout', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('defaults to 20 seconds', () => {
+    expect(FETCH_TIMEOUT_MS).toBe(20_000)
+  })
+
+  it('creates the task from the last fetched refs when fetch hangs', async () => {
+    const ctx = makeDeps()
+    ctx.git.roots.set('/code/my-api', '/code/my-api')
+    ctx.git.fetch = (): Promise<void> => new Promise(() => {}) // never settles
+    const orch = new Orchestrator(ctx.deps, { fetchTimeoutMs: 10 })
+    await orch.init()
+    const themeId = (await orch.createTheme('Client X')).themes[0].id
+    const repoId = (await orch.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    expect(task.baseRef).toBe('origin/main')
+    expect(ctx.git.calls).toContain('addWorktree /wt/client-x/my-api/fix claude/client-x/fix origin/main')
+  })
+
+  it('waits FETCH_TIMEOUT_MS by default before giving up on fetch', async () => {
+    vi.useFakeTimers()
+    const { orch, git, themeId, repoId } = await setup()
+    git.fetch = (): Promise<void> => new Promise(() => {})
+    let done = false
+    const p = orch.createTask(themeId, repoId, 'fix').then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS - 1)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await p
+    expect(done).toBe(true)
+  })
+
+  it('clears the timer once fetch settles', async () => {
+    vi.useFakeTimers()
+    const { orch, themeId, repoId } = await setup()
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

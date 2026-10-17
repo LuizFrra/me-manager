@@ -9,12 +9,27 @@ export const CLAUDE_CMD = 'claude'
 /** `--continue` fails when there is no previous conversation; fall back to a fresh one. */
 export const CLAUDE_CONTINUE_CMD = 'claude --continue || claude'
 const CLAUDE_WINDOW = 'claude'
+/** How long createTask waits for `git fetch` before branching from the last fetched refs. */
+export const FETCH_TIMEOUT_MS = 20_000
+
+export interface OrchestratorOptions {
+  /** Overrides FETCH_TIMEOUT_MS (for tests). */
+  fetchTimeoutMs?: number
+}
 
 export class Orchestrator implements AppService {
   private state: AppState = m.emptyState()
   private current: Target | null = null
+  /** Tail of the mutation queue; always resolves, so a failure never blocks later calls. */
+  private queue: Promise<void> = Promise.resolve()
+  private readonly fetchTimeoutMs: number
 
-  constructor(private readonly deps: OrchestratorDeps) {}
+  constructor(
+    private readonly deps: OrchestratorDeps,
+    options: OrchestratorOptions = {},
+  ) {
+    this.fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS
+  }
 
   async init(): Promise<void> {
     this.state = await this.deps.store.load()
@@ -24,6 +39,35 @@ export class Orchestrator implements AppService {
     await this.deps.store.save(next)
     this.state = next
     return next
+  }
+
+  /**
+   * Runs state-changing operations one at a time: FileStore.save is not safe to call
+   * concurrently, and overlapping operations would read stale state (lost updates,
+   * duplicate tasks passing the slug check).
+   */
+  private exclusive<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(op)
+    this.queue = run.then(
+      () => {},
+      () => {},
+    )
+    return run
+  }
+
+  /** Fetch, but give up after fetchTimeoutMs (hung network, ssh prompt). Never throws. */
+  private async fetchWithTimeout(repoPath: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, this.fetchTimeoutMs)
+    })
+    try {
+      await Promise.race([this.deps.git.fetch(repoPath), timeout])
+    } catch {
+      // Offline or auth problem: branch from the last fetched refs instead of failing.
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private resolve(target: Target): { session: string; cwd: string } {
@@ -67,65 +111,69 @@ export class Orchestrator implements AppService {
   }
 
   async createTheme(name: string): Promise<AppState> {
-    return this.commit(m.addTheme(this.state, name))
+    return this.exclusive(async () => this.commit(m.addTheme(this.state, name)))
   }
 
   async removeTheme(themeId: string): Promise<AppState> {
-    const next = m.removeTheme(this.state, themeId) // throws if tasks remain
-    const theme = m.getTheme(this.state, themeId)
-    this.detachIf((t) => t.themeId === themeId)
-    for (const item of theme.items) {
-      if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
-    }
-    return this.commit(next)
+    return this.exclusive(async () => {
+      const next = m.removeTheme(this.state, themeId) // throws if tasks remain
+      const theme = m.getTheme(this.state, themeId)
+      this.detachIf((t) => t.themeId === themeId)
+      for (const item of theme.items) {
+        if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
+      }
+      return this.commit(next)
+    })
   }
 
   async addRepo(themeId: string, path: string): Promise<AppState> {
-    const root = await this.deps.git.repoRoot(path)
-    if (!root) throw new Error(`Not a git repository: ${path}`)
-    return this.commit(m.addRepo(this.state, themeId, root))
+    return this.exclusive(async () => {
+      const root = await this.deps.git.repoRoot(path)
+      if (!root) throw new Error(`Not a git repository: ${path}`)
+      return this.commit(m.addRepo(this.state, themeId, root))
+    })
   }
 
   async addFolder(themeId: string, path: string): Promise<AppState> {
-    return this.commit(m.addFolder(this.state, themeId, path))
+    return this.exclusive(async () => this.commit(m.addFolder(this.state, themeId, path)))
   }
 
   async removeItem(themeId: string, itemId: string): Promise<AppState> {
-    const next = m.removeItem(this.state, themeId, itemId) // throws if repo has tasks
-    const theme = m.getTheme(this.state, themeId)
-    const item = m.getItem(this.state, themeId, itemId)
-    this.detachIf((t) => t.itemId === itemId)
-    if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
-    return this.commit(next)
+    return this.exclusive(async () => {
+      const next = m.removeItem(this.state, themeId, itemId) // throws if repo has tasks
+      const theme = m.getTheme(this.state, themeId)
+      const item = m.getItem(this.state, themeId, itemId)
+      this.detachIf((t) => t.itemId === itemId)
+      if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
+      return this.commit(next)
+    })
   }
 
   async createTask(themeId: string, repoId: string, name: string): Promise<AppState> {
-    const { git, tmux } = this.deps
-    const theme = m.getTheme(this.state, themeId)
-    const repo = m.getRepo(this.state, themeId, repoId)
-    const slug = m.requireSlug(name, 'Task')
-    m.assertTaskSlugFree(repo, slug)
-    const branch = branchName(theme.slug, slug)
-    const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
-    const session = sessionName(theme.slug, repo.slug, slug)
+    return this.exclusive(async () => {
+      const { git, tmux } = this.deps
+      const theme = m.getTheme(this.state, themeId)
+      const repo = m.getRepo(this.state, themeId, repoId)
+      const slug = m.requireSlug(name, 'Task')
+      m.assertTaskSlugFree(repo, slug)
+      const branch = branchName(theme.slug, slug)
+      const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
+      const session = sessionName(theme.slug, repo.slug, slug)
 
-    try {
-      await git.fetch(repo.path)
-    } catch {
-      // Offline or auth problem: branch from the last fetched refs instead of failing.
-    }
-    const baseRef = await git.resolveBaseRef(repo.path)
-    await git.addWorktree(repo.path, worktreePath, branch, baseRef)
-    try {
-      await tmux.newSession(session, worktreePath, CLAUDE_WINDOW, CLAUDE_CMD)
-      const task: Task = { id: randomUUID(), name: name.trim(), slug, branch, worktreePath, baseRef, createdAt: new Date().toISOString() }
-      return await this.commit(m.addTask(this.state, themeId, repoId, task))
-    } catch (err) {
-      await tmux.killSession(session).catch(() => {})
-      await git.removeWorktree(repo.path, worktreePath).catch(() => {})
-      await git.deleteBranch(repo.path, branch).catch(() => {})
-      throw err
-    }
+      await this.fetchWithTimeout(repo.path)
+      const baseRef = await git.resolveBaseRef(repo.path)
+      await git.addWorktree(repo.path, worktreePath, branch, baseRef)
+      try {
+        await tmux.newSession(session, worktreePath, CLAUDE_WINDOW, CLAUDE_CMD)
+        const task: Task = { id: randomUUID(), name: name.trim(), slug, branch, worktreePath, baseRef, createdAt: new Date().toISOString() }
+        return await this.commit(m.addTask(this.state, themeId, repoId, task))
+      } catch (err) {
+        await tmux.killSession(session).catch(() => {})
+        await git.removeWorktree(repo.path, worktreePath).catch(() => {})
+        await git.deleteBranch(repo.path, branch).catch(() => {})
+        throw err
+      }
+    })
   }
 
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {
@@ -135,14 +183,16 @@ export class Orchestrator implements AppService {
   }
 
   async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState> {
-    const theme = m.getTheme(this.state, themeId)
-    const repo = m.getRepo(this.state, themeId, repoId)
-    const task = m.getTask(this.state, themeId, repoId, taskId)
-    this.detachIf((t) => t.taskId === taskId)
-    await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
-    await this.deps.git.removeWorktree(repo.path, task.worktreePath)
-    if (deleteBranch) await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
-    return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+    return this.exclusive(async () => {
+      const theme = m.getTheme(this.state, themeId)
+      const repo = m.getRepo(this.state, themeId, repoId)
+      const task = m.getTask(this.state, themeId, repoId, taskId)
+      this.detachIf((t) => t.taskId === taskId)
+      await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+      await this.deps.git.removeWorktree(repo.path, task.worktreePath)
+      if (deleteBranch) await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+      return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+    })
   }
 
   async openTarget(target: Target): Promise<TabInfo[]> {
