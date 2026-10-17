@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -99,6 +99,26 @@ describe('getUnsavedWork', () => {
     expect(work.uncommittedFiles).toEqual([])
     expect(work.unpushedCommits).toHaveLength(1)
   })
+  it('warns instead of throwing when the original repo was moved', async () => {
+    const { clone, wt, branch } = await withTask()
+    await writeFile(join(wt, 'b.txt'), 'b')
+    await rename(clone, clone + '-moved')
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual([])
+    expect(work.unpushedCommits).toEqual([])
+    expect(work.warning).toBe(
+      `The original repository was not found at ${clone}, so uncommitted changes and unpushed commits could not be checked.`,
+    )
+  })
+  it('warns when git status fails in an existing worktree', async () => {
+    const { clone, wt, branch } = await withTask()
+    await commitFile(wt, 'a.txt', 'a', 'add a')
+    await writeFile(join(wt, '.git'), 'gitdir: /nonexistent/worktree\n') // broken worktree link
+    const work = await svc.getUnsavedWork(clone, wt, branch, 'origin/main')
+    expect(work.uncommittedFiles).toEqual([])
+    expect(work.unpushedCommits).toHaveLength(1)
+    expect(work.warning).toMatch(/uncommitted changes .* could not be checked/)
+  })
 })
 
 describe('removeWorktree / deleteBranch', () => {
@@ -115,5 +135,12 @@ describe('removeWorktree / deleteBranch', () => {
     await rm(wt, { recursive: true, force: true })
     await svc.removeWorktree(clone, wt)
     expect(await run('git', ['-C', clone, 'worktree', 'list'])).not.toContain(wt)
+  })
+  it('deletes the worktree folder when the original repo was moved', async () => {
+    const { clone, wt } = await withTask()
+    await writeFile(join(wt, 'dirty.txt'), 'x')
+    await rename(clone, clone + '-moved')
+    await svc.removeWorktree(clone, wt)
+    expect(existsSync(wt)).toBe(false)
   })
 })

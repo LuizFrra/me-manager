@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { UnsavedWork } from '../../shared/types'
 import type { GitApi } from '../contracts'
@@ -25,6 +25,17 @@ export class GitService implements GitApi {
   private async refExists(repoPath: string, ref: string): Promise<boolean> {
     try {
       await this.git(repoPath, ['rev-parse', '--verify', '--quiet', ref])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** False when the repo folder was moved/deleted or is no longer a git repository. */
+  private async isRepo(repoPath: string): Promise<boolean> {
+    if (!existsSync(repoPath)) return false
+    try {
+      await this.git(repoPath, ['rev-parse', '--git-dir'])
       return true
     } catch {
       return false
@@ -74,6 +85,11 @@ export class GitService implements GitApi {
   }
 
   async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    if (!(await this.isRepo(repoPath))) {
+      // Without the original repo git cannot remove it; there is nothing left to prune either.
+      await rm(worktreePath, { recursive: true, force: true })
+      return
+    }
     if (existsSync(worktreePath)) {
       await this.git(repoPath, ['worktree', 'remove', '--force', worktreePath])
     } else {
@@ -86,17 +102,31 @@ export class GitService implements GitApi {
   }
 
   async getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork> {
-    const uncommittedFiles = existsSync(worktreePath)
-      ? (await this.git(worktreePath, ['status', '--porcelain']))
+    if (!(await this.isRepo(repoPath))) {
+      return {
+        uncommittedFiles: [],
+        unpushedCommits: [],
+        warning: `The original repository was not found at ${repoPath}, so uncommitted changes and unpushed commits could not be checked.`,
+      }
+    }
+    let uncommittedFiles: string[] = []
+    let warning: string | undefined
+    if (existsSync(worktreePath)) {
+      try {
+        uncommittedFiles = (await this.git(worktreePath, ['status', '--porcelain']))
           .split('\n')
           .filter(Boolean)
           .map((line) => line.slice(3))
-      : []
+      } catch {
+        warning = `git status failed in ${worktreePath}, so uncommitted changes in it could not be checked.`
+      }
+    }
+    const withWarning = (work: UnsavedWork): UnsavedWork => (warning ? { ...work, warning } : work)
     if (!(await this.refExists(repoPath, `refs/heads/${branch}`))) {
-      return { uncommittedFiles, unpushedCommits: [] }
+      return withWarning({ uncommittedFiles, unpushedCommits: [] })
     }
     const range = (await this.hasOrigin(repoPath)) ? [branch, '--not', '--remotes'] : [`${baseRef}..${branch}`]
     const log = await this.git(repoPath, ['log', '--format=%h %s', ...range, '--'])
-    return { uncommittedFiles, unpushedCommits: log.split('\n').filter(Boolean) }
+    return withWarning({ uncommittedFiles, unpushedCommits: log.split('\n').filter(Boolean) })
   }
 }
