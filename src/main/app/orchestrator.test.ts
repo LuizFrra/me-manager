@@ -105,6 +105,17 @@ describe('Orchestrator: removeTask', () => {
     await orch.removeTask(themeId, repoId, task.id, false)
     expect(git.calls).not.toContain('deleteBranch claude/client-x/fix')
   })
+  it('removes a task whose original repo was moved or deleted, then its repo and theme', async () => {
+    const { orch, git, themeId, repoId, deps } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    deps.pathExists = (p) => p !== '/code/my-api'
+    git.calls = []
+    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    expect(taskOf(s)).toBeUndefined()
+    expect(git.calls).toEqual(['removeWorktree /wt/client-x/my-api/fix'])
+    await expect(orch.removeItem(themeId, repoId)).resolves.toBeDefined()
+    await expect(orch.removeTheme(themeId)).resolves.toEqual({ version: 1, themes: [] })
+  })
   it('reports unsaved work from git', async () => {
     const { orch, git, themeId, repoId } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))

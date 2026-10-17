@@ -189,8 +189,12 @@ export class Orchestrator implements AppService {
       const task = m.getTask(this.state, themeId, repoId, taskId)
       this.detachIf((t) => t.taskId === taskId)
       await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+      // GitService deletes the folder directly when the original repo was moved or deleted.
       await this.deps.git.removeWorktree(repo.path, task.worktreePath)
-      if (deleteBranch) await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+      // The branch lived in the original repo; if that is gone there is nothing to delete.
+      if (deleteBranch && this.deps.pathExists(repo.path)) {
+        await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+      }
       return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
     })
   }
