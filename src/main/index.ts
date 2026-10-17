@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as nodePty from 'node-pty'
@@ -101,6 +101,8 @@ app
   .then(bootstrap)
   .catch((err) => {
     console.error(err)
+    // Otherwise a GUI launch just exits with no explanation.
+    dialog.showErrorBox('me-manager failed to start', String(err))
     app.quit()
   })
 
