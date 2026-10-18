@@ -42,9 +42,9 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 15 | Terminal zoom: Ctrl/Cmd +/−/0 changes the font size, which is remembered | ux | done (7b478d9) |
 | 16 | Git actions per task: commit all (with a message), push the branch, and open a PR via `gh` if it's installed | feature | done (8c13e64) |
 | 17 | Update the task from base: fetch, then rebase or merge `origin/<default>` into the task branch, with conflict reporting | feature | done (a7857e8) |
-| 18 | Search file contents in the side panel (`git grep` or a folder walk), with clickable results | feature | todo |
-| 19 | Image preview in the file viewer (png, jpg, gif, webp, svg) | feature | todo |
-| 20 | Remember the last selected task and the sidebar's collapsed state across restarts | ux | todo |
+| 18 | Search file contents in the side panel (`git grep` or a folder walk), with clickable results | feature | done (3b50f29) |
+| 19 | Image preview in the file viewer (png, jpg, gif, webp, svg) | feature | done (d2b1d6e) |
+| 20 | Remember the last selected task and the sidebar's collapsed state across restarts | ux | done (3019c1e) |
 | 21 | Confirm dialogs for removing a theme, repo or folder, and an undo-friendly flow | ux | todo |
 | 22 | Clone a repository from a URL into a chosen directory and add it to a theme | feature | todo |
 | 23 | Side-by-side diff toggle for wide panels | ux | todo |
