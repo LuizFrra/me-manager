@@ -2684,3 +2684,107 @@ describe('App modal focus', () => {
     expectInert(false)
   })
 })
+
+describe('App background actions and the dialog shown by then', () => {
+  /** An api whose createTask waits for `gate`. */
+  function slowApi(gate: Deferred): MeManagerApi {
+    const api = repoApi()
+    const createTask = api.createTask
+    api.createTask = async (...args) => {
+      await gate.promise
+      return createTask(...args)
+    }
+    return api
+  }
+
+  const startTask = async (user: UserEvent, name: string): Promise<void> => {
+    await user.click(await screen.findByRole('button', { name: 'New task in my-api' }))
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), name)
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+  }
+
+  it('keeps Settings, opened while a task was being created, and does not jump to the new task', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = slowApi(gate)
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await startTask(user, 'slow task')
+    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox', { name: 'Name' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+
+    gate.resolve()
+    expect(await screen.findByRole('button', { name: 'Remove task slow task' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(openTarget).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('terminal')).not.toBeInTheDocument()
+  })
+
+  it('still opens the new task when the dialog was only dismissed meanwhile', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = slowApi(gate)
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await startTask(user, 'slow task')
+    await user.click(screen.getByRole('textbox', { name: 'Name' }))
+    await user.keyboard('{Escape}')
+    gate.resolve()
+    await waitFor(() => expect(openTarget).toHaveBeenCalled())
+    expect(await screen.findByText('my-api › slow task')).toBeInTheDocument()
+  })
+
+  it('keeps a dialog opened while a commit was running', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = repoApi()
+    const commitAll = api.commitAll
+    api.commitAll = async (...args) => {
+      await gate.promise
+      return commitAll(...args)
+    }
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(within(screen.getByRole('group', { name: 'Git' })).getByRole('button', { name: 'Commit all…' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Commit all in fix login bug' }))
+    await dialog.findByText('3 files will be committed')
+    await user.type(dialog.getByRole('textbox', { name: 'Commit message' }), 'wip')
+    await user.click(dialog.getByRole('button', { name: 'Commit' }))
+    await user.click(dialog.getByRole('textbox', { name: 'Commit message' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    gate.resolve()
+    expect(await screen.findByText('Committed 3 files')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+  })
+
+  it('reports conflicts in a toast instead of replacing a dialog opened while the update ran', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = repoApi()
+    const updateFromBase = api.updateFromBase
+    api.updateFromBase = async (...args) => {
+      await gate.promise
+      return updateFromBase(...args)
+    }
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'conflict demo')
+    await user.click(
+      within(screen.getByRole('group', { name: 'Git' })).getByRole('button', { name: 'Update from base' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    gate.resolve()
+    expect(await screen.findByText(/stopped on conflicts in 2 files and was undone/)).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
