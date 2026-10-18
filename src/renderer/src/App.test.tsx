@@ -389,3 +389,107 @@ describe('App side panel', () => {
     expect(await within(panel()).findByText("⚠ This task's folder is missing.")).toBeInTheDocument()
   })
 })
+
+describe('App command palette', () => {
+  const openPalette = async (): Promise<HTMLElement> => {
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    return screen.findByRole('dialog', { name: 'Command palette' })
+  }
+  const search = (): HTMLElement => screen.getByRole('combobox', { name: 'Search tasks, files and actions' })
+  const optionNames = (dialog: HTMLElement): (string | null)[] =>
+    within(dialog)
+      .getAllByRole('option')
+      .map((o) => o.getAttribute('aria-label'))
+
+  it('opens with Ctrl+K, focuses the search, and closes with Esc or Ctrl+K', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    const dialog = await openPalette()
+    expect(search()).toHaveFocus()
+    expect(within(dialog).getByRole('listbox')).toBeInTheDocument()
+    expect(optionNames(dialog)).toEqual(
+      expect.arrayContaining(['Client X › my-api › task A', 'Client X › my-api › task B', 'New theme']),
+    )
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+
+    await openPalette()
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+  })
+
+  it('filters tasks fuzzily', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'fix login bug', 'add tests')
+    const dialog = await openPalette()
+    await user.type(search(), 'flb')
+    expect(optionNames(dialog)[0]).toBe('Client X › my-api › fix login bug')
+    expect(optionNames(dialog)).not.toContain('Client X › my-api › add tests')
+    expect(within(dialog).getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('opens the task picked with Enter', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B') // task B is selected
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    const taskA = repo.kind === 'repo' ? repo.tasks[0] : undefined
+    openTarget.mockClear()
+
+    await openPalette()
+    await user.type(search(), 'task a')
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+    expect(openTarget).toHaveBeenCalledWith({ themeId: state.themes[0].id, itemId: repo.id, taskId: taskA?.id })
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+  })
+
+  it("opens one of the selected task's files in the side panel", async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const listFiles = vi.spyOn(api, 'listFiles')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const dialog = await openPalette()
+    await user.type(search(), 'srcapp')
+    const option = await within(dialog).findByRole('option', { name: 'src/app.ts' })
+    expect(listFiles).toHaveBeenCalledTimes(1) // fetched once when the palette opened, then cached
+    await user.click(option)
+
+    const panel = screen.getByRole('complementary', { name: 'Files panel' })
+    expect(within(panel).getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+    expect(await within(panel).findByRole('button', { name: /^app\.ts/ })).toHaveAttribute('aria-current', 'true')
+    await waitFor(() => expect(document.querySelector('.code-body')?.textContent).toContain('greetAll'))
+  })
+
+  it('runs actions, moving with the arrow keys', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const newTab = vi.spyOn(api, 'newTab')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const dialog = await openPalette()
+    await user.type(search(), 'shell')
+    expect(optionNames(dialog)[0]).toBe('New shell tab')
+    await user.keyboard('{Enter}')
+    expect(newTab).toHaveBeenCalledTimes(1)
+
+    await openPalette()
+    await user.type(search(), 'keyboard shortcuts')
+    await user.keyboard('{ArrowDown}{ArrowUp}{Enter}')
+    expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+  })
+
+  it('leaves out target actions when nothing is selected', async () => {
+    render(<App api={createMockApi()} />)
+    const dialog = await openPalette()
+    expect(optionNames(dialog)).toEqual(['New theme', 'Show keyboard shortcuts'])
+  })
+})

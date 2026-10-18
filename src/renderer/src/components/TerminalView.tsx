@@ -5,7 +5,7 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import type { MeManagerApi } from '../../../shared/types'
 import { createWriteOnlyClipboard } from '../lib/clipboardProvider'
-import { isMac, isPanelShortcut } from '../lib/shortcuts'
+import { isMac, matchShortcut } from '../lib/shortcuts'
 import { debounceSettled } from '../lib/settledResize'
 
 export interface TerminalViewProps {
@@ -43,7 +43,8 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
     // Linux has no app menu (it would steal Ctrl+C), so handle Ctrl+Shift+C/V here.
     // On macOS the Edit menu handles Cmd+C/V.
     term.attachCustomKeyEventHandler((e) => {
-      if (isPanelShortcut(e)) return false // App's window listener toggles the files panel; don't send it to tmux
+      // App shortcuts (palette, panel, …) are handled by App's window listener: never send them to tmux.
+      if (matchShortcut(e)) return false
       if (isMac || e.type !== 'keydown' || !(e.ctrlKey && e.shiftKey)) return true
       const key = e.key.toLowerCase()
       if (key === 'c') {
