@@ -962,3 +962,8 @@ pre.diff-raw {
 .mermaid-error pre {
   margin: 8px 0 0;
 }
+
+.panel-loading {
+  padding: 16px;
+  color: var(--muted);
+}

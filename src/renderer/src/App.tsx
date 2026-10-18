@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { AppState, LiveStatus, MeManagerApi, PrereqResult, TabInfo, Target, UnsavedWork } from '../../shared/types'
 import { hasUnsavedWork } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
@@ -6,7 +6,6 @@ import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
-import { SidePanel } from './components/files/SidePanel'
 import { NameDialog, RemoveTaskDialog } from './components/Dialogs'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
@@ -14,6 +13,9 @@ import { describeTarget } from './lib/describe'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isPanelShortcut } from './lib/shortcuts'
+
+// The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
+const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
 
 type Dialog =
   | { kind: 'name'; title: string; placeholder: string; onSubmit: (name: string) => Promise<void> }
@@ -260,17 +262,19 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                     aria-label="Files panel"
                     style={{ '--panel-width': `${(panelFraction * 100).toFixed(2)}%` } as React.CSSProperties}
                   >
-                    <SidePanel
-                      key={targetKey(selected)}
-                      api={api}
-                      target={selected}
-                      isRepo={isRepo}
-                      missing={status.missing.includes(targetKey(selected))}
-                      state={panel}
-                      onState={updatePanel}
-                      onError={showError}
-                      onClose={() => updatePanel({ open: false })}
-                    />
+                    <Suspense fallback={<div className="panel-loading">Loading…</div>}>
+                      <SidePanel
+                        key={targetKey(selected)}
+                        api={api}
+                        target={selected}
+                        isRepo={isRepo}
+                        missing={status.missing.includes(targetKey(selected))}
+                        state={panel}
+                        onState={updatePanel}
+                        onError={showError}
+                        onClose={() => updatePanel({ open: false })}
+                      />
+                    </Suspense>
                   </aside>
                 </>
               )}
