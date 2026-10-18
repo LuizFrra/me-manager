@@ -139,6 +139,13 @@ export interface MeManagerApi {
    * Pass the change's `oldPath` for a rename, which spares a whole-tree rename lookup.
    */
   fileDiff(target: Target, path: string, oldPath?: string): Promise<string>
+  /**
+   * Opens the target's folder (task worktree or folder path) in the editor from Settings, or an auto-detected
+   * GUI one. Rejects when the folder is gone or no editor is found.
+   */
+  openInEditor(target: Target): Promise<void>
+  /** Opens the target's folder in the system file manager. */
+  openInFileManager(target: Target): Promise<void>
   /** Opens an http(s) URL in the system browser; rejects other schemes. */
   openExternal(url: string): Promise<void>
 

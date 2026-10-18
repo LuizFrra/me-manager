@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { CopyEntry } from '../lib/copy'
+import { shortcutLabel } from '../lib/shortcuts'
 
 /**
  * The selected task's or folder's header: title, path line, and the task's notes, collapsed to one line until
@@ -14,6 +15,9 @@ export function TaskHeader(props: {
   /** Copy buttons (branch, path, attach command). */
   copies: CopyEntry[]
   onCopy: (entry: CopyEntry) => void
+  /** Opens the task's worktree or the folder in an editor / the file manager. */
+  onOpenInEditor: () => void
+  onRevealInFileManager: () => void
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -24,6 +28,25 @@ export function TaskHeader(props: {
           <div className="task-subtitle">{props.subtitle}</div>
         </div>
         <div className="task-header-actions">
+          <div className="copy-group" role="group" aria-label="Open">
+            <span className="copy-group-label" aria-hidden="true">
+              Open
+            </span>
+            <button
+              aria-label="Open in editor"
+              title={`Open in editor (${shortcutLabel('openEditor')})`}
+              onClick={props.onOpenInEditor}
+            >
+              Editor
+            </button>
+            <button
+              aria-label="Reveal in file manager"
+              title="Reveal in file manager"
+              onClick={props.onRevealInFileManager}
+            >
+              File manager
+            </button>
+          </div>
           {props.copies.length > 0 && (
             <div className="copy-group" role="group" aria-label="Copy">
               <span className="copy-group-label" aria-hidden="true">

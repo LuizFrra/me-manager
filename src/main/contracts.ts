@@ -76,6 +76,13 @@ export interface SettingsApi {
   update(patch: Partial<Settings>): Promise<Settings>
 }
 
+/** Starts external apps on a folder. Never through a shell. */
+export interface LauncherApi {
+  /** `editorCommand` is Settings.editorCommand; '' auto-detects an editor. */
+  openInEditor(path: string, editorCommand: string): Promise<void>
+  openInFileManager(path: string): Promise<void>
+}
+
 /** What the orchestrator implements: everything except renderer/pty-only calls. */
 export type AppService = Omit<
   MeManagerApi,
@@ -96,6 +103,7 @@ export interface OrchestratorDeps {
   pty: PtyApi
   files: FilesApi
   settings: SettingsApi
+  launcher: LauncherApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
 }

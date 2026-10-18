@@ -55,5 +55,9 @@ describe('settings form', () => {
       terminalFontSize: expect.any(String),
     })
     expect(parseForm(form({ pollSeconds: '31' })).errors).toHaveProperty('pollSeconds')
+    expect(parseForm(form({ editorCommand: 'nvim' })).errors).toEqual({
+      editorCommand: 'nvim runs in a terminal; choose a GUI editor (e.g. code, subl, gvim).',
+    })
+    expect(parseForm(form({ editorCommand: 'emacs' })).errors).toBeUndefined()
   })
 })

@@ -55,6 +55,7 @@ describe('TerminalView key handler', () => {
       key({ key: 'P', shiftKey: true }),
       key({ key: '?', shiftKey: true }),
       key({ key: ',' }),
+      key({ key: 'O', shiftKey: true }),
       key({ key: 'E', shiftKey: true }),
       key({ key: '1' }),
       key({ key: '9' }),
@@ -72,6 +73,7 @@ describe('TerminalView key handler', () => {
       key({ key: 'w' }),
       key({ key: 'p' }),
       key({ key: ',', shiftKey: true }),
+      key({ key: 'o' }),
       key({ key: 'a', ctrlKey: false }),
     ]
     for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)

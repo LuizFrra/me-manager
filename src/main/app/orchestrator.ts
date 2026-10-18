@@ -356,4 +356,16 @@ export class Orchestrator implements AppService {
     const { root, baseRef } = this.resolveTask(target)
     return this.deps.files.fileDiff(root, baseRef, path, oldPath)
   }
+
+  // External apps, on the same root the file viewer shows (a task's worktree or a folder), checked to exist.
+
+  async openInEditor(target: Target): Promise<void> {
+    const { root } = this.resolveRoot(target)
+    await this.deps.launcher.openInEditor(root, this.deps.settings.get().editorCommand)
+  }
+
+  async openInFileManager(target: Target): Promise<void> {
+    const { root } = this.resolveRoot(target)
+    await this.deps.launcher.openInFileManager(root)
+  }
 }
