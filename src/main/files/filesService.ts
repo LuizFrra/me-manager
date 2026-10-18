@@ -92,11 +92,14 @@ function errCode(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException | null)?.code
 }
 
-export type SafePath = { abs: string; rel: string; missing?: undefined } | { missing: true; abs: string; rel: string }
+export type SafePath =
+  | { abs: string; rel: string; lexical: string; missing?: undefined }
+  | { missing: true; abs: string; rel: string; lexical: string }
 
 /**
  * Resolves `rel` inside `root`, refusing anything that escapes it lexically or through a symlink.
  * `rel` in the result is normalized and POSIX-separated, suitable as a git pathspec.
+ * `lexical` is the path under the real root before resolving symlinks (for lstat).
  * A path that doesn't exist yields `missing: true` (`abs` is then the lexical candidate).
  */
 export async function safePath(root: string, rel: string): Promise<SafePath> {
@@ -112,11 +115,12 @@ export async function safePath(root: string, rel: string): Promise<SafePath> {
     real = await realpath(candidate)
   } catch (err) {
     const code = errCode(err)
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { missing: true, abs: candidate, rel: normRel }
+    if (code === 'ENOENT' || code === 'ENOTDIR')
+      return { missing: true, abs: candidate, rel: normRel, lexical: candidate }
     throw err
   }
   if (!inside(real)) throw new Error(OUTSIDE)
-  return { abs: real, rel: normRel }
+  return { abs: real, rel: normRel, lexical: candidate }
 }
 
 /** Reads at most `max` bytes from the start of a file without loading the rest. */
@@ -176,6 +180,21 @@ async function walk(root: string, max: number): Promise<FileList> {
     }
   }
   return { paths: out.sort(), truncated }
+}
+
+/** The diff git shows for a new symlink: one line holding its target, without a trailing newline. */
+function newSymlinkDiff(rel: string, target: string): string {
+  const lines = target.split('\n')
+  return [
+    `diff --git a/${rel} b/${rel}`,
+    'new file mode 120000',
+    '--- /dev/null',
+    `+++ b/${rel}`,
+    `@@ -0,0 +1${lines.length === 1 ? '' : `,${lines.length}`} @@`,
+    ...lines.map((l) => `+${l}`),
+    '\\ No newline at end of file',
+    '',
+  ].join('\n')
 }
 
 function mapStatus(token: string): ChangeStatus {
@@ -298,7 +317,10 @@ export class FilesService implements FilesApi {
     const p = await safePath(root, relPath)
     if (p.missing) return { kind: 'missing' }
     const s = await stat(p.abs)
-    if (s.isDirectory()) throw new Error('Path is a directory')
+    if (s.isDirectory()) {
+      if ((await lstat(p.lexical)).isSymbolicLink()) return { kind: 'symlinkToFolder' }
+      throw new Error('Path is a directory')
+    }
     if (!s.isFile()) throw new Error('Not a regular file')
     const head = await readHead(p.abs, Math.min(s.size, MAX_TEXT_BYTES))
     if (looksBinary(head)) return { kind: 'binary', size: s.size }
@@ -368,7 +390,10 @@ export class FilesService implements FilesApi {
   async fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string> {
     const p = await safePath(worktree, relPath)
     const rel = p.rel
-    if (!p.missing && (await stat(p.abs)).isDirectory()) throw new Error('Path is a directory')
+    // git diffs a symlink as a file holding its target, so only a real directory is refused.
+    const link = !p.missing && (await lstat(p.lexical)).isSymbolicLink()
+    const toFolder = !p.missing && (await stat(p.abs)).isDirectory()
+    if (toFolder && !link) throw new Error('Path is a directory')
     if (oldPath !== undefined) {
       // A rename from the change list: diff the pair directly instead of looking the rename up again.
       const old = await safePath(worktree, oldPath)
@@ -382,6 +407,8 @@ export class FilesService implements FilesApi {
       if (parseNameStatus(own).some((ns) => ns.path === rel && ns.status === 'D')) {
         return git(worktree, ['diff', ...DIFF_FLAGS, base, '--', rel])
       }
+      // --no-index follows a symlink to a folder (and prints nothing), so write git's diff for it here.
+      if (toFolder) return newSymlinkDiff(rel, await readlink(p.lexical))
       return git(worktree, ['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', rel], [1])
     }
     const { base } = await this.resolveBase(worktree, baseRef)
