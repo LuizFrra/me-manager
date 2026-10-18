@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanError, INFO_MS, useToasts } from './toasts'
+import { ACTION_MS, cleanError, INFO_MS, useToasts } from './toasts'
 
 describe('cleanError', () => {
   it('strips the Electron IPC prefix', () => {
@@ -29,5 +29,33 @@ describe('useToasts', () => {
     ])
     act(() => vi.advanceTimersByTime(INFO_MS))
     expect(result.current.toasts.map((t) => t.kind)).toEqual(['error'])
+  })
+
+  it('keeps an info toast with an action for ACTION_MS, and a plain one never replaces it', () => {
+    vi.useFakeTimers()
+    const run = vi.fn()
+    const { result } = renderHook(() => useToasts())
+    act(() => result.current.showInfo('Copied branch name'))
+    act(() => result.current.showInfo('Removed "notes"', { action: { label: 'Undo', run } }))
+    act(() => result.current.showInfo('Copied worktree path'))
+    expect(result.current.toasts.map((t) => [t.message, t.action?.label])).toEqual([
+      ['Removed "notes"', 'Undo'],
+      ['Copied worktree path', undefined],
+    ])
+    act(() => vi.advanceTimersByTime(INFO_MS))
+    expect(result.current.toasts.map((t) => t.message)).toEqual(['Removed "notes"'])
+    act(() => vi.advanceTimersByTime(ACTION_MS - INFO_MS - 1))
+    expect(result.current.toasts).toHaveLength(1)
+    act(() => vi.advanceTimersByTime(1))
+    expect(result.current.toasts).toEqual([])
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('stacks two toasts with actions, each with its own', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useToasts())
+    act(() => result.current.showInfo('Removed a', { action: { label: 'Undo', run: () => {} } }))
+    act(() => result.current.showInfo('Removed b', { action: { label: 'Undo', run: () => {} } }))
+    expect(result.current.toasts.map((t) => t.message)).toEqual(['Removed a', 'Removed b'])
   })
 })

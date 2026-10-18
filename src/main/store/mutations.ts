@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { basename } from 'node:path'
+import { basename, isAbsolute } from 'node:path'
 import {
   MAX_TASK_NOTES,
   type AppState,
@@ -139,6 +139,91 @@ export function addFolder(state: AppState, themeId: string, folderPath: string):
     slug: requireSlug(name, 'Folder'),
     path: folderPath,
   })
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isText = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '' && !v.includes('\0')
+/** A slug as slugify makes it, so a restored one can't smuggle `/`, `..` or `_` into paths and session names. */
+const isSlug = (v: unknown): v is string => typeof v === 'string' && v !== '' && slugify(v) === v
+
+/** Every theme, item and task id in the state. */
+function allIds(state: AppState): Set<string> {
+  const ids = new Set<string>()
+  for (const theme of state.themes) {
+    ids.add(theme.id)
+    for (const item of theme.items) {
+      ids.add(item.id)
+      if (item.kind === 'repo') for (const task of item.tasks) ids.add(task.id)
+    }
+  }
+  return ids
+}
+
+/**
+ * A removed theme or item as sent back for an undo (so not trusted): only the known fields, checked. A repo comes
+ * back without tasks, since one with tasks can't be removed.
+ */
+function restoredItem(raw: unknown): Item {
+  if (!isRecord(raw) || (raw.kind !== 'repo' && raw.kind !== 'folder')) throw new Error('Invalid item to restore')
+  const { id, name, slug, path } = raw
+  if (!isText(id) || !isText(name) || !isSlug(slug) || !isText(path) || !isAbsolute(path)) {
+    throw new Error('Invalid item to restore')
+  }
+  if (raw.kind === 'folder') return { id, kind: 'folder', name, slug, path }
+  if (raw.tasks !== undefined && !(Array.isArray(raw.tasks) && raw.tasks.length === 0)) {
+    throw new Error(`"${name}" can't be restored with tasks`)
+  }
+  return { id, kind: 'repo', name, slug, path, tasks: [] }
+}
+
+/** Where a restored entry goes: its old position when given (clamped), otherwise the end. */
+const insertAt = <T>(list: T[], entry: T, index?: number): void => {
+  const at =
+    typeof index === 'number' && Number.isInteger(index) ? Math.min(Math.max(index, 0), list.length) : list.length
+  list.splice(at, 0, entry)
+}
+
+/**
+ * Undoes removeItem: puts the item back into its theme with the same id, name, slug and path, at `index` if
+ * given. Rejects it when its id is in use anywhere, or its path or slug is in the theme meanwhile.
+ */
+export function restoreItem(state: AppState, themeId: string, raw: unknown, index?: number): AppState {
+  const item = restoredItem(raw)
+  const theme = getTheme(state, themeId)
+  if (allIds(state).has(item.id)) throw new Error(`"${item.name}" is already in me-manager`)
+  if (theme.items.some((i) => i.path === item.path)) throw new Error(`${item.path} is already in this theme`)
+  if (theme.items.some((i) => i.slug === item.slug)) {
+    throw new Error(`An item named "${item.name}" already exists in this theme`)
+  }
+  const next = clone(state)
+  insertAt(getTheme(next, themeId).items, item, index)
+  return next
+}
+
+/**
+ * Undoes removeTheme: puts the theme back with its items, ids, names, slugs and paths, at `index` if given.
+ * Rejects it when an id is in use, its slug or name is taken by another theme meanwhile, or its items clash.
+ */
+export function restoreTheme(state: AppState, raw: unknown, index?: number): AppState {
+  if (!isRecord(raw) || !Array.isArray(raw.items)) throw new Error('Invalid theme to restore')
+  const { id, name, slug } = raw
+  if (!isText(id) || !isText(name) || !isSlug(slug)) throw new Error('Invalid theme to restore')
+  const items = raw.items.map(restoredItem)
+  const ids = allIds(state)
+  const own = new Set<string>()
+  for (const entry of [id, ...items.map((i) => i.id)]) {
+    if (ids.has(entry) || own.has(entry)) throw new Error(`"${name}" is already in me-manager`)
+    own.add(entry)
+  }
+  if (state.themes.some((t) => t.slug === slug) || state.themes.some((t) => sameName(t.name, name))) {
+    throw new Error(`A theme named "${name.trim()}" already exists`)
+  }
+  if (new Set(items.map((i) => i.path)).size < items.length || new Set(items.map((i) => i.slug)).size < items.length) {
+    throw new Error(`Invalid theme to restore: "${name}" lists an item twice`)
+  }
+  const next = clone(state)
+  insertAt(next.themes, { id, name, slug, items }, index)
+  return next
 }
 
 export function removeItem(state: AppState, themeId: string, itemId: string): AppState {

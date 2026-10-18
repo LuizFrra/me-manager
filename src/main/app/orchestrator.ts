@@ -9,6 +9,7 @@ import type {
   CommitResult,
   GitTools,
   FileContent,
+  Item,
   FileList,
   LiveStatus,
   NewTaskOptions,
@@ -22,6 +23,7 @@ import type {
   Target,
   Task,
   TaskGitStatus,
+  Theme,
   UnsavedWork,
   UpdateResult,
   UiState,
@@ -388,6 +390,11 @@ export class Orchestrator implements AppService {
     })
   }
 
+  /** The theme comes from the renderer: restoreTheme checks it. */
+  async restoreTheme(theme: Theme, index?: number): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.restoreTheme(this.state, theme, index)))
+  }
+
   async addRepo(themeId: string, path: string): Promise<AppState> {
     return this.exclusive(async () => {
       const root = await this.deps.git.repoRoot(path)
@@ -409,6 +416,11 @@ export class Orchestrator implements AppService {
       if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
       return this.commit(next)
     })
+  }
+
+  /** The item comes from the renderer: restoreItem checks it. */
+  async restoreItem(themeId: string, item: Item, index?: number): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.restoreItem(this.state, themeId, item, index)))
   }
 
   /** The default base and every listed branch, the default first (it may be a local branch git doesn't list). */

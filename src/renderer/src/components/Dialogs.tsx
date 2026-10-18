@@ -148,6 +148,96 @@ export function RemoveTaskDialog(props: {
   )
 }
 
+/** What ConfirmRemoveDialog removes: a theme, or a repository or folder of a theme. */
+export type RemovalKind = 'theme' | 'repo' | 'folder'
+
+const REMOVAL_NOUN: Record<RemovalKind, string> = { theme: 'theme', repo: 'repository', folder: 'folder' }
+
+/**
+ * Confirms removing a theme, repository or folder from the app. Nothing on disk is touched, which the dialog says
+ * plainly, and the removal can be undone from the toast that follows. Enter removes, Esc cancels.
+ */
+export function ConfirmRemoveDialog(props: {
+  kind: RemovalKind
+  name: string
+  /** The theme a repository or folder is removed from. */
+  themeName?: string
+  /** The folder on disk (repositories and folders). */
+  path?: string
+  /** For a theme: what goes with it, e.g. "2 repositories and 1 folder". */
+  contents?: string
+  onConfirm: () => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const noun = REMOVAL_NOUN[props.kind]
+  const descId = useId()
+  const confirm = async (): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onConfirm()
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  const from = props.themeName ? (
+    <>
+      {' '}
+      from <strong>{props.themeName}</strong>
+    </>
+  ) : null
+  return (
+    <div className="overlay">
+      <div
+        className="dialog confirm-remove-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Remove ${noun} ${props.name}`}
+        aria-describedby={descId}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || busy) return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
+        <h2>
+          Remove {noun} “{props.name}”?
+        </h2>
+        <div id={descId} className="confirm-remove-body">
+          {props.kind === 'theme' ? (
+            <p>
+              The theme is removed from me-manager
+              {props.contents ? <>, with its {props.contents}</> : null}.
+            </p>
+          ) : (
+            <p>
+              The {noun} is removed{from}
+              {props.kind === 'folder' ? ', and its terminal session is closed' : ''}.
+            </p>
+          )}
+          {props.path && <code className="confirm-remove-path">{props.path}</code>}
+          <p className="dialog-safe">
+            <span aria-hidden="true">✓</span> Your files on disk are not touched.
+          </p>
+        </div>
+        <div className="dialog-actions">
+          <span className="dialog-actions-hint">You can undo this right after.</span>
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" className="danger" autoFocus onClick={() => void confirm()} disabled={busy}>
+            {busy ? 'Removing…' : 'Remove'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
 export function NotesDialog(props: {
   taskName: string

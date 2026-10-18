@@ -26,11 +26,13 @@ import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
 import {
   CommitDialog,
+  ConfirmRemoveDialog,
   ConflictDialog,
   NameDialog,
   NewTaskDialog,
   NotesDialog,
   RemoveTaskDialog,
+  type RemovalKind,
 } from './components/Dialogs'
 import { TaskHeader } from './components/TaskHeader'
 import { Toasts } from './components/Toasts'
@@ -73,6 +75,15 @@ type Dialog =
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | { kind: 'settings' }
+  | {
+      kind: 'confirmRemove'
+      what: RemovalKind
+      name: string
+      themeName?: string
+      path?: string
+      contents?: string
+      onConfirm: () => Promise<void>
+    }
 
 type AppAction =
   | { type: 'open'; target: Target }
@@ -479,6 +490,71 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else await doRemove(true)
   }
 
+  /**
+   * Removing a theme, repo or folder: refused at once while it has tasks (as main would), otherwise confirmed in a
+   * dialog, then offered back for ACTION_MS by an "Undo" toast that restores it as it was, in the same place.
+   */
+  const confirmRemoval = (
+    ask: Omit<Extract<Dialog, { kind: 'confirmRemove' }>, 'kind' | 'onConfirm'>,
+    remove: () => Promise<AppState>,
+    restore: () => Promise<AppState>,
+    clear: (t: Target) => boolean,
+  ): void => {
+    const label = `${ask.what === 'repo' ? 'repository' : ask.what} “${ask.name}”`
+    setDialog({
+      kind: 'confirmRemove',
+      ...ask,
+      onConfirm: async () => {
+        if (!(await update(remove))) return
+        setDialog(null)
+        clearSelectionIf(clear)
+        refresh()
+        showInfo(`Removed ${label}`, {
+          action: {
+            label: 'Undo',
+            run: async () => {
+              if (await update(restore)) showInfo(`Restored ${label}`)
+            },
+          },
+        })
+      },
+    })
+  }
+
+  const removeTheme = (themeId: string): void => {
+    const index = state.themes.findIndex((t) => t.id === themeId)
+    const theme = state.themes[index]
+    if (!theme) return
+    if (theme.items.some((i) => i.kind === 'repo' && i.tasks.length > 0))
+      return showError(`Remove the tasks in "${theme.name}" first`)
+    const repos = theme.items.filter((i) => i.kind === 'repo').length
+    const folders = theme.items.length - repos
+    const contents = [
+      repos ? plural(repos, 'repository', 'repositories') : '',
+      folders ? plural(folders, 'folder') : '',
+    ].filter(Boolean)
+    confirmRemoval(
+      { what: 'theme', name: theme.name, contents: contents.join(' and ') || undefined },
+      () => api.removeTheme(themeId),
+      () => api.restoreTheme(theme, index),
+      (t) => t.themeId === themeId,
+    )
+  }
+
+  const removeItem = (themeId: string, itemId: string): void => {
+    const theme = state.themes.find((t) => t.id === themeId)
+    const index = theme?.items.findIndex((i) => i.id === itemId) ?? -1
+    const item = theme?.items[index]
+    if (!theme || !item) return
+    if (item.kind === 'repo' && item.tasks.length > 0) return showError(`Remove the tasks in "${item.name}" first`)
+    confirmRemoval(
+      { what: item.kind, name: item.name, themeName: theme.name, path: item.path },
+      () => api.removeItem(themeId, itemId),
+      () => api.restoreItem(themeId, item, index),
+      (t) => t.itemId === itemId,
+    )
+  }
+
   const openSettings = (): void => setDialog({ kind: 'settings' })
 
   const newTask = (themeId: string, repoId: string): void => {
@@ -806,14 +882,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
         onRenameTheme={renameTheme}
-        onRemoveTheme={async (themeId) => {
-          if (await update(() => api.removeTheme(themeId))) clearSelectionIf((t) => t.themeId === themeId)
-        }}
+        onRemoveTheme={removeTheme}
         onAddRepo={(themeId) => void addPath(themeId, api.addRepo)}
         onAddFolder={(themeId) => void addPath(themeId, api.addFolder)}
-        onRemoveItem={async (themeId, itemId) => {
-          if (await update(() => api.removeItem(themeId, itemId))) clearSelectionIf((t) => t.itemId === itemId)
-        }}
+        onRemoveItem={removeItem}
         onAddTask={newTask}
         onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
@@ -930,6 +1002,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         <RemoveTaskDialog
           taskName={dialog.taskName}
           work={dialog.work}
+          onConfirm={dialog.onConfirm}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'confirmRemove' && (
+        <ConfirmRemoveDialog
+          kind={dialog.what}
+          name={dialog.name}
+          themeName={dialog.themeName}
+          path={dialog.path}
+          contents={dialog.contents}
           onConfirm={dialog.onConfirm}
           onCancel={() => setDialog(null)}
         />

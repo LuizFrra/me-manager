@@ -69,6 +69,55 @@ describe('Orchestrator: themes and items', () => {
   })
 })
 
+describe('Orchestrator: undoing a removal', () => {
+  it('restores a removed repo as it was and saves it', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    const before = await orch.getState()
+    const repo = before.themes[0].items[0]
+    await orch.removeItem(themeId, repoId)
+    const restored = await orch.restoreItem(themeId, repo, 0)
+    expect(restored).toEqual(before)
+    expect(store.saved.at(-1)).toEqual(before)
+    expect(await orch.getState()).toEqual(before)
+  })
+  it('restores a removed folder without restarting its session', async () => {
+    const { orch, tmux, themeId } = await setup()
+    const s = await orch.addFolder(themeId, '/docs/notes')
+    const folder = s.themes[0].items[1]
+    await orch.openTarget({ themeId, itemId: folder.id })
+    await orch.removeItem(themeId, folder.id)
+    tmux.calls = []
+    const restored = await orch.restoreItem(themeId, folder, 1)
+    expect(restored.themes[0].items[1]).toEqual(folder)
+    expect(tmux.calls).toEqual([])
+  })
+  it('refuses a restore that collides, without saving', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    const repo = (await orch.getState()).themes[0].items[0]
+    await orch.removeItem(themeId, repoId)
+    await orch.addRepo(themeId, '/code/my-api/src') // the same path again, with a new id
+    const saves = store.saved.length
+    await expect(orch.restoreItem(themeId, repo)).rejects.toThrow('/code/my-api is already in this theme')
+    expect(store.saved.length).toBe(saves)
+  })
+  it('restores a removed theme with its items at its old position', async () => {
+    const { orch, themeId } = await setup()
+    await orch.addFolder(themeId, '/docs/notes')
+    const before = await orch.createTheme('Personal')
+    await orch.removeTheme(themeId)
+    const restored = await orch.restoreTheme(before.themes[0], 0)
+    expect(restored).toEqual(before)
+  })
+  it('refuses to restore a theme whose name was taken meanwhile', async () => {
+    const { orch, themeId } = await setup()
+    const theme = (await orch.getState()).themes[0]
+    await orch.removeTheme(themeId)
+    await orch.createTheme('Client X')
+    await expect(orch.restoreTheme(theme)).rejects.toThrow(/already exists/)
+    expect((await orch.getState()).themes).toHaveLength(1)
+  })
+})
+
 describe('Orchestrator: createTask', () => {
   it('fetches, creates worktree + session, and saves', async () => {
     const { orch, git, tmux, themeId, repoId } = await setup()
