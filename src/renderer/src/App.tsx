@@ -52,6 +52,7 @@ import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from
 import { allTargets, visibleTargets } from './lib/targets'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
+import { placeBack, placeOf } from './lib/placeBack'
 import { sessionState } from './lib/sessionState'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
@@ -145,6 +146,11 @@ const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targe
 export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
+  // Mirrors `state`, for an "Undo" that runs later and must see the themes as they are by then.
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
   // Whether the first getState has answered: until then "no themes" may just mean "not loaded yet".
   const [stateLoaded, setStateLoaded] = useState(false)
   const [status, setStatus] = useState<LiveStatus>({ running: [], missing: [], activity: {} })
@@ -660,10 +666,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       repos ? plural(repos, 'repository', 'repositories') : '',
       folders ? plural(folders, 'folder') : '',
     ].filter(Boolean)
+    // Put back next to its neighbours as they are at undo time (other removals may have been undone meanwhile).
+    const place = placeOf(
+      state.themes.map((t) => t.id),
+      index,
+    )
     confirmRemoval(
       { what: 'theme', name: theme.name, contents: contents.join(' and ') || undefined },
       () => api.removeTheme(themeId),
-      () => api.restoreTheme(theme, index),
+      () =>
+        api.restoreTheme(
+          theme,
+          placeBack(
+            stateRef.current.themes.map((t) => t.id),
+            place,
+          ),
+        ),
       (t) => t.themeId === themeId,
     )
   }
@@ -674,10 +692,26 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const item = theme?.items[index]
     if (!theme || !item) return
     if (item.kind === 'repo' && item.tasks.length > 0) return showError(`Remove the tasks in "${item.name}" first`)
+    const place = placeOf(
+      theme.items.map((i) => i.id),
+      index,
+    )
     confirmRemoval(
       { what: item.kind, name: item.name, themeName: theme.name, path: item.path },
       () => api.removeItem(themeId, itemId),
-      () => api.restoreItem(themeId, item, index),
+      () => {
+        const now = stateRef.current.themes.find((t) => t.id === themeId)
+        return api.restoreItem(
+          themeId,
+          item,
+          now
+            ? placeBack(
+                now.items.map((i) => i.id),
+                place,
+              )
+            : index,
+        )
+      },
       (t) => t.itemId === itemId,
     )
   }
