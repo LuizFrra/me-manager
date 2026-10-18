@@ -163,4 +163,11 @@ export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
   }))
 }
 
+/** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */
+export function isModEnter(e: KeyLike, mac = isMac): boolean {
+  return e.key === 'Enter' && hasMod(e, mac) && !e.altKey && !e.shiftKey
+}
+
+export const MOD_ENTER_LABEL = formatKeys('Enter', false)
+
 export const PANEL_SHORTCUT_LABEL = shortcutLabel('panel')

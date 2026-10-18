@@ -160,3 +160,49 @@ describe('renaming', () => {
     expect(() => m.addTheme(theme, 'ACME')).toThrow(/already exists/)
   })
 })
+
+describe('task notes', () => {
+  function withTask(): { s: AppState; themeId: string; repoId: string } {
+    const { s, themeId, repoId } = setup()
+    return { s: m.addTask(s, themeId, repoId, task('fix')), themeId, repoId }
+  }
+  const notesOf = (s: AppState, themeId: string, repoId: string): string | undefined =>
+    m.getTask(s, themeId, repoId, 'task-fix').notes
+
+  it('sets notes, trimmed, without touching the input state', () => {
+    const { s, themeId, repoId } = withTask()
+    const next = m.setTaskNotes(s, themeId, repoId, 'task-fix', '  Waiting on the API team.\nThen ship.  ')
+    expect(notesOf(next, themeId, repoId)).toBe('Waiting on the API team.\nThen ship.')
+    expect(notesOf(s, themeId, repoId)).toBeUndefined()
+  })
+
+  it('removes the field for an empty or blank string', () => {
+    const { s, themeId, repoId } = withTask()
+    const withNotes = m.setTaskNotes(s, themeId, repoId, 'task-fix', 'x')
+    for (const empty of ['', '  \n ']) {
+      const cleared = m.getTask(
+        m.setTaskNotes(withNotes, themeId, repoId, 'task-fix', empty),
+        themeId,
+        repoId,
+        'task-fix',
+      )
+      expect('notes' in cleared).toBe(false)
+    }
+  })
+
+  it('allows 2,000 characters and rejects more', () => {
+    const { s, themeId, repoId } = withTask()
+    expect(notesOf(m.setTaskNotes(s, themeId, repoId, 'task-fix', 'a'.repeat(2000)), themeId, repoId)).toHaveLength(
+      2000,
+    )
+    expect(() => m.setTaskNotes(s, themeId, repoId, 'task-fix', 'a'.repeat(2001))).toThrow(
+      'Notes are limited to 2000 characters (got 2001)',
+    )
+  })
+
+  it('rejects non-text notes and unknown tasks', () => {
+    const { s, themeId, repoId } = withTask()
+    expect(() => m.setTaskNotes(s, themeId, repoId, 'task-fix', 42 as unknown as string)).toThrow('Notes must be text')
+    expect(() => m.setTaskNotes(s, themeId, repoId, 'nope', 'x')).toThrow(/Task not found/)
+  })
+})

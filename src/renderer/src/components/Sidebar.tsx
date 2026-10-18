@@ -170,6 +170,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             >
                               <button
                                 className="row-label"
+                                title={task.notes}
                                 onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id, taskId: task.id })}
                               >
                                 {dot(task.id)} {task.name}

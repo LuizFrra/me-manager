@@ -142,6 +142,36 @@ describe('Orchestrator: rename', () => {
   })
 })
 
+describe('Orchestrator: task notes', () => {
+  it('saves notes and clears them with an empty string', async () => {
+    const { orch, store, git, tmux, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    git.calls = []
+    tmux.calls = []
+    let s = await orch.setTaskNotes(themeId, repoId, task.id, 'Blocked on review')
+    expect(taskOf(s).notes).toBe('Blocked on review')
+    expect(store.saved.at(-1)).toEqual(s)
+    s = await orch.setTaskNotes(themeId, repoId, task.id, '')
+    expect(taskOf(s)).toEqual(task)
+    expect(git.calls).toEqual([])
+    expect(tmux.calls).toEqual([])
+  })
+
+  it('rejects notes over the limit without saving, and keeps the queue going', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const saves = store.saved.length
+    const [tooLong, ok] = await Promise.allSettled([
+      orch.setTaskNotes(themeId, repoId, task.id, 'x'.repeat(2001)),
+      orch.setTaskNotes(themeId, repoId, task.id, 'fine'),
+    ])
+    expect(tooLong.status).toBe('rejected')
+    expect(ok.status).toBe('fulfilled')
+    expect(store.saved.length).toBe(saves + 1)
+    expect(taskOf(await orch.getState()).notes).toBe('fine')
+  })
+})
+
 describe('Orchestrator: removeTask', () => {
   it('detaches, kills the session, removes the worktree and optionally the branch', async () => {
     const { orch, git, tmux, pty, themeId, repoId } = await setup()

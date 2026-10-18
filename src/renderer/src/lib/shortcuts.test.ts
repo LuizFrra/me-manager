@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isEditableTarget,
+  isModEnter,
   isPanelShortcut,
   matchShortcut,
   shortcutHelp,
@@ -213,5 +214,19 @@ describe('isEditableTarget', () => {
     expect(isEditableTarget(make('<div contenteditable="false"><span data-t>x</span></div>'))).toBe(false)
     expect(isEditableTarget(window)).toBe(false)
     expect(isEditableTarget(null)).toBe(false)
+  })
+})
+
+describe('isModEnter', () => {
+  it('is Ctrl+Enter on Linux and Cmd+Enter on macOS, without Shift or Alt', () => {
+    const enter = (over: Partial<Parameters<typeof isModEnter>[0]>): Parameters<typeof isModEnter>[0] =>
+      key({ key: 'Enter', shiftKey: false, ...over })
+    expect(isModEnter(enter({ ctrlKey: true }), false)).toBe(true)
+    expect(isModEnter(enter({ metaKey: true }), true)).toBe(true)
+    expect(isModEnter(enter({ metaKey: true }), false)).toBe(false)
+    expect(isModEnter(enter({ ctrlKey: true }), true)).toBe(false)
+    expect(isModEnter(enter({}), false)).toBe(false)
+    expect(isModEnter(enter({ ctrlKey: true, shiftKey: true }), false)).toBe(false)
+    expect(isModEnter(enter({ ctrlKey: true, altKey: true }), false)).toBe(false)
   })
 })

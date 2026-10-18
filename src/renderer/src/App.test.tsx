@@ -766,3 +766,81 @@ describe('App rename', () => {
     expect(await screen.findByText('my-api › login')).toBeInTheDocument()
   })
 })
+
+describe('App task notes', () => {
+  const notesBox = (): HTMLElement => screen.getByRole('textbox', { name: 'Notes' })
+  const header = (): HTMLElement => screen.getByRole('banner')
+
+  it('adds notes with Ctrl+Enter; the header shows them collapsed, a click expands them', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const setTaskNotes = vi.spyOn(api, 'setTaskNotes')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    expect(screen.getByRole('dialog', { name: 'Notes for fix login bug' })).toBeInTheDocument()
+    expect(notesBox()).toHaveValue('')
+    expect(notesBox()).toHaveAttribute('maxlength', '2000')
+    await user.type(notesBox(), 'Waiting on the API team{Shift>}{Enter}{/Shift}then ship')
+    expect(screen.getByText('33 / 2000')).toBeInTheDocument()
+    await user.keyboard('{Control>}{Enter}{/Control}')
+
+    expect(setTaskNotes).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      'Waiting on the API team\nthen ship',
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const notes = within(header()).getByRole('button', { name: /Waiting on the API team/ })
+    expect(notes).toHaveAttribute('aria-expanded', 'false')
+    await user.click(notes)
+    expect(notes).toHaveAttribute('aria-expanded', 'true')
+    expect(taskButton('fix login bug')).toHaveAttribute('title', 'Waiting on the API team\nthen ship')
+  })
+
+  it('edits and clears existing notes, and Cancel keeps them', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await user.type(notesBox(), 'first')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await within(header()).findByRole('button', { name: 'first' })).toBeInTheDocument()
+
+    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    expect(notesBox()).toHaveValue('first')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled() // unchanged
+    await user.type(notesBox(), ' draft')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(within(header()).getByRole('button', { name: 'first' })).toBeInTheDocument()
+
+    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await user.clear(notesBox())
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(within(header()).queryByRole('button', { name: 'first' })).not.toBeInTheDocument())
+    expect(taskButton('fix login bug')).not.toHaveAttribute('title')
+  })
+
+  it('renders notes as plain text, never HTML', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    const html = '<img src=x onerror="alert(1)"><b>bold</b>'
+    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    fireEvent.change(notesBox(), { target: { value: html } })
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    const notes = await within(header()).findByRole('button', { name: html })
+    expect(notes.textContent).toBe(html)
+    expect(header().querySelector('img, b')).toBeNull()
+  })
+
+  it('has no notes for folders', async () => {
+    const user = userEvent.setup()
+    render(<App api={createMockApi({ pickDirectory: async () => '/home/me/notes' })} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
+    expect(within(header()).queryByRole('button', { name: 'Edit notes' })).not.toBeInTheDocument()
+  })
+})
