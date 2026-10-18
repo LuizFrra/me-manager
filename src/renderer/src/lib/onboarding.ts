@@ -21,7 +21,7 @@ export function recentTasks(state: AppState, limit = 5): RecentTask[] {
   return all.sort((a, b) => time(b.task) - time(a.task)).slice(0, limit)
 }
 
-/** One-line tips for the home screen, with this platform's key labels (Ctrl+Shift+… or ⌘⇧…). */
+/** One-line tips for the home screen, with this platform's key labels (Ctrl+Shift+…, Alt+… or ⌘⇧…). */
 export function homeTips(mac?: boolean): string[] {
   const key = (id: Parameters<typeof shortcutLabel>[0]): string => shortcutLabel(id, mac)
   return [
