@@ -1058,3 +1058,80 @@ describe('App settings', () => {
     expect(within(help).getByText('Settings')).toBeInTheDocument()
   })
 })
+
+describe('App open in editor / file manager', () => {
+  it('opens the selected task from the header buttons and confirms', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const openInEditor = vi.spyOn(api, 'openInEditor')
+    const openInFileManager = vi.spyOn(api, 'openInFileManager')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const target = expect.objectContaining({ taskId: expect.any(String) })
+    await user.click(screen.getByRole('button', { name: 'Open in editor' }))
+    expect(openInEditor).toHaveBeenCalledWith(target)
+    expect(await screen.findByText('Opening in the editor…')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Reveal in file manager' }))
+    expect(openInFileManager).toHaveBeenCalledWith(target)
+    expect(await screen.findByText('Opening the file manager…')).toBeInTheDocument()
+  })
+
+  it('opens a folder too, with Ctrl+Shift+O and from the palette', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const openInEditor = vi.spyOn(api, 'openInEditor')
+    const openInFileManager = vi.spyOn(api, 'openInFileManager')
+    render(<App api={api} />)
+    await createTheme(user, 'Notes')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Notes' }))
+    await user.click(await screen.findByRole('button', { name: /📁 my-api$/ }))
+    const state = await api.getState()
+    const folder = { themeId: state.themes[0].id, itemId: state.themes[0].items[0].id }
+
+    expect(fireEvent.keyDown(window, { key: 'O', ctrlKey: true, shiftKey: true })).toBe(false)
+    expect(openInEditor).toHaveBeenCalledWith(folder)
+    fireEvent.keyDown(window, { key: 'o', ctrlKey: true }) // plain Ctrl+O stays with the terminal
+    expect(openInEditor).toHaveBeenCalledTimes(1)
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = screen.getByRole('dialog', { name: 'Command palette' })
+    expect(within(palette).getByRole('option', { name: 'Open in editor' })).toHaveTextContent('Ctrl+Shift+O')
+    await user.type(screen.getByRole('combobox', { name: 'Search tasks, files and actions' }), 'reveal')
+    await user.keyboard('{Enter}')
+    expect(openInFileManager).toHaveBeenCalledWith(folder)
+  })
+
+  it('shows why the editor could not open', async () => {
+    const user = userEvent.setup()
+    render(
+      <App
+        api={repoApi({ openInEditor: async () => Promise.reject(new Error('No editor found — set one in Settings')) })}
+      />,
+    )
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Open in editor' }))
+    expect(await screen.findByText('No editor found — set one in Settings')).toBeInTheDocument()
+    expect(screen.queryByText('Opening in the editor…')).not.toBeInTheDocument()
+  })
+
+  it('does nothing with nothing selected, and lists Ctrl+Shift+O in the help', async () => {
+    const api = repoApi()
+    const openInEditor = vi.spyOn(api, 'openInEditor')
+    render(<App api={api} />)
+    fireEvent.keyDown(window, { key: 'O', ctrlKey: true, shiftKey: true })
+    expect(openInEditor).not.toHaveBeenCalled()
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true })
+    const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(help).getByText('Ctrl+Shift+O')).toBeInTheDocument()
+  })
+
+  it('flags a terminal editor in Settings', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    const dialog = screen.getByRole('dialog', { name: 'Settings' })
+    await user.type(within(dialog).getByLabelText('Editor command'), 'vim')
+    expect(within(dialog).getByText(/vim runs in a terminal/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+})

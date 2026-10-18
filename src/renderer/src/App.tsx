@@ -54,7 +54,18 @@ type Dialog =
 
 type AppAction =
   | { type: 'open'; target: Target }
-  | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'renameTask' | 'settings' | 'help' }
+  | {
+      type:
+        | 'newTheme'
+        | 'togglePanel'
+        | 'newTab'
+        | 'restartClaude'
+        | 'renameTask'
+        | 'openEditor'
+        | 'fileManager'
+        | 'settings'
+        | 'help'
+    }
   | { type: 'copy'; kind: CopyKind }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
@@ -268,6 +279,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const openSettings = (): void => setDialog({ kind: 'settings' })
 
+  /** Opens the selected task's worktree or folder in an editor, or in the file manager. */
+  const openExternally = (where: 'editor' | 'fileManager'): void => {
+    const target = selectedRef.current
+    if (!target) return
+    void attempt(async () => {
+      if (where === 'editor') await api.openInEditor(target)
+      else await api.openInFileManager(target)
+      showInfo(where === 'editor' ? 'Opening in the editor…' : 'Opening the file manager…')
+    })
+  }
+
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
@@ -289,6 +311,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     switch (shortcut.id) {
       case 'settings':
         return openSettings()
+      case 'openEditor':
+        return openExternally('editor')
       case 'panel':
         return togglePanel()
       case 'filterSidebar':
@@ -343,6 +367,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
       action('New shell tab', 'newTab', shortcutLabel('newTab'))
       action('Restart Claude', 'restartClaude')
+      action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
+      action('Reveal in file manager', 'fileManager')
     }
     if (selected?.taskId) action('Rename current task', 'renameTask')
     for (const { kind, label } of copiesFor(selected))
@@ -402,6 +428,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
     else if (action.type === 'renameTask') renameSelectedTask()
     else if (action.type === 'settings') openSettings()
+    else if (action.type === 'openEditor') openExternally('editor')
+    else if (action.type === 'fileManager') openExternally('fileManager')
     else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
       if (entry) void copy(entry)
@@ -465,6 +493,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}
+              onOpenInEditor={() => openExternally('editor')}
+              onRevealInFileManager={() => openExternally('fileManager')}
             />
             <TabBar
               tabs={tabs}

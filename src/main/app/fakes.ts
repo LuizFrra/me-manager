@@ -1,5 +1,5 @@
 import type { AppState, ChangeList, FileContent, FileList, TabInfo, UnsavedWork } from '../../shared/types'
-import type { FilesApi, GitApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
+import type { FilesApi, GitApi, LauncherApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
 import type { Settings } from '../../shared/types'
@@ -149,6 +149,19 @@ export class FakeFiles implements FilesApi {
   }
 }
 
+export class FakeLauncher implements LauncherApi {
+  calls: string[] = []
+  fail: string | null = null
+  async openInEditor(path: string, editorCommand: string): Promise<void> {
+    this.calls.push(`editor ${path} [${editorCommand}]`)
+    if (this.fail) throw new Error(this.fail)
+  }
+  async openInFileManager(path: string): Promise<void> {
+    this.calls.push(`fileManager ${path}`)
+    if (this.fail) throw new Error(this.fail)
+  }
+}
+
 export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   deps: OrchestratorDeps
   store: MemoryStore
@@ -157,6 +170,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   pty: FakePty
   files: FakeFiles
   settings: SettingsService
+  launcher: FakeLauncher
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
@@ -164,6 +178,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const pty = new FakePty()
   const files = new FakeFiles()
   const settings = new SettingsService(new MemorySettingsStore())
+  const launcher = new FakeLauncher()
   const deps: OrchestratorDeps = {
     store,
     git,
@@ -171,9 +186,10 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     pty,
     files,
     settings,
+    launcher,
     worktreesRoot: '/wt',
     pathExists: () => true,
     ...overrides,
   }
-  return { deps, store, git, tmux, pty, files, settings }
+  return { deps, store, git, tmux, pty, files, settings, launcher }
 }

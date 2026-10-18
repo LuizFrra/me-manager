@@ -20,7 +20,17 @@ export interface KeyLike {
  * extra, familiar chords for the palette and the help overlay.
  */
 export type ShortcutId =
-  'palette' | 'help' | 'settings' | 'panel' | 'filterSidebar' | 'target' | 'newTab' | 'closeTab' | 'prevTab' | 'nextTab'
+  | 'palette'
+  | 'help'
+  | 'settings'
+  | 'panel'
+  | 'filterSidebar'
+  | 'openEditor'
+  | 'target'
+  | 'newTab'
+  | 'closeTab'
+  | 'prevTab'
+  | 'nextTab'
 
 /** `target` carries the 0-based position of the task or folder to select (Mod+1 is index 0). */
 export type Shortcut = { id: Exclude<ShortcutId, 'target'> } | { id: 'target'; index: number }
@@ -72,6 +82,7 @@ const SHORTCUTS: ShortcutDef[] = [
   { id: 'settings', description: 'Settings', chords: [{ shift: false, keys: [','], codes: ['Comma'], display: ',' }] },
   { id: 'panel', description: 'Toggle files panel', chords: [letter(true, 'E')] },
   { id: 'filterSidebar', description: 'Filter the sidebar', chords: [letter(true, 'F')] },
+  { id: 'openEditor', description: 'Open in editor', chords: [letter(true, 'O')] },
   {
     id: 'target',
     description: 'Go to the 1st…9th task or folder in the sidebar',

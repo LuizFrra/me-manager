@@ -137,6 +137,8 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       if (!target.taskId) throw new Error('Changes are only available for repository tasks')
       return DEMO_DIFFS[path] ?? ''
     },
+    openInEditor: async () => {},
+    openInFileManager: async () => {},
     openExternal: async () => {},
     ptyWrite: () => {},
     ptyResize: () => {},

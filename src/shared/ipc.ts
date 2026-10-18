@@ -31,6 +31,8 @@ export const INVOKE_METHODS = [
   'readImage',
   'listChanges',
   'fileDiff',
+  'openInEditor',
+  'openInFileManager',
   'openExternal',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 

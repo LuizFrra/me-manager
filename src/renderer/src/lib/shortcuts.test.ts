@@ -87,6 +87,7 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+,'], description: 'Settings' },
       { keys: ['Ctrl+Shift+E'], description: 'Toggle files panel' },
       { keys: ['Ctrl+Shift+F'], description: 'Filter the sidebar' },
+      { keys: ['Ctrl+Shift+O'], description: 'Open in editor' },
       { keys: ['Ctrl+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
       { keys: ['Ctrl+Shift+T'], description: 'New shell tab' },
       { keys: ['Ctrl+Shift+W'], description: 'Close the active tab' },
@@ -99,6 +100,7 @@ describe('shortcut labels', () => {
       ['⌘,'],
       ['⌘⇧E'],
       ['⌘⇧F'],
+      ['⌘⇧O'],
       ['⌘1…9'],
       ['⌘⇧T'],
       ['⌘⇧W'],
@@ -166,6 +168,11 @@ describe.each([
     expect(press('?', { code: 'Comma' })).toEqual({ id: 'settings' }) // a layout where that key types something else
     expect(shifted(',')).toBeNull()
     expect(shortcutLabel('settings', mac)).toBe(mac ? '⌘,' : 'Ctrl+,')
+  })
+
+  it('opens the editor with Mod+Shift+O, never plain Mod+O', () => {
+    expect(shifted('O')).toEqual({ id: 'openEditor' })
+    expect(press('o')).toBeNull()
   })
 
   it('adds Mod+K and Mod+/ only on macOS', () => {

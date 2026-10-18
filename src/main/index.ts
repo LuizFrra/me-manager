@@ -8,6 +8,7 @@ import { Orchestrator } from './app/orchestrator'
 import { FilesService } from './files/filesService'
 import { GitService } from './git/gitService'
 import { registerIpc } from './ipc'
+import { createLauncher, systemLaunchDeps } from './launch'
 import { settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
@@ -92,6 +93,7 @@ async function bootstrap(): Promise<void> {
     pty: ptyService,
     files: new FilesService(),
     settings,
+    launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
   })

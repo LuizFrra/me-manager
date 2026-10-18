@@ -1,4 +1,5 @@
 import { FONT_SIZE_LIMITS, POLL_INTERVAL_LIMITS } from '../../../shared/settings'
+import { commandBasename, isTerminalEditor } from '../../../shared/editor'
 import { joinShellWords, splitShellWords } from '../../../shared/shell'
 import type { Settings } from '../../../shared/types'
 
@@ -44,7 +45,9 @@ export function parseForm(
     }
   }
   const claudeArgs = words('claudeArgs')
-  words('editorCommand')
+  const editor = words('editorCommand')
+  if (isTerminalEditor(editor))
+    errors.editorCommand = `${commandBasename(editor[0])} runs in a terminal; choose a GUI editor (e.g. code, subl, gvim).`
   const poll = numberIn(form.pollSeconds, POLL_SECONDS)
   if (poll === null) errors.pollSeconds = `Enter a number of seconds from ${POLL_SECONDS.min} to ${POLL_SECONDS.max}.`
   const fontSize = numberIn(form.terminalFontSize, FONT_SIZE_LIMITS)

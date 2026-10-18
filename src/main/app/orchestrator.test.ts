@@ -542,3 +542,46 @@ describe('Orchestrator: file viewer', () => {
     await pending
   })
 })
+
+describe('Orchestrator: open in editor / file manager', () => {
+  async function withTargets(): Promise<Ctx & { taskTarget: Target; folderTarget: Target }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    const s = await ctx.orch.addFolder(ctx.themeId, '/docs/notes')
+    return {
+      ...ctx,
+      taskTarget: { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id },
+      folderTarget: { themeId: ctx.themeId, itemId: s.themes[0].items[1].id },
+    }
+  }
+
+  it("opens a task's worktree and a folder's path, with the editor command from Settings", async () => {
+    const { orch, launcher, taskTarget, folderTarget } = await withTargets()
+    await orch.openInEditor(taskTarget)
+    await orch.updateSettings({ editorCommand: 'subl -n' })
+    await orch.openInEditor(folderTarget)
+    await orch.openInFileManager(taskTarget)
+    await orch.openInFileManager(folderTarget)
+    expect(launcher.calls).toEqual([
+      'editor /wt/client-x/my-api/fix []',
+      'editor /docs/notes [subl -n]',
+      'fileManager /wt/client-x/my-api/fix',
+      'fileManager /docs/notes',
+    ])
+  })
+
+  it('refuses a missing folder or a repo without a task, before launching anything', async () => {
+    const ctx = await withTargets()
+    ctx.deps.pathExists = (p) => p !== '/docs/notes'
+    await expect(ctx.orch.openInEditor(ctx.folderTarget)).rejects.toThrow('Folder not found: /docs/notes')
+    await expect(ctx.orch.openInFileManager(ctx.folderTarget)).rejects.toThrow(/Folder not found/)
+    await expect(ctx.orch.openInEditor({ themeId: ctx.themeId, itemId: ctx.repoId })).rejects.toThrow(/Choose a task/)
+    expect(ctx.launcher.calls).toEqual([])
+  })
+
+  it("passes on the launcher's error", async () => {
+    const { orch, launcher, taskTarget } = await withTargets()
+    launcher.fail = 'No editor found — set one in Settings'
+    await expect(orch.openInEditor(taskTarget)).rejects.toThrow('No editor found — set one in Settings')
+  })
+})
