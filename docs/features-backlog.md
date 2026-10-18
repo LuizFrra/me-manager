@@ -27,9 +27,9 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 0 | Fix findings from the file-viewer code review | quality | done (9d73c69..97b9447) |
 | 1 | Lazy-load the Markdown viewer and highlight.js, shrinking the 2.2 MB startup bundle | perf | done (139b497) |
 | 2 | Pause polling while the window is hidden or minimized, using `visibilitychange` | perf | done (32c97b7) |
-| 3 | Command palette (Ctrl/Cmd+K): fuzzy jump to any task, folder, or file of the current task, and run app actions | ux | todo |
-| 4 | Keyboard shortcuts: Ctrl/Cmd+1..9 to switch tasks, Ctrl/Cmd+T for a new shell tab, Ctrl/Cmd+W to close a tab, `?` to show a shortcut help overlay | ux | todo |
-| 5 | Sidebar filter box: filter themes, repos and tasks by name | ux | todo |
+| 3 | Command palette (Ctrl/Cmd+K): fuzzy jump to any task, folder, or file of the current task, and run app actions | ux | done (8561443) |
+| 4 | Keyboard shortcuts: Ctrl/Cmd+1..9 to switch tasks, Ctrl/Cmd+Shift+T for a new shell tab, Ctrl/Cmd+Shift+W to close a tab, Ctrl/Cmd+Shift+[ / ] to switch tabs, Ctrl/Cmd+/ to show a shortcut help overlay | ux | done (b082539) |
+| 5 | Sidebar filter box: filter themes, repos and tasks by name | ux | done (d5dc635) |
 | 6 | Rename a theme or task (display name only; slug, branch and path stay unchanged) | feature | todo |
 | 7 | Task notes: a free-text description per task, shown in the header and editable | feature | todo |
 | 8 | Copy actions: copy the branch name, worktree path, or `tmux attach` command | ux | todo |
