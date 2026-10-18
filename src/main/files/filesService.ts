@@ -414,6 +414,8 @@ export class FilesService implements FilesApi {
       ...(opts.caseSensitive ? [] : ['-i']),
       '--untracked',
       '--exclude-standard',
+      // submodule.recurse=true in the user's config turns on --recurse-submodules, which git refuses with --untracked.
+      '--no-recurse-submodules',
       '-e',
       query,
       '--',

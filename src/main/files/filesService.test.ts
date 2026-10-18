@@ -644,7 +644,7 @@ describe('searchFiles (repo)', () => {
     // The preview drops the indentation; the match is located in it for highlighting.
     expect(r.matches[2]).toMatchObject({ preview: 'const greeting = "HELLO"', matchStart: 18, matchLength: 5 })
     expect(grepCalls().at(-1)).toBe(
-      'grep -n --column -I --no-color -z -F -i --untracked --exclude-standard -e hello --',
+      'grep -n --column -I --no-color -z -F -i --untracked --exclude-standard --no-recurse-submodules -e hello --',
     )
   })
 
@@ -673,6 +673,14 @@ describe('searchFiles (repo)', () => {
     expect(r.matches[0].column).toBe(10)
     await expect(svc.searchFiles(root, true, '-v')).resolves.toEqual({ matches: [], truncated: false })
     await expect(lstat(join(root, 'x'))).rejects.toThrow()
+  })
+
+  it('searches with submodule.recurse set in the git config', async () => {
+    // git refuses --untracked together with --recurse-submodules, which this setting turns on for grep.
+    const root = await repo()
+    await git(root, 'config', 'submodule.recurse', 'true')
+    const r = await svc.searchFiles(root, true, 'hello')
+    expect(paths(r)).toEqual(['a.txt', 'a.txt', 'src/b.ts', 'untracked.txt'])
   })
 
   it('reports no matches (git exits with 1) as an empty result', async () => {
