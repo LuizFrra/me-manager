@@ -644,8 +644,22 @@ describe('Orchestrator: settings and claude arguments', () => {
     expect(await orch.getSettings()).toMatchObject({ claudeArgs: [], pollIntervalMs: 3000 })
     const next = await orch.updateSettings({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 99 })
     expect(next).toMatchObject({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 1000 })
-    expect(settings.get()).toEqual(next)
+    const { effective, ...saved } = next
+    expect(settings.get()).toEqual(saved)
+    expect(effective).toEqual({ remoteControl: false, skipPermissions: false })
     expect(await orch.getSettings()).toEqual(next)
+  })
+
+  it('says which built-in Claude flags apply, after the user arguments', async () => {
+    const { orch, settings } = await setup()
+    await orch.updateSettings({ remoteControl: true, skipPermissions: true })
+    expect((await orch.getSettings()).effective).toEqual({ remoteControl: true, skipPermissions: true })
+    const next = await orch.updateSettings({ claudeArgs: ['--permission-mode', 'acceptEdits'] })
+    expect(next.effective).toEqual({ remoteControl: true, skipPermissions: false })
+    // Never saved: it is worked out from the settings each time.
+    expect(settings.get()).not.toHaveProperty('effective')
+    await orch.updateSettings({ ...next, pollIntervalMs: 2000 })
+    expect(settings.get()).not.toHaveProperty('effective')
   })
 
   it('passes the arguments to new tasks, recreated sessions and restarted Claude windows', async () => {
