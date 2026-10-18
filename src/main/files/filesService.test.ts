@@ -499,6 +499,15 @@ describe('fileDiff', () => {
     )
   })
 
+  it('emits blank context lines with their space even when the repo sets diff.suppressBlankEmpty', async () => {
+    const { clone } = await makeTaskClone({ ...SEED, 'blank.txt': 'one\n\ntwo\n' })
+    await git(clone, 'config', 'diff.suppressBlankEmpty', 'true')
+    await put(clone, 'blank.txt', 'one\n\nTWO\n')
+    const diff = await svc.fileDiff(clone, 'origin/main', 'blank.txt')
+    expect(diff.split('\n')).toContain(' ')
+    expect(diff.split('\n').slice(0, -1)).not.toContain('')
+  })
+
   it('returns an empty string for an unchanged file', async () => {
     const { clone } = await makeTaskClone(SEED)
     await expect(svc.fileDiff(clone, 'origin/main', 'README.md')).resolves.toBe('')

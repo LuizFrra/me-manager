@@ -92,7 +92,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
 
     if (hunk && (oldLeft > 0 || newLeft > 0)) {
       const body = line.slice(1)
-      if (line.startsWith(' ')) {
+      // git with diff.suppressBlankEmpty writes an empty context line as '' instead of ' '.
+      if (line.startsWith(' ') || (line === '' && oldLeft > 0 && newLeft > 0)) {
         hunk.lines.push({ kind: 'context', text: body, oldNo: oldNo++, newNo: newNo++ })
         oldLeft--
         newLeft--
