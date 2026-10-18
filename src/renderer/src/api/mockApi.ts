@@ -73,7 +73,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     selectTab: async () => tabs,
     closeTab: async () => tabs,
     restartClaude: async () => tabs,
-    listFiles: async () => [...DEMO_PATHS],
+    listFiles: async () => ({ paths: [...DEMO_PATHS], truncated: false }),
     readFile: async (_target, path) => {
       const text = DEMO_FILES[path]
       if (text !== undefined) return { kind: 'text', content: text, size: new Blob([text]).size, truncated: false }

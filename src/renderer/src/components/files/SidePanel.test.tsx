@@ -107,10 +107,29 @@ describe('SidePanel', () => {
     expect(document.querySelector('.code-gutter')?.textContent).toBe('1\n2\n3\n4\n5')
   })
 
+  it('says when the file list was cut off at its cap', async () => {
+    const { unmount } = render(
+      <Harness api={createMockApi({ listFiles: async () => ({ paths: ['a.ts'], truncated: false }) })} />,
+    )
+    await screen.findByRole('button', { name: 'a.ts' })
+    expect(screen.queryByText(/Showing the first/)).not.toBeInTheDocument()
+    unmount()
+    const paths = ['a.ts', 'b.ts', 'c.ts']
+    const api = createMockApi({ listFiles: async () => ({ paths, truncated: true }) })
+    render(<Harness api={api} />)
+    expect(await screen.findByText('Showing the first 3 files.')).toBeInTheDocument()
+  })
+
+  it('formats the truncation count with thousands separators', async () => {
+    const paths = Array.from({ length: 1234 }, (_, i) => `f${i}.txt`)
+    render(<Harness api={createMockApi({ listFiles: async () => ({ paths, truncated: true }) })} />)
+    expect(await screen.findByText('Showing the first 1,234 files.')).toBeInTheDocument()
+  })
+
   it('shows binary, missing and truncated files', async () => {
     const user = userEvent.setup()
     const api = createMockApi({
-      listFiles: async () => ['big.log', 'gone.ts', 'icon.png'],
+      listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'icon.png'], truncated: false }),
       readFile: async (_t, path) =>
         path === 'icon.png'
           ? { kind: 'binary', size: 2048 }

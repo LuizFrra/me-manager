@@ -99,7 +99,7 @@ export interface MeManagerApi {
   closeTab(target: Target, index: number): Promise<TabInfo[]>
   restartClaude(target: Target): Promise<TabInfo[]>
 
-  listFiles(target: Target): Promise<string[]>
+  listFiles(target: Target): Promise<FileList>
   readFile(target: Target, path: string): Promise<FileContent>
   /** data: URL for an image inside the target's folder, or null if too large / not an image / outside. */
   readImage(target: Target, path: string): Promise<string | null>
@@ -117,6 +117,13 @@ export interface MeManagerApi {
   ptyResize(cols: number, rows: number): void
   onPtyData(cb: (data: string) => void): () => void
   onPtyExit(cb: (code: number) => void): () => void
+}
+
+/** The files of a target, as relative POSIX paths, sorted. */
+export interface FileList {
+  paths: string[]
+  /** Set when the listing stopped at its cap (a very large repo or folder); `paths` is then incomplete. */
+  truncated: boolean
 }
 
 export type FileContent =

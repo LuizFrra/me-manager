@@ -337,8 +337,8 @@ describe('Orchestrator: file viewer', () => {
 
   it('returns what the files service returns', async () => {
     const { orch, files, taskTarget } = await withTaskAndFolder()
-    files.listFiles = async () => ['a.ts', 'b/c.md']
-    await expect(orch.listFiles(taskTarget)).resolves.toEqual(['a.ts', 'b/c.md'])
+    files.listFiles = async () => ({ paths: ['a.ts', 'b/c.md'], truncated: true })
+    await expect(orch.listFiles(taskTarget)).resolves.toEqual({ paths: ['a.ts', 'b/c.md'], truncated: true })
   })
 
   it('reads files and images relative to the root', async () => {

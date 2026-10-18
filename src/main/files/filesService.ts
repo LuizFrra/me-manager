@@ -1,14 +1,16 @@
 import type { Stats } from 'node:fs'
 import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { ChangedFile, ChangeList, ChangeStatus, FileContent } from '../../shared/types'
+import type { ChangedFile, ChangeList, ChangeStatus, FileContent, FileList } from '../../shared/types'
 import type { FilesApi } from '../contracts'
-import { run } from '../exec'
+import { run, streamNul } from '../exec'
 
 export const MAX_TEXT_BYTES = 1_000_000
 export const BINARY_SNIFF_BYTES = 8_192
 export const MAX_IMAGE_BYTES = 5_000_000
 export const MAX_WALK_ENTRIES = 20_000
+/** Repos list at most this many files; ls-files is stopped there. */
+export const MAX_REPO_ENTRIES = 50_000
 /** Untracked files up to this size get a line count in the change list; larger ones report `added: 0`. */
 export const MAX_COUNT_BYTES = 256 * 1024
 /** Untracked-file stats remembered between polls. */
@@ -55,13 +57,29 @@ const DIFF_FLAGS = [
   '--dst-prefix=b/',
 ]
 
+const gitArgs = (cwd: string, args: string[]): string[] => [
+  '-C',
+  cwd,
+  '-c',
+  'core.quotepath=false',
+  '--literal-pathspecs',
+  ...args,
+]
+
 function git(cwd: string, args: string[], okExitCodes?: number[]): Promise<string> {
-  return run('git', ['-C', cwd, '-c', 'core.quotepath=false', '--literal-pathspecs', ...args], {
-    env: GIT_ENV,
-    timeoutMs: GIT_TIMEOUT_MS,
-    okExitCodes,
-  })
+  return run('git', gitArgs(cwd, args), { env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS, okExitCodes })
 }
+
+/** Streams the NUL-separated items git prints; `onItem` returns false to stop git early. */
+function gitStream(
+  cwd: string,
+  args: string[],
+  onItem: (item: string) => boolean | void,
+): Promise<{ stopped: boolean }> {
+  return streamNul('git', gitArgs(cwd, args), onItem, { env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS })
+}
+
+const GITLINK_MODE = '160000'
 
 function splitZ(out: string): string[] {
   return out.split('\0').filter((s) => s !== '')
@@ -127,23 +145,11 @@ function countLines(buf: Buffer): number {
   return buf[buf.length - 1] === 10 ? n : n + 1
 }
 
-async function keepFilesAndLinks(root: string, paths: string[]): Promise<string[]> {
-  const kept: string[] = []
-  for (let i = 0; i < paths.length; i += LSTAT_BATCH) {
-    const batch = paths.slice(i, i + LSTAT_BATCH)
-    const stats = await Promise.all(batch.map((p) => lstat(join(root, p)).catch(() => null)))
-    batch.forEach((p, j) => {
-      const s = stats[j]
-      if (s && (s.isFile() || s.isSymbolicLink())) kept.push(p)
-    })
-  }
-  return kept
-}
-
-async function walk(root: string): Promise<string[]> {
+async function walk(root: string, max: number): Promise<FileList> {
   const out: string[] = []
   const stack: string[] = ['']
-  while (stack.length > 0 && out.length < MAX_WALK_ENTRIES) {
+  let truncated = false
+  while (stack.length > 0 && !truncated) {
     const dir = stack.pop() as string
     let entries
     try {
@@ -158,12 +164,15 @@ async function walk(root: string): Promise<string[]> {
       } else if (e.name === '.git') {
         continue // a worktree's .git file is git metadata, not content
       } else if (e.isFile() || e.isSymbolicLink()) {
+        if (out.length >= max) {
+          truncated = true
+          break
+        }
         out.push(rel)
-        if (out.length >= MAX_WALK_ENTRIES) break
       }
     }
   }
-  return out.sort()
+  return { paths: out.sort(), truncated }
 }
 
 function mapStatus(token: string): ChangeStatus {
@@ -229,15 +238,57 @@ interface UntrackedStats {
 }
 
 /** Read-only file access for the side panel. Every path is confined to its root. */
+export interface FilesServiceOptions {
+  /** Cap on listed repo files (default MAX_REPO_ENTRIES). */
+  maxRepoEntries?: number
+  /** Cap on listed folder files (default MAX_WALK_ENTRIES). */
+  maxWalkEntries?: number
+}
+
 export class FilesService implements FilesApi {
+  private readonly maxRepoEntries: number
+  private readonly maxWalkEntries: number
+
+  constructor(opts: FilesServiceOptions = {}) {
+    this.maxRepoEntries = opts.maxRepoEntries ?? MAX_REPO_ENTRIES
+    this.maxWalkEntries = opts.maxWalkEntries ?? MAX_WALK_ENTRIES
+  }
+
   /** Untracked-file stats by `worktree\0path`, so polls don't re-read unchanged files. Insertion order = LRU order. */
   private readonly untrackedCache = new Map<string, UntrackedStats>()
 
-  async listFiles(root: string, isRepo: boolean): Promise<string[]> {
-    if (!isRepo) return walk(root)
-    const out = await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
-    const unique = [...new Set(splitZ(out))]
-    return (await keepFilesAndLinks(root, unique)).sort()
+  async listFiles(root: string, isRepo: boolean): Promise<FileList> {
+    if (!isRepo) return walk(root, this.maxWalkEntries)
+    const max = this.maxRepoEntries
+    // Tracked files deleted from the work tree are still in the index; leave them out.
+    const deleted = new Set<string>()
+    await gitStream(root, ['ls-files', '-z', '--deleted'], (path) => void deleted.add(path))
+    const seen = new Set<string>()
+    let truncated = false
+    /** Adds a path; false (stop) once a path beyond the cap shows up. */
+    const add = (path: string): boolean => {
+      if (path === '' || deleted.has(path) || seen.has(path)) return true
+      if (seen.size >= max) {
+        truncated = true
+        return false
+      }
+      seen.add(path)
+      return true
+    }
+    // Tracked: `<mode> <object> <stage>\t<path>`. Gitlinks (submodules) are folders, not files.
+    await gitStream(root, ['ls-files', '-z', '--stage', '--cached'], (entry) => {
+      const tab = entry.indexOf('\t')
+      return tab === -1 || entry.startsWith(GITLINK_MODE + ' ') || add(entry.slice(tab + 1))
+    })
+    if (!truncated) {
+      // Untracked: a nested repository is listed as its folder, with a trailing slash.
+      await gitStream(
+        root,
+        ['ls-files', '-z', '--others', '--exclude-standard'],
+        (path) => path.endsWith('/') || add(path),
+      )
+    }
+    return { paths: [...seen].sort(), truncated }
   }
 
   async readFile(root: string, relPath: string): Promise<FileContent> {
