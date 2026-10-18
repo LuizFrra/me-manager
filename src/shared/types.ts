@@ -393,7 +393,10 @@ export type FileContent =
 /** How searchFiles matches the query. Both are off by default: a case-insensitive search for the literal text. */
 export interface SearchOptions {
   caseSensitive?: boolean
-  /** The query is a regular expression: POSIX extended (`git grep -E`) in repos, JavaScript in folders. */
+  /**
+   * The query is a regular expression, JavaScript syntax: Perl-compatible `git grep -P` in repos (POSIX extended
+   * `-E` when git lacks PCRE, see SearchResult.note), JavaScript in folders. It must compile in JavaScript.
+   */
   regex?: boolean
 }
 
@@ -416,6 +419,8 @@ export interface SearchResult {
   matches: SearchMatch[]
   /** Set when the search stopped at MAX_SEARCH_MATCHES, or didn't reach every file (a huge folder). */
   truncated: boolean
+  /** Something to tell the user about how the search ran (e.g. a repo regex read as POSIX extended); rare. */
+  note?: string
 }
 
 /** A added, M modified, D deleted, R renamed, U untracked. */
