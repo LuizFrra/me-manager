@@ -1047,8 +1047,29 @@ body.resizing .side-panel {
 .panel-list-scroll {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: auto;
-  padding: 2px 0 6px;
+  padding-top: 2px;
+}
+.panel-list-scroll > :not(.row-list) {
+  flex: none;
+}
+/* The tree's and the change list's own scroll container (see VirtualRowList): rows are ROW_HEIGHT px each. */
+.row-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+.virtual-rows {
+  position: relative;
+}
+.virtual-rows > .tree-row,
+.virtual-rows > .change-row {
+  left: 0;
+  right: 0;
 }
 .panel-filter {
   margin: 6px 8px 4px;
@@ -1264,6 +1285,12 @@ body.resizing .side-panel {
   text-align: left;
   white-space: nowrap;
   line-height: 18px;
+  height: 22px;
+}
+.tree-row:focus-visible,
+.change-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .tree-row:hover,
 .change-row:hover {

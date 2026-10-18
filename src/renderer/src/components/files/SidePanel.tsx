@@ -8,7 +8,7 @@ import type {
   SearchMatch,
   Target,
 } from '../../../../shared/types'
-import { ancestorDirs, buildTree, filterPaths } from '../../lib/fileTree'
+import { ancestorDirs, buildTree, filterPaths, memoByIdentity, sameFileList } from '../../lib/fileTree'
 import { isSvgPath } from '../../../../shared/images'
 import { isMarkdown } from '../../lib/files'
 import { autoDiffLayout, loadDiffLayout, saveDiffLayout, type DiffLayout } from '../../lib/diff/layout'
@@ -43,7 +43,6 @@ export interface SidePanelProps {
 export const PANEL_POLL_MS = 3000
 /** The file list is re-read every this many polls (and whenever the change list changes). */
 const FILES_EVERY_N_POLLS = 5
-const MAX_TREE_MATCHES = 2000
 
 type Alive = () => boolean
 interface Loaded {
@@ -103,10 +102,14 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   // For a rename, the diff is taken between the pair, so the backend doesn't have to find the rename again.
   const oldPath = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath)?.oldPath : undefined
 
+  // A poll that lists the same files keeps the old list, so the tree built from it isn't built again.
+  const shownFiles = useRef<FileList | null>(null)
   const fetchFiles = useCallback(
     async (alive: Alive): Promise<void> => {
       const next = await api.listFiles(target)
-      if (alive() && changed(lastJson.current, 'files', next)) setFileList(next)
+      if (!alive() || sameFileList(shownFiles.current, next)) return
+      shownFiles.current = next
+      setFileList(next)
     },
     [api, target],
   )
@@ -198,13 +201,22 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     () => new Map<string, ChangeStatus>((changes?.files ?? []).map((f) => [f.path, f.status])),
     [changes],
   )
+  // Derived data is rebuilt only when its input changes identity: the file list (kept across polls that return the
+  // same files) or the filter. The tree is cached per list, so clearing the filter reuses the full tree.
   const matches = useMemo(() => (files ? filterPaths(files, filter) : []), [files, filter])
-  const tree = useMemo(() => buildTree(matches.slice(0, MAX_TREE_MATCHES)), [matches])
+  const treeOf = useMemo(() => memoByIdentity((paths: readonly string[]) => buildTree(paths)), [])
+  const tree = useMemo(() => treeOf(matches), [treeOf, matches])
   const selectedAncestors = useMemo(() => new Set(ancestorDirs(state.selected)), [state.selected])
   const filtering = filter.trim() !== ''
-  const isOpen = (dir: string): boolean => filtering || (toggled.get(dir) ?? selectedAncestors.has(dir))
-  const toggleDir = (dir: string): void =>
-    setToggled((prev) => new Map(prev).set(dir, !(prev.get(dir) ?? selectedAncestors.has(dir))))
+  // Stable, so the tree's rows are only flattened again when something about them changes.
+  const isOpen = useCallback(
+    (dir: string): boolean => filtering || (toggled.get(dir) ?? selectedAncestors.has(dir)),
+    [filtering, toggled, selectedAncestors],
+  )
+  const toggleDir = useCallback(
+    (dir: string): void => setToggled((prev) => new Map(prev).set(dir, !(prev.get(dir) ?? selectedAncestors.has(dir)))),
+    [selectedAncestors],
+  )
 
   const select = (nextTab: PanelTab, path: string): void =>
     onState({ ...state, tab: nextTab, selected: path, line: undefined, history: [] })
@@ -350,11 +362,6 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
                       onToggle={toggleDir}
                       onSelect={(path) => select('files', path)}
                     />
-                  )}
-                  {matches.length > MAX_TREE_MATCHES && (
-                    <p className="panel-hint">
-                      Showing the first {MAX_TREE_MATCHES} of {matches.length} files. Type to narrow it down.
-                    </p>
                   )}
                 </div>
               </>

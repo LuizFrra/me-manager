@@ -26,6 +26,18 @@ vi.mock('./MarkdownView', () => ({
     )
   },
 }))
+// Counts tree builds, to check that polls returning the same files don't rebuild the tree.
+const treeBuilds = vi.hoisted(() => ({ count: 0 }))
+vi.mock('../../lib/fileTree', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/fileTree')>()
+  return {
+    ...actual,
+    buildTree: (paths: readonly string[]) => {
+      treeBuilds.count++
+      return actual.buildTree(paths)
+    },
+  }
+})
 vi.mock('./DiffView', () => ({
   DiffView: (p: { diff: string; layout?: string }) => (
     <pre data-testid="diff" data-layout={p.layout ?? 'unified'}>
@@ -394,6 +406,45 @@ describe('SidePanel', () => {
     unmount()
     await flush(PANEL_POLL_MS * 3)
     expect(listChanges).toHaveBeenCalledTimes(4)
+  })
+
+  it("doesn't rebuild the tree on polls that list the same files, nor when the filter is cleared", async () => {
+    vi.useFakeTimers()
+    let version = 0
+    let paths = ['README.md', 'src/app.ts', 'src/util/format.ts']
+    const api = createMockApi({
+      // A new change list every poll, so the file list is fetched every time, as a fresh but equal array.
+      listChanges: async () => ({
+        files: [{ path: `x${++version}`, status: 'U', added: 0, removed: 0, binary: false }],
+      }),
+      listFiles: async () => ({ paths: [...paths], truncated: false }),
+    })
+    const listFiles = vi.spyOn(api, 'listFiles')
+    render(<Harness api={api} />)
+    const flush = (ms = 0): Promise<void> =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    await flush()
+    const builds = treeBuilds.count
+    expect(builds).toBeGreaterThan(0)
+    for (let i = 0; i < 4; i++) await flush(PANEL_POLL_MS)
+    expect(listFiles.mock.calls.length).toBeGreaterThanOrEqual(5)
+    expect(treeBuilds.count).toBe(builds)
+
+    paths = [...paths, 'docs/new.md']
+    await flush(PANEL_POLL_MS)
+    expect(treeBuilds.count).toBe(builds + 1)
+    expect(screen.getByRole('button', { name: 'docs' })).toBeInTheDocument()
+
+    vi.useRealTimers()
+    const user = userEvent.setup()
+    const filterBox = screen.getByRole('textbox', { name: 'Filter files' })
+    await user.type(filterBox, 'a')
+    const afterTyping = treeBuilds.count
+    await user.clear(filterBox)
+    expect(treeBuilds.count).toBe(afterTyping) // the full list's tree, from the cache
+    expect(screen.getByRole('button', { name: 'docs' })).toBeInTheDocument()
   })
 
   it('polls at the interval it is given', async () => {
