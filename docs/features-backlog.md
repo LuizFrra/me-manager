@@ -33,13 +33,13 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 6 | Rename a theme or task (display name only; slug, branch and path stay unchanged) | feature | done (68c499f) |
 | 7 | Task notes: a free-text description per task, shown in the header and editable | feature | done (c7dff9e) |
 | 8 | Copy actions: copy the branch name, worktree path, or `tmux attach` command | ux | done (cbf39fc) |
-| 9 | Open the task in an external editor (VS Code, or `$EDITOR`, set in Settings) or the system file manager | feature | todo |
+| 9 | Open the task in an external editor (VS Code, or `$EDITOR`, set in Settings) or the system file manager | feature | done (bd489c1) |
 | 10 | Git status per task: commits ahead of the base, and the uncommitted file count, shown as a sidebar badge and in the header | feature | todo |
 | 11 | Claude activity indicator: busy, waiting or idle per task, based on tmux pane activity, shown in the sidebar | feature | todo |
 | 12 | Desktop notification when a background task's Claude finishes or waits for input | feature | todo |
 | 13 | New task: choose the base branch (dropdown, defaulting to origin's default) and an optional initial prompt passed to `claude` | feature | todo |
-| 14 | Settings screen: extra `claude` args (e.g. `--model`), editor command, poll interval, terminal font size, notifications toggle | feature | todo |
-| 15 | Terminal zoom: Ctrl/Cmd +/−/0 changes the font size, which is remembered | ux | todo |
+| 14 | Settings screen: extra `claude` args (e.g. `--model`), editor command, poll interval, terminal font size, notifications toggle | feature | done (dae9a31) |
+| 15 | Terminal zoom: Ctrl/Cmd +/−/0 changes the font size, which is remembered | ux | done (7b478d9) |
 | 16 | Git actions per task: commit all (with a message), push the branch, and open a PR via `gh` if it's installed | feature | todo |
 | 17 | Update the task from base: fetch, then rebase or merge `origin/<default>` into the task branch, with conflict reporting | feature | todo |
 | 18 | Search file contents in the side panel (`git grep` or a folder walk), with clickable results | feature | todo |
