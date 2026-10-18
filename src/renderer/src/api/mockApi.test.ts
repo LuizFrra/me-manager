@@ -75,4 +75,32 @@ describe('createMockApi', () => {
     expect(next).toMatchObject({ claudeArgs: ['--model', 'opus'], terminalFontSize: 32 })
     expect(await api.getSettings()).toEqual(next)
   })
+
+  it('reports stable demo usage per target, summed per theme and overall', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('Client X')
+    const themeId = s.themes[0].id
+    s = await api.addRepo(themeId, '/code/my-api')
+    const repoId = s.themes[0].items[0].id
+    await api.createTask(themeId, repoId, 'fix')
+    s = await api.addFolder(themeId, '/docs/notes')
+    const repo = s.themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    const target = { themeId, itemId: repoId, taskId }
+    const usage = await api.getUsage(target)
+    expect(usage.all.cost).toBeGreaterThan(0)
+    expect(usage.today.cost).toBeLessThan(usage.week.cost)
+    expect(await api.getUsage(target)).toEqual(usage)
+
+    const report = await api.getUsageReport()
+    const theme = report.themes[0]
+    expect(theme.targets.map((t) => [t.kind, t.label])).toEqual([
+      ['task', 'my-api › fix'],
+      ['folder', 'notes'],
+    ])
+    expect(theme.targets[0].usage).toEqual(usage)
+    const sum = theme.targets.reduce((n, t) => n + t.usage.all.cost, 0)
+    expect(theme.usage.all.cost).toBeCloseTo(sum)
+    expect(report.total.all.cost).toBeCloseTo(sum)
+  })
 })

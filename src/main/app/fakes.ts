@@ -1,5 +1,24 @@
-import type { AppState, ChangeList, FileContent, FileList, TabInfo, UnsavedWork } from '../../shared/types'
-import type { FilesApi, GitApi, LauncherApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
+import type {
+  AppState,
+  ChangeList,
+  FileContent,
+  FileList,
+  TabInfo,
+  UnsavedWork,
+  UsageSummary,
+} from '../../shared/types'
+import type {
+  FilesApi,
+  GitApi,
+  LauncherApi,
+  OrchestratorDeps,
+  PtyApi,
+  StoreApi,
+  TmuxApi,
+  UsageApi,
+  UsageSummaries,
+} from '../contracts'
+import { emptyUsageSummary } from '../../shared/usage'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
 import type { Settings } from '../../shared/types'
@@ -170,6 +189,26 @@ export class FakeLauncher implements LauncherApi {
   }
 }
 
+/** Returns `byRoot[root]` for each root and `byGroup[name]` for each group (empty usage otherwise). */
+export class FakeUsage implements UsageApi {
+  calls: { roots: string[]; groups: Record<string, string[]> }[] = []
+  byRoot: Record<string, UsageSummary> = {}
+  byGroup: Record<string, UsageSummary> = {}
+  async summarize(
+    roots: readonly string[],
+    groups: Readonly<Record<string, readonly string[]>> = {},
+  ): Promise<UsageSummaries> {
+    this.calls.push({
+      roots: [...roots],
+      groups: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, [...v]])),
+    })
+    return {
+      roots: Object.fromEntries(roots.map((r) => [r, this.byRoot[r] ?? emptyUsageSummary()])),
+      groups: Object.fromEntries(Object.keys(groups).map((g) => [g, this.byGroup[g] ?? emptyUsageSummary()])),
+    }
+  }
+}
+
 export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   deps: OrchestratorDeps
   store: MemoryStore
@@ -179,6 +218,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   files: FakeFiles
   settings: SettingsService
   launcher: FakeLauncher
+  usage: FakeUsage
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
@@ -187,6 +227,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const files = new FakeFiles()
   const settings = new SettingsService(new MemorySettingsStore(), TEST_SETTINGS)
   const launcher = new FakeLauncher()
+  const usage = new FakeUsage()
   const deps: OrchestratorDeps = {
     store,
     git,
@@ -195,9 +236,10 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     files,
     settings,
     launcher,
+    usage,
     worktreesRoot: '/wt',
     pathExists: () => true,
     ...overrides,
   }
-  return { deps, store, git, tmux, pty, files, settings, launcher }
+  return { deps, store, git, tmux, pty, files, settings, launcher, usage }
 }

@@ -6,8 +6,9 @@ import {
   type TabInfo,
   type Theme,
 } from '../../../shared/types'
-import { branchName, slugify } from '../../../shared/naming'
+import { branchName, slugify, targetKey } from '../../../shared/naming'
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../../shared/settings'
+import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from './demoFiles'
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
@@ -140,6 +141,8 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     openInEditor: async () => {},
     openInFileManager: async () => {},
     openExternal: async () => {},
+    getUsage: async (target) => demoUsage(targetKey(target)),
+    getUsageReport: async () => demoUsageReport(state),
     ptyWrite: () => {},
     ptyResize: () => {},
     onPtyData: () => () => {},

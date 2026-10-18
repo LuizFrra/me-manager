@@ -122,6 +122,7 @@ export interface OrchestratorDeps {
   files: FilesApi
   settings: SettingsApi
   launcher: LauncherApi
+  usage: UsageApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
 }

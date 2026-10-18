@@ -10,7 +10,11 @@ import type {
   Target,
   Task,
   UnsavedWork,
+  UsageReport,
+  UsageSummary,
+  UsageTargetReport,
 } from '../../shared/types'
+import { emptyUsageSummary } from '../../shared/usage'
 import { branchName, sessionName } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
 import type { AppService, OrchestratorDeps } from '../contracts'
@@ -334,17 +338,18 @@ export class Orchestrator implements AppService {
 
   // File viewer. Read-only, so these skip the mutation queue.
 
+  /** A target's folder (task worktree or folder path), whether or not it still exists. */
+  private targetRoot(target: Target): { root: string; isRepo: boolean; baseRef?: string } {
+    const item = m.getItem(this.state, target.themeId, target.itemId)
+    if (item.kind === 'folder') return { root: item.path, isRepo: false }
+    if (!target.taskId) throw new Error('Choose a task to open')
+    const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
+    return { root: task.worktreePath, isRepo: true, baseRef: task.baseRef }
+  }
+
   /** The folder the file viewer shows for a target; throws if it is gone from disk. */
   private resolveRoot(target: Target): { root: string; isRepo: boolean; baseRef?: string } {
-    const item = m.getItem(this.state, target.themeId, target.itemId)
-    let resolved: { root: string; isRepo: boolean; baseRef?: string }
-    if (item.kind === 'folder') {
-      resolved = { root: item.path, isRepo: false }
-    } else {
-      if (!target.taskId) throw new Error('Choose a task to open')
-      const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
-      resolved = { root: task.worktreePath, isRepo: true, baseRef: task.baseRef }
-    }
+    const resolved = this.targetRoot(target)
     if (!this.deps.pathExists(resolved.root)) throw new Error(`Folder not found: ${resolved.root}`)
     return resolved
   }
@@ -391,5 +396,62 @@ export class Orchestrator implements AppService {
   async openInFileManager(target: Target): Promise<void> {
     const { root } = this.resolveRoot(target)
     await this.deps.launcher.openInFileManager(root)
+  }
+
+  // Claude usage, from Claude Code's transcripts. Read-only, and it works for targets whose folder is gone too.
+
+  /** Every task and folder, in sidebar order, with the folder its usage is counted for. */
+  private usageTargets(): Omit<UsageTargetReport, 'usage'>[] {
+    const targets: Omit<UsageTargetReport, 'usage'>[] = []
+    for (const theme of this.state.themes) {
+      for (const item of theme.items) {
+        if (item.kind === 'folder') {
+          targets.push({
+            target: { themeId: theme.id, itemId: item.id },
+            kind: 'folder',
+            label: item.name,
+            path: item.path,
+          })
+          continue
+        }
+        for (const task of item.tasks) {
+          targets.push({
+            target: { themeId: theme.id, itemId: item.id, taskId: task.id },
+            kind: 'task',
+            label: `${item.name} › ${task.name}`,
+            path: task.worktreePath,
+          })
+        }
+      }
+    }
+    return targets
+  }
+
+  /** Every known root is passed along, so a message is counted for the most specific one only. */
+  async getUsage(target: Target): Promise<UsageSummary> {
+    const { root } = this.targetRoot(target)
+    const { roots } = await this.deps.usage.summarize(this.usageTargets().map((t) => t.path))
+    return roots[root] ?? emptyUsageSummary()
+  }
+
+  async getUsageReport(): Promise<UsageReport> {
+    const targets = this.usageTargets()
+    const themeGroup = (themeId: string): string => `theme:${themeId}`
+    const groups: Record<string, string[]> = { total: targets.map((t) => t.path) }
+    for (const theme of this.state.themes) groups[themeGroup(theme.id)] = []
+    for (const t of targets) groups[themeGroup(t.target.themeId)].push(t.path)
+    const usage = await this.deps.usage.summarize(groups.total, groups)
+    return {
+      generatedAt: new Date().toISOString(),
+      total: usage.groups.total ?? emptyUsageSummary(),
+      themes: this.state.themes.map((theme) => ({
+        themeId: theme.id,
+        name: theme.name,
+        usage: usage.groups[themeGroup(theme.id)] ?? emptyUsageSummary(),
+        targets: targets
+          .filter((t) => t.target.themeId === theme.id)
+          .map((t) => ({ ...t, usage: usage.roots[t.path] ?? emptyUsageSummary() })),
+      })),
+    }
   }
 }

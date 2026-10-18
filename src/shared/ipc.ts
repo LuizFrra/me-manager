@@ -34,6 +34,8 @@ export const INVOKE_METHODS = [
   'openInEditor',
   'openInFileManager',
   'openExternal',
+  'getUsage',
+  'getUsageReport',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]
