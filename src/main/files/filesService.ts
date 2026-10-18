@@ -62,6 +62,9 @@ const gitArgs = (cwd: string, args: string[]): string[] => [
   cwd,
   '-c',
   'core.quotepath=false',
+  // Otherwise empty context lines come out as '' instead of ' ', which the renderer's parser can't place.
+  '-c',
+  'diff.suppressBlankEmpty=false',
   '--literal-pathspecs',
   ...args,
 ]

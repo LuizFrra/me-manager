@@ -139,4 +139,28 @@ describe('parseUnifiedDiff', () => {
     expect(parseUnifiedDiff(QUOTED_PATH)).toMatchObject({ oldPath: 'café.txt', newPath: 'café.txt' })
     expect(parseUnifiedDiff(QUOTED_RENAME)).toMatchObject({ renamed: true, oldPath: 'café.txt', newPath: 'naïve.txt' })
   })
+
+  it('reads a bare empty line inside a hunk as an empty context line (diff.suppressBlankEmpty)', () => {
+    const diff = [
+      'diff --git a/blank.txt b/blank.txt',
+      '--- a/blank.txt',
+      '+++ b/blank.txt',
+      '@@ -1,4 +1,4 @@',
+      ' one',
+      '',
+      '-two',
+      '+TWO',
+      ' three',
+      '',
+    ].join('\n')
+    const d = parseUnifiedDiff(diff)
+    expect(d.hunks[0].lines).toEqual([
+      { kind: 'context', text: 'one', oldNo: 1, newNo: 1 },
+      { kind: 'context', text: '', oldNo: 2, newNo: 2 },
+      { kind: 'del', text: 'two', oldNo: 3 },
+      { kind: 'add', text: 'TWO', newNo: 3 },
+      { kind: 'context', text: 'three', oldNo: 4, newNo: 4 },
+    ])
+    expect(d.lineCount).toBe(5)
+  })
 })
