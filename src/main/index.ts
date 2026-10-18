@@ -64,10 +64,20 @@ function buildMenu(): void {
     Menu.setApplicationMenu(null)
     return
   }
+  // A View menu without the page-zoom items: Cmd+= / Cmd+- / Cmd+0 zoom the terminal font (renderer shortcuts).
   const template: MenuItemConstructorOptions[] = [
     { role: 'appMenu' },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
     { role: 'windowMenu' },
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
@@ -102,7 +112,9 @@ async function bootstrap(): Promise<void> {
   registerIpc({ app: orchestrator, pty: ptyService, getWindow: () => mainWindow })
   buildMenu()
 
-  app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
+  // zoom: true only stops the toolkit from swallowing Mod+- and Mod+Shift+= (there is no page zoom: no menu item
+  // has it), so they reach the renderer's terminal zoom.
+  app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window, { zoom: true }))
   mainWindow = createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()

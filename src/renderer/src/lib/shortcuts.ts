@@ -31,6 +31,9 @@ export type ShortcutId =
   | 'closeTab'
   | 'prevTab'
   | 'nextTab'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'zoomReset'
 
 /** `target` carries the 0-based position of the task or folder to select (Mod+1 is index 0). */
 export type Shortcut = { id: Exclude<ShortcutId, 'target'> } | { id: 'target'; index: number }
@@ -47,6 +50,8 @@ interface Chord {
   display: string
   /** Only on macOS, where Cmd chords don't collide with the terminal's Ctrl keys. */
   macOnly?: true
+  /** Shift is only how the layout types the key (Shift+= is '+'), so labels show "Mod++", not "Mod+Shift++". */
+  shiftImplied?: true
 }
 
 interface ShortcutDef {
@@ -99,6 +104,26 @@ const SHORTCUTS: ShortcutDef[] = [
     id: 'nextTab',
     description: 'Next tab',
     chords: [{ shift: true, keys: [']', '}'], codes: ['BracketRight'], display: ']' }],
+  },
+  // Terminal zoom. Mod+= and Mod++ both zoom in: '+' is Shift+= on US layouts but a key of its own elsewhere
+  // (German), and the keypad has one too. On Linux, Ctrl+= / Ctrl+- / Ctrl+0 mean nothing to common shells.
+  {
+    id: 'zoomIn',
+    description: 'Terminal: larger font',
+    chords: [
+      { shift: false, keys: ['=', '+'], codes: ['Equal', 'NumpadAdd'], display: '=' },
+      { shift: true, keys: ['+', '='], codes: ['Equal'], display: '+', shiftImplied: true },
+    ],
+  },
+  {
+    id: 'zoomOut',
+    description: 'Terminal: smaller font',
+    chords: [{ shift: false, keys: ['-'], codes: ['Minus', 'NumpadSubtract'], display: '-' }],
+  },
+  {
+    id: 'zoomReset',
+    description: 'Terminal: reset the font size',
+    chords: [{ shift: false, keys: ['0'], codes: ['Digit0', 'Numpad0'], display: '0' }],
   },
 ]
 
@@ -155,11 +180,13 @@ export function formatKeys(display: string, shift: boolean, mac = isMac): string
   return mac ? `⌘${shift ? '⇧' : ''}${display}` : `Ctrl+${shift ? 'Shift+' : ''}${display}`
 }
 
+const chordLabel = (c: Chord, mac: boolean): string => formatKeys(c.display, c.shift && !c.shiftImplied, mac)
+
 /** The shortcut's main chord on this platform, for hints and tooltips. */
 export function shortcutLabel(id: ShortcutId, mac = isMac): string {
   const def = SHORTCUTS.find((x) => x.id === id)
   const first = def && chordsFor(def, mac)[0]
-  return first ? formatKeys(first.display, first.shift, mac) : ''
+  return first ? chordLabel(first, mac) : ''
 }
 
 export interface ShortcutHelpEntry {
@@ -171,7 +198,7 @@ export interface ShortcutHelpEntry {
 /** Every shortcut, as listed in the help overlay. */
 export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
   return SHORTCUTS.map((def) => ({
-    keys: chordsFor(def, mac).map((c) => formatKeys(c.display, c.shift, mac)),
+    keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
 }

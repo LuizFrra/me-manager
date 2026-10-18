@@ -11,7 +11,7 @@ import type {
 } from '../../shared/types'
 import { hasUnsavedWork } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
-import { DEFAULT_SETTINGS } from '../../shared/settings'
+import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
@@ -77,6 +77,8 @@ interface AppCommand extends PaletteCommand {
 const RENAME_NOTE = 'The branch and folder keep their original name.'
 
 const EMPTY: AppState = { version: 1, themes: [] }
+/** Terminal zoom saves the font size once the keys have been still this long. */
+export const ZOOM_SAVE_MS = 500
 
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
 
@@ -279,6 +281,31 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const openSettings = (): void => setDialog({ kind: 'settings' })
 
+  // Terminal zoom applies at once and is saved debounced; a size still waiting is saved if the App unmounts.
+  const zoomSave = useRef<{ timer: ReturnType<typeof setTimeout>; size: number } | null>(null)
+  useEffect(
+    () => () => {
+      const pending = zoomSave.current
+      if (!pending) return
+      clearTimeout(pending.timer)
+      api.updateSettings({ terminalFontSize: pending.size }).catch(() => {})
+    },
+    [api],
+  )
+  const zoom = (step: 1 | -1 | 0): void => {
+    const current = settings.terminalFontSize
+    const size = step === 0 ? DEFAULT_SETTINGS.terminalFontSize : clamp(current + step, FONT_SIZE_LIMITS)
+    showInfo(`Font size ${size}`)
+    if (size === current) return
+    setSettings((s) => ({ ...s, terminalFontSize: size }))
+    if (zoomSave.current) clearTimeout(zoomSave.current.timer)
+    const timer = setTimeout(() => {
+      zoomSave.current = null
+      void attempt(() => api.updateSettings({ terminalFontSize: size }))
+    }, ZOOM_SAVE_MS)
+    zoomSave.current = { timer, size }
+  }
+
   /** Opens the selected task's worktree or folder in an editor, or in the file manager. */
   const openExternally = (where: 'editor' | 'fileManager'): void => {
     const target = selectedRef.current
@@ -313,6 +340,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         return openSettings()
       case 'openEditor':
         return openExternally('editor')
+      case 'zoomIn':
+      case 'zoomOut':
+      case 'zoomReset':
+        return zoom(shortcut.id === 'zoomIn' ? 1 : shortcut.id === 'zoomOut' ? -1 : 0)
       case 'panel':
         return togglePanel()
       case 'filterSidebar':
@@ -507,7 +538,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             />
             <div className="workspace">
               <div className="terminal-area">
-                <TerminalView api={api} sessionKey={targetKey(selected)} />
+                <TerminalView api={api} sessionKey={targetKey(selected)} fontSize={settings.terminalFontSize} />
                 {sessionEnded && (
                   <div className="session-ended">
                     <p>Session ended.</p>
