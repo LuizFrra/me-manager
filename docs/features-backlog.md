@@ -48,9 +48,9 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 21 | Confirm dialogs for removing a theme, repo or folder, and an undo-friendly flow | ux | done (ea786eb) |
 | 22 | Clone a repository from a URL into a chosen directory and add it to a theme | feature | done (a0cfdbd) |
 | 23 | Side-by-side diff toggle for wide panels | ux | done (6a96c5a) |
-| 24 | Status bar: branch, ahead/behind, last commit subject and session state for the selected task | ux | todo |
-| 25 | Theme colors and emoji icons in the sidebar | ux | todo |
-| 26 | Virtualize the file tree and changes list for large repos, and cap the repo file listing | perf | todo |
-| 27 | Welcome / onboarding empty state with quick actions | ux | todo |
+| 24 | Status bar: branch, ahead/behind, last commit subject and session state for the selected task | ux | done (1e4fbda) |
+| 25 | Theme colors and emoji icons in the sidebar | ux | done (7360af9) |
+| 26 | Virtualize the file tree and changes list for large repos, and cap the repo file listing | perf | done (87e00ad) |
+| 27 | Welcome / onboarding empty state with quick actions | ux | done (3f0daff) |
 | 28 | Start every Claude session with Remote Control (named `<theme>/<repo>/<task>`) and skipped permissions by default, as Settings toggles, with a warning and a header badge | feature | done (7076989) |
 | 29 | Claude usage and spend: per-task, per-theme and total tokens (input, output, cache) from Claude Code's transcripts in `~/.claude/projects/`, estimated cost at API prices (labelled as an estimate for subscription users), header badge, and a usage view for today, this week and this month | feature | done (7014c87) |
