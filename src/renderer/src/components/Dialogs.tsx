@@ -860,3 +860,45 @@ export function ConflictDialog(props: {
     </div>
   )
 }
+
+/** Asks which theme something goes into, when there are several. Esc or Cancel closes it. */
+export function ChooseThemeDialog(props: {
+  title: string
+  themes: { id: string; name: string; icon?: string }[]
+  onChoose: (themeId: string) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  return (
+    <div className="overlay">
+      <div
+        className="dialog choose-theme-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
+        <h2>{props.title}</h2>
+        <p className="dialog-note">Which theme should it go into?</p>
+        <ul className="choose-theme-list">
+          {props.themes.map((theme, i) => (
+            <li key={theme.id}>
+              <button autoFocus={i === 0} onClick={() => props.onChoose(theme.id)}>
+                {theme.icon && <span aria-hidden="true">{theme.icon} </span>}
+                {theme.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
