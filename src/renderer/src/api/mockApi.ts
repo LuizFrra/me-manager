@@ -55,8 +55,9 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
   const tabs: TabInfo[] = [{ index: 0, name: 'claude', active: true }]
   let settings: Settings = normalizeSettings(DEFAULT_SETTINGS)
 
-  /** Tasks that have a demo pull request. */
+  /** Tasks that have a demo pull request, and those already updated from their base. */
   const prs = new Set<string>()
+  const updated = new Set<string>()
   const taskOf = (target: Target): Task => {
     const item = state.themes.find((t) => t.id === target.themeId)?.items.find((i) => i.id === target.itemId)
     const task = item?.kind === 'repo' ? item.tasks.find((t) => t.id === target.taskId) : undefined
@@ -201,6 +202,22 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       return { sha: (++counter * 2654435761).toString(16).slice(-7).padStart(7, '0'), files }
     },
     pushTask: async (target) => ({ branch: taskOf(target).branch }),
+    // A task named "…conflict…" always conflicts; others take the base's new commits once, then are up to date.
+    updateFromBase: async (target) => {
+      const task = taskOf(target)
+      const { baseRef } = task
+      const strategy = settings.updateStrategy
+      if (/conflict/i.test(task.name))
+        return { kind: 'conflict', strategy, baseRef, files: ['src/app.ts', 'src/util/format.ts'] }
+      if (updated.has(task.id)) return { kind: 'upToDate', baseRef }
+      updated.add(task.id)
+      return { kind: 'updated', strategy, baseRef, commits: 2 }
+    },
+    askClaudeToResolve: async (target, _strategy, files) => {
+      taskOf(target)
+      if (files.length === 0) throw new Error('No conflicting files to resolve')
+      return tabs
+    },
     createPullRequest: async (target) => {
       const task = taskOf(target)
       const created = !prs.has(task.id)

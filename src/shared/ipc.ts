@@ -40,6 +40,8 @@ export const INVOKE_METHODS = [
   'commitAll',
   'pushTask',
   'createPullRequest',
+  'updateFromBase',
+  'askClaudeToResolve',
   'getUsage',
   'getUsageReport',
 ] as const satisfies readonly (keyof MeManagerApi)[]

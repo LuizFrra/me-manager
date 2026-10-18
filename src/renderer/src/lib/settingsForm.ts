@@ -1,7 +1,7 @@
 import { FONT_SIZE_LIMITS, POLL_INTERVAL_LIMITS } from '../../../shared/settings'
 import { commandBasename, isTerminalEditor } from '../../../shared/editor'
 import { joinShellWords, splitShellWords } from '../../../shared/shell'
-import type { Settings } from '../../../shared/types'
+import type { Settings, UpdateStrategy } from '../../../shared/types'
 
 /** The Settings dialog's fields, as typed. The poll interval is edited in seconds. */
 export interface SettingsForm {
@@ -12,6 +12,7 @@ export interface SettingsForm {
   notifications: boolean
   remoteControl: boolean
   skipPermissions: boolean
+  updateStrategy: UpdateStrategy
 }
 
 export type SettingsFormErrors = Partial<Record<keyof SettingsForm, string>>
@@ -27,6 +28,7 @@ export function toForm(s: Settings): SettingsForm {
     notifications: s.notifications,
     remoteControl: s.remoteControl,
     skipPermissions: s.skipPermissions,
+    updateStrategy: s.updateStrategy,
   }
 }
 
@@ -67,6 +69,7 @@ export function parseForm(
       notifications: form.notifications,
       remoteControl: form.remoteControl,
       skipPermissions: form.skipPermissions,
+      updateStrategy: form.updateStrategy,
     },
   }
 }

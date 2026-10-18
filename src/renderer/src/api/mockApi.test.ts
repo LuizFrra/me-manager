@@ -41,6 +41,22 @@ describe('createMockApi', () => {
     await expect(api.createPullRequest(target)).resolves.toMatchObject({ created: true })
     await expect(api.createPullRequest(target)).resolves.toMatchObject({ created: false })
   })
+  it('updates demo tasks from their base, with a conflict for tasks named so', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('T')
+    const themeId = s.themes[0].id
+    s = await api.addRepo(themeId, '/code/r')
+    const itemId = s.themes[0].items[0].id
+    await api.createTask(themeId, itemId, 'fix')
+    s = await api.createTask(themeId, itemId, 'conflict')
+    const repo = s.themes[0].items[0]
+    const [fix, conflict] = repo.kind === 'repo' ? repo.tasks.map((t) => ({ themeId, itemId, taskId: t.id })) : []
+    await expect(api.updateFromBase(fix)).resolves.toMatchObject({ kind: 'updated', strategy: 'rebase', commits: 2 })
+    await expect(api.updateFromBase(fix)).resolves.toMatchObject({ kind: 'upToDate' })
+    const result = await api.updateFromBase(conflict)
+    expect(result).toMatchObject({ kind: 'conflict', baseRef: 'origin/main' })
+    await expect(api.askClaudeToResolve(conflict, 'rebase', ['a.ts'])).resolves.toHaveLength(1)
+  })
   it('renames themes and tasks, rejecting empty and duplicate names', async () => {
     const api = createMockApi()
     let s = await api.createTheme('Client X')

@@ -1,4 +1,4 @@
-import type { Settings } from './types'
+import { UPDATE_STRATEGIES, type Settings, type UpdateStrategy } from './types'
 
 export const POLL_INTERVAL_LIMITS = { min: 1000, max: 30_000 } as const
 export const FONT_SIZE_LIMITS = { min: 8, max: 32 } as const
@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   notifications: true,
   remoteControl: true,
   skipPermissions: true,
+  updateStrategy: 'rebase',
 })
 
 export const clamp = (n: number, { min, max }: { min: number; max: number }): number => Math.min(max, Math.max(min, n))
@@ -38,5 +39,8 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
     notifications: typeof r.notifications === 'boolean' ? r.notifications : base.notifications,
     remoteControl: typeof r.remoteControl === 'boolean' ? r.remoteControl : base.remoteControl,
     skipPermissions: typeof r.skipPermissions === 'boolean' ? r.skipPermissions : base.skipPermissions,
+    updateStrategy: UPDATE_STRATEGIES.includes(r.updateStrategy as UpdateStrategy)
+      ? (r.updateStrategy as UpdateStrategy)
+      : base.updateStrategy,
   }
 }

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
-import { dirname } from 'node:path'
-import type { CommitResult, TaskGitStatus, UnsavedWork } from '../../shared/types'
+import { dirname, resolve } from 'node:path'
+import type { CommitResult, TaskGitStatus, UnsavedWork, UpdateResult, UpdateStrategy } from '../../shared/types'
 import type { GitApi } from '../contracts'
 import { CommandError, run } from '../exec'
 import { GIT_ENV } from './gitEnv'
@@ -17,6 +17,10 @@ export const PUSH_TIMEOUT_MS = 60_000
 /** Commit hooks may run linters or tests; a commit still mustn't hang forever (e.g. a signing prompt). */
 const COMMIT_TIMEOUT_MS = 120_000
 const MAX_ERROR_SUMMARY = 500
+/** A rebase or merge replays commits (and may run hooks or sign them); it still mustn't hang forever. */
+const UPDATE_TIMEOUT_MS = 120_000
+/** Message of the refusal to update a worktree with uncommitted changes. */
+export const UNCOMMITTED_REFUSAL = 'Commit or stash your changes first'
 
 /** `-z` output as its entries, without the trailing empty one. */
 const splitZ = (out: string): string[] => out.split('\0').filter(Boolean)
@@ -327,5 +331,58 @@ export class GitService implements GitApi {
     }).catch((err) => {
       throw commandFailure('git push', err)
     })
+  }
+
+  /** Whether a rebase or merge is stopped half-way in the worktree (its state files are in the worktree's git dir). */
+  private async inProgress(worktreePath: string): Promise<'rebase' | 'merge' | null> {
+    const paths = await this.work(worktreePath, [
+      'rev-parse',
+      '--git-path',
+      'rebase-merge',
+      '--git-path',
+      'rebase-apply',
+      '--git-path',
+      'MERGE_HEAD',
+    ])
+    const [rebaseMerge, rebaseApply, mergeHead] = paths.split('\n').map((p) => resolve(worktreePath, p))
+    if (existsSync(rebaseMerge) || existsSync(rebaseApply)) return 'rebase'
+    return existsSync(mergeHead) ? 'merge' : null
+  }
+
+  async updateFromBase(worktreePath: string, baseRef: string, strategy: UpdateStrategy): Promise<UpdateResult> {
+    if (!(await this.verifyRef(worktreePath, baseRef))) {
+      throw new Error(`The base branch ${baseRef} was not found (deleted, or never fetched)`)
+    }
+    const running = await this.inProgress(worktreePath)
+    if (running) throw new Error(`A ${running} is already in progress in this worktree; finish or abort it first`)
+    // Untracked files don't stop a rebase or merge (git refuses by itself if one would be overwritten).
+    const changed = parsePorcelainZ(
+      await this.work(worktreePath, ['status', '--porcelain', '-z', '--untracked-files=no']),
+    )
+    if (changed.length > 0) {
+      const n = changed.length
+      throw new Error(`${UNCOMMITTED_REFUSAL}: ${n} uncommitted ${n === 1 ? 'file' : 'files'} in the task`)
+    }
+    const behind = Number((await this.work(worktreePath, ['rev-list', '--count', `HEAD..${baseRef}`, '--'])).trim())
+    if (behind === 0) return { kind: 'upToDate', baseRef }
+
+    const args = strategy === 'merge' ? ['merge', '--no-edit', baseRef] : ['rebase', baseRef]
+    try {
+      // No editor ever opens (a GUI app has no terminal for it); identity as for "Commit all".
+      await this.work(worktreePath, ['-c', 'user.useConfigOnly=true', ...args], {
+        env: { GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+        timeoutMs: UPDATE_TIMEOUT_MS,
+      })
+    } catch (err) {
+      const unmerged = await this.work(worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z']).then(
+        splitZ,
+        () => [] as string[],
+      )
+      const stopped = await this.inProgress(worktreePath)
+      if (stopped) await this.work(worktreePath, [stopped, '--abort'])
+      if (unmerged.length > 0) return { kind: 'conflict', strategy, baseRef, files: [...new Set(unmerged)] }
+      throw commandFailure(`git ${strategy}`, err, true)
+    }
+    return { kind: 'updated', strategy, baseRef, commits: behind }
   }
 }

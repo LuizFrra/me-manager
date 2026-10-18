@@ -13,6 +13,7 @@ describe('normalizeSettings', () => {
       notifications: true,
       remoteControl: true,
       skipPermissions: true,
+      updateStrategy: 'rebase',
     })
   })
 
@@ -25,6 +26,7 @@ describe('normalizeSettings', () => {
       notifications: false,
       remoteControl: false,
       skipPermissions: false,
+      updateStrategy: 'merge',
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -36,6 +38,7 @@ describe('normalizeSettings', () => {
       notifications: false,
       remoteControl: false,
       skipPermissions: false,
+      updateStrategy: 'merge',
     })
     expect(Object.keys(s).sort()).toEqual([
       'claudeArgs',
@@ -45,7 +48,17 @@ describe('normalizeSettings', () => {
       'remoteControl',
       'skipPermissions',
       'terminalFontSize',
+      'updateStrategy',
     ])
+  })
+
+  it('accepts only known update strategies', () => {
+    expect(normalizeSettings({ updateStrategy: 'merge' }).updateStrategy).toBe('merge')
+    for (const updateStrategy of ['squash', 'MERGE', 1, null]) {
+      expect(normalizeSettings({ updateStrategy }).updateStrategy).toBe('rebase')
+    }
+    const merging: Settings = { ...DEFAULT_SETTINGS, updateStrategy: 'merge' }
+    expect(normalizeSettings({ updateStrategy: 'bogus' }, merging).updateStrategy).toBe('merge')
   })
 
   it('clamps and rounds numbers', () => {

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { TaskGitStatus, UsageSummary } from '../../../shared/types'
+import type { TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
 import type { CopyEntry } from '../lib/copy'
 import { GIT_ACTION_BUSY, type GitActionKind } from '../lib/gitActions'
@@ -53,8 +53,10 @@ function GitLine({ git, baseRef }: { git: TaskGitStatus; baseRef: string }): Rea
 }
 
 export interface GitActionsProps {
-  /** The task's branch, for the tooltips. */
+  /** The task's branch and base, and how it is updated from the base, for the tooltips. */
   branch: string
+  baseRef: string
+  updateStrategy: UpdateStrategy
   /** The action running on this task; the buttons are off meanwhile. */
   busy?: GitActionKind
   /** Whether the GitHub CLI is installed; without it "PR" explains how to get it. */
@@ -62,9 +64,10 @@ export interface GitActionsProps {
   onCommit: () => void
   onPush: () => void
   onOpenPr: () => void
+  onUpdate: () => void
 }
 
-/** Commit all, push and open a pull request, as one button group. */
+/** Commit all, push, open a pull request and update from the base, as one button group. */
 function GitActions(props: GitActionsProps): React.JSX.Element {
   const label = (kind: GitActionKind, idle: string): string => (props.busy === kind ? GIT_ACTION_BUSY[kind] : idle)
   const busy = props.busy !== undefined
@@ -102,6 +105,18 @@ function GitActions(props: GitActionsProps): React.JSX.Element {
         onClick={props.onOpenPr}
       >
         {label('pr', 'PR')}
+      </button>
+      <button
+        aria-label="Update from base"
+        title={
+          props.updateStrategy === 'merge'
+            ? `Fetch, then merge ${props.baseRef} into ${props.branch} (git merge --no-edit)`
+            : `Fetch, then rebase ${props.branch} onto ${props.baseRef} (git rebase)`
+        }
+        disabled={busy}
+        onClick={props.onUpdate}
+      >
+        {label('update', 'Update')}
       </button>
     </div>
   )

@@ -21,6 +21,7 @@ const custom: Settings = {
   notifications: false,
   remoteControl: false,
   skipPermissions: true,
+  updateStrategy: 'merge',
 }
 
 describe('SettingsStore', () => {

@@ -12,6 +12,7 @@ import type {
   Task,
   TaskGitStatus,
   UnsavedWork,
+  UpdateResult,
   UsageSummary,
 } from '../../shared/types'
 import { hasUnsavedWork } from '../../shared/types'
@@ -22,7 +23,14 @@ import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
-import { CommitDialog, NameDialog, NewTaskDialog, NotesDialog, RemoveTaskDialog } from './components/Dialogs'
+import {
+  CommitDialog,
+  ConflictDialog,
+  NameDialog,
+  NewTaskDialog,
+  NotesDialog,
+  RemoveTaskDialog,
+} from './components/Dialogs'
 import { TaskHeader } from './components/TaskHeader'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
@@ -62,6 +70,7 @@ type Dialog =
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
   | { kind: 'newTask'; themeId: string; repoId: string; repoName: string }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
+  | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | { kind: 'settings' }
 
 type AppAction =
@@ -81,6 +90,7 @@ type AppAction =
         | 'commit'
         | 'push'
         | 'openPr'
+        | 'update'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -475,6 +485,30 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       showInfo(result.created ? `Created a pull request for ${found.task.branch}` : 'Opened the pull request')
   }
 
+  const updateFromBase = async (): Promise<void> => {
+    const found = taskOfSelection()
+    if (!found) return
+    const { target, task } = found
+    const result = await gitAction(target, 'update', () => api.updateFromBase(target))
+    if (!result) return
+    if (result.kind === 'upToDate') showInfo(`Already up to date with ${result.baseRef}`)
+    else if (result.kind === 'updated') {
+      const verb = result.strategy === 'rebase' ? `Rebased onto ${result.baseRef}` : `Merged ${result.baseRef}`
+      showInfo(`${verb} (${plural(result.commits, 'new commit')})`)
+    } else setDialog({ kind: 'conflicts', target, branch: task.branch, result })
+  }
+
+  const askClaudeToResolve = async (
+    target: Target,
+    result: Extract<UpdateResult, { kind: 'conflict' }>,
+  ): Promise<void> => {
+    const tabs = await attempt(() => api.askClaudeToResolve(target, result.strategy, result.files))
+    if (!tabs) return
+    setDialog(null)
+    if (sameTarget(selectedRef.current, target)) setTabs(tabs)
+    showInfo('Asked Claude to resolve the conflicts')
+  }
+
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
@@ -566,6 +600,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('Git: Commit all…', 'commit')
       action('Git: Push branch', 'push')
       action(gitTools.gh ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
+      action('Git: Update from base', 'update')
     }
     for (const { kind, label } of copiesFor(selected))
       commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
@@ -631,6 +666,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'commit') commitAll()
     else if (action.type === 'push') void push()
     else if (action.type === 'openPr') void openPullRequest()
+    else if (action.type === 'update') void updateFromBase()
     else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
       if (entry) void copy(entry)
@@ -698,11 +734,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 selectedTask
                   ? {
                       branch: selectedTask.branch,
+                      baseRef: selectedTask.baseRef,
+                      updateStrategy: settings.updateStrategy,
                       busy: gitBusy[targetKey(selected)],
                       ghAvailable: gitTools.gh,
                       onCommit: commitAll,
                       onPush: () => void push(),
                       onOpenPr: () => void openPullRequest(),
+                      onUpdate: () => void updateFromBase(),
                     }
                   : undefined
               }
@@ -799,6 +838,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           loadChanges={() => api.listChanges(dialog.target, 'uncommitted')}
           onCommit={(message) => doCommit(dialog.target, message)}
           onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'conflicts' && (
+        <ConflictDialog
+          branch={dialog.branch}
+          baseRef={dialog.result.baseRef}
+          strategy={dialog.result.strategy}
+          files={dialog.result.files}
+          onAskClaude={() => askClaudeToResolve(dialog.target, dialog.result)}
+          onClose={() => setDialog(null)}
         />
       )}
       {dialog?.kind === 'settings' && (

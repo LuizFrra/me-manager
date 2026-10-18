@@ -21,6 +21,8 @@ import type {
   Task,
   TaskGitStatus,
   UnsavedWork,
+  UpdateResult,
+  UpdateStrategy,
   UsageReport,
   UsageSummary,
   UsageTargetReport,
@@ -47,9 +49,12 @@ export const claudeCommand = (args: readonly string[] = []): string => ['claude'
  */
 export const claudePromptCommand = (args: readonly string[], prompt: string | undefined): string =>
   claudeCommand(prompt ? [...args, '--', prompt] : args)
-/** `--continue` fails when there is no previous conversation; fall back to a fresh one. */
-export const claudeContinueCommand = (args: readonly string[] = []): string =>
-  `${claudeCommand([...args, '--continue'])} || ${claudeCommand(args)}`
+/**
+ * `--continue` fails when there is no previous conversation; fall back to a fresh one. With a `prompt` (only to
+ * hand Claude a request when its window is restarted for one), both carry it as claudePromptCommand does.
+ */
+export const claudeContinueCommand = (args: readonly string[] = [], prompt?: string): string =>
+  `${claudePromptCommand([...args, '--continue'], prompt)} || ${claudePromptCommand(args, prompt)}`
 
 export const CLAUDE_CMD = claudeCommand()
 export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
@@ -90,6 +95,27 @@ export function normalizeTaskOptions(raw: unknown): NewTaskOptions {
     options.prompt = first
   }
   return options
+}
+
+/** Most conflicting files named in the request to Claude, and the longest name kept. */
+export const MAX_RESOLVE_FILES = 100
+const MAX_RESOLVE_PATH = 500
+
+/**
+ * The request typed into Claude's window after an update stopped on conflicts. The files come from the renderer:
+ * control characters (a newline would send the message early) are replaced and the list is capped.
+ */
+export function resolvePrompt(strategy: UpdateStrategy, baseRef: string, files: unknown): string {
+  if (strategy !== 'rebase' && strategy !== 'merge') throw new Error('Invalid update strategy')
+  const names = (Array.isArray(files) ? files : [])
+    .filter((f): f is string => typeof f === 'string' && f !== '')
+    // eslint-disable-next-line no-control-regex -- control characters are exactly what is removed
+    .map((f) => f.replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, MAX_RESOLVE_PATH))
+  if (names.length === 0) throw new Error('No conflicting files to resolve')
+  const shown = names.slice(0, MAX_RESOLVE_FILES).join(', ')
+  const more = names.length > MAX_RESOLVE_FILES ? ` and ${names.length - MAX_RESOLVE_FILES} more` : ''
+  const action = strategy === 'rebase' ? `rebase this branch onto ${baseRef}` : `merge ${baseRef} into this branch`
+  return `Please ${action} and resolve the conflicts in: ${shown}${more}`
 }
 
 const STATE_QUEUE = 'state'
@@ -583,6 +609,30 @@ export class Orchestrator implements AppService {
     return this.gitAction(target, (task) =>
       this.deps.gh.pullRequest(task.worktreePath, task.branch, baseBranchName(task.baseRef)),
     )
+  }
+
+  /** Fetch (giving up after the usual timeout), then rebase onto the base or merge it, per Settings. */
+  async updateFromBase(target: Target): Promise<UpdateResult> {
+    return this.gitAction(target, async (task, repo) => {
+      await this.fetchWithTimeout(repo.path)
+      return this.deps.git.updateFromBase(task.worktreePath, task.baseRef, this.deps.settings.get().updateStrategy)
+    })
+  }
+
+  async askClaudeToResolve(target: Target, strategy: UpdateStrategy, files: string[]): Promise<TabInfo[]> {
+    const { task } = this.resolveTaskTarget(target)
+    const { session, cwd, label } = this.resolve(target)
+    const text = resolvePrompt(strategy, task.baseRef, files)
+    if (!(await this.deps.tmux.hasSession(session))) throw new Error('Open the task first: its session is not running')
+    const claude = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
+    if (claude) {
+      await this.deps.tmux.sendText(session, CLAUDE_WINDOW, text)
+      await this.deps.tmux.selectWindow(session, claude.index)
+    } else {
+      // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
+      await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label), text))
+    }
+    return this.deps.tmux.listWindows(session)
   }
 
   // File viewer. Read-only, so these skip the mutation queue.

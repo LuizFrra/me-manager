@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { parseWindowActivity, TmuxService } from './tmuxService'
+import { escapeTrailingSemicolon, parseWindowActivity, TmuxService } from './tmuxService'
 
 const hasTmux = await run('tmux', ['-V']).then(
   () => true,
@@ -125,6 +125,30 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmf_act_shell')
   })
 
+  it('types text literally into a window, then presses Enter', async () => {
+    // cat stands in for Claude: each line it reads (on Enter) lands in the file, exactly as typed.
+    const out = join(cwd, 'typed.txt')
+    await svc.newSession('mmt_send_x_y', cwd, 'shell', 'sh')
+    await svc.newWindow('mmt_send_x_y', cwd, 'claude', `cat > '${out}'`)
+    const texts = [
+      'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts, b c.ts',
+      `-x $(touch PWNED) \`id\` "q" 'q' ~ * #{session_name} Enter C-c ; mid`,
+      'ends with a semicolon;',
+    ]
+    for (const text of texts) await svc.sendText('mmt_send_x_y', 'claude', text)
+    let typed = ''
+    for (let i = 0; i < 50 && typed.split('\n').length <= texts.length; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      typed = existsSync(out) ? await readFile(out, 'utf8') : ''
+    }
+    expect(typed).toBe(texts.map((t) => `${t}\n`).join(''))
+    expect(existsSync(join(cwd, 'PWNED'))).toBe(false)
+    // Exact names: no window named "clau", no session "mmt_send_x".
+    await expect(svc.sendText('mmt_send_x_y', 'clau', 'x')).rejects.toThrow()
+    await expect(svc.sendText('mmt_send_x', 'claude', 'x')).rejects.toThrow()
+    await svc.killSession('mmt_send_x_y')
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)
@@ -145,5 +169,14 @@ describe('parseWindowActivity', () => {
       '',
     ].join('\n')
     expect(parseWindowActivity(out, 'claude')).toEqual({ mmt_a_b_c: 250, mmf_t_notes: 200 })
+  })
+})
+
+describe('escapeTrailingSemicolon', () => {
+  it('escapes only a trailing semicolon, which tmux would read as a command separator', () => {
+    expect(escapeTrailingSemicolon('a;')).toBe('a\\;')
+    expect(escapeTrailingSemicolon('a\\;')).toBe('a\\\\;')
+    expect(escapeTrailingSemicolon('a; b')).toBe('a; b')
+    expect(escapeTrailingSemicolon('')).toBe('')
   })
 })

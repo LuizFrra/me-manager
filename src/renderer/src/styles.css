@@ -636,6 +636,29 @@ button:disabled {
 .settings-checkbox-hint {
   padding-left: 22px;
 }
+.settings-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+.settings-choice legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.settings-choice-option {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.settings-choice-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
 .settings-note {
   padding: 6px 8px;
   background: #4fa3ff14;
@@ -663,6 +686,30 @@ button:disabled {
 .danger {
   background: var(--danger);
   color: white;
+}
+.primary {
+  background: #2f6fb3;
+  border-color: #2f6fb3;
+  color: white;
+}
+.primary:hover {
+  background: #3a7fc8;
+}
+.conflict-dialog {
+  width: min(560px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.conflict-summary {
+  margin: 0;
+  line-height: 1.5;
+}
+.conflict-dialog code {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #ffffff10;
 }
 .dialog-warning {
   background: #5a1d1d;
