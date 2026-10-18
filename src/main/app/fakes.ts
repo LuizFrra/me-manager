@@ -105,6 +105,16 @@ export class FakeGit implements GitApi {
   async verifyRef(_repo: string, ref: string): Promise<boolean> {
     return !ref.startsWith('-') && this.branches.includes(ref) && !this.unresolvable.has(ref)
   }
+  /** When set, clone rejects with it. */
+  failClone: string | null = null
+  /** When set, clone waits for it, so tests can hold a clone in flight. */
+  cloneGate: Promise<void> | null = null
+  async clone(url: string, dest: string): Promise<void> {
+    this.calls.push(`clone ${url} ${dest}`)
+    if (this.cloneGate) await this.cloneGate
+    if (this.failClone) throw new Error(this.failClone)
+    this.roots.set(dest, dest)
+  }
   async addWorktree(_repo: string, wt: string, branch: string, base: string): Promise<void> {
     this.calls.push(`addWorktree ${wt} ${branch} ${base}`)
   }

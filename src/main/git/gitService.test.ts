@@ -109,6 +109,66 @@ async function withTask(): Promise<{ root: string; clone: string; wt: string; br
   return { root, clone, wt, branch: 'claude/client-x/fix' }
 }
 
+describe('clone', () => {
+  /** A bare origin with one commit (from makeClonedRepo), and an empty folder to clone into. */
+  async function origin(): Promise<{ url: string; parent: string }> {
+    const { root } = await makeClonedRepo()
+    const parent = join(root, 'into')
+    await mkdir(parent)
+    return { url: `file://${join(root, 'origin.git')}`, parent }
+  }
+
+  it('clones a file:// repository into a new folder', async () => {
+    const { url, parent } = await origin()
+    const dest = join(parent, 'my-api')
+    await svc.clone(url, dest)
+    expect(existsSync(join(dest, 'README.md'))).toBe(true)
+    expect((await git(dest, 'remote', 'get-url', 'origin')).trim()).toBe(url)
+    await expect(svc.resolveBaseRef(dest)).resolves.toBe('origin/main')
+  })
+
+  it('refuses a folder that exists, leaving it as it was', async () => {
+    const { url, parent } = await origin()
+    const dest = join(parent, 'taken')
+    await mkdir(dest)
+    await writeFile(join(dest, 'mine.txt'), 'keep me')
+    await expect(svc.clone(url, dest)).rejects.toThrow(`${dest} already exists`)
+    expect(existsSync(join(dest, 'mine.txt'))).toBe(true)
+  })
+
+  it('removes the folder it created when the clone fails', async () => {
+    const { parent } = await origin()
+    const dest = join(parent, 'broken')
+    await expect(svc.clone(`file://${join(parent, 'nope.git')}`, dest)).rejects.toThrow(/^git clone failed: /)
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('removes the folder when the clone times out', async () => {
+    const { url, parent } = await origin()
+    const dest = join(parent, 'slow')
+    await expect(new GitService({ cloneTimeoutMs: 1 }).clone(url, dest)).rejects.toThrow(/git clone timed out/)
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('refuses options and command transports before creating anything', async () => {
+    const { parent } = await origin()
+    const dest = join(parent, 'x')
+    await expect(svc.clone('-u touch /tmp/pwned', dest)).rejects.toThrow(/start with “-”/)
+    await expect(svc.clone('--upload-pack=touch', dest)).rejects.toThrow(/start with “-”/)
+    await expect(svc.clone('ext::sh', dest)).rejects.toThrow(/ext:: and fd::/)
+    await expect(svc.clone('ext::sh -c touch% /tmp/pwned', dest)).rejects.toThrow()
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('needs an absolute destination whose parent exists', async () => {
+    const { url, parent } = await origin()
+    await expect(svc.clone(url, 'relative/x')).rejects.toThrow(/Invalid clone destination/)
+    await expect(svc.clone(url, join(parent, 'missing', 'x'))).rejects.toThrow(
+      `Folder not found: ${join(parent, 'missing')}`,
+    )
+  })
+})
+
 describe('addWorktree', () => {
   it('creates the worktree on a new branch without upstream', async () => {
     const { wt, branch } = await withTask()

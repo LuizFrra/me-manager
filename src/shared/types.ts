@@ -164,6 +164,8 @@ export interface Settings {
   notifications: boolean
   /** How "Update from base" brings the base's new commits into a task branch. */
   updateStrategy: UpdateStrategy
+  /** The folder the last "Clone repository…" cloned into (an absolute path), its default next time; '' if none. */
+  cloneDirectory: string
 }
 
 /** `rebase`: `git rebase <base>` (a linear history); `merge`: `git merge --no-edit <base>` (a merge commit). */
@@ -246,6 +248,13 @@ export interface MeManagerApi {
 
   pickDirectory(): Promise<string | null>
   addRepo(themeId: string, path: string): Promise<AppState>
+  /**
+   * Clones `url` (see shared/clone.ts for what is accepted) into `<parentDir>/<name>`, which must not exist yet,
+   * then adds it to the theme like addRepo and remembers `parentDir` as Settings.cloneDirectory. Runs
+   * `git clone` non-interactively, for up to 10 minutes; there is no progress report (the dialog shows
+   * "Cloning…"). On failure the folder it created is removed again and git's error is the rejection.
+   */
+  cloneRepo(themeId: string, url: string, parentDir: string, name: string): Promise<AppState>
   addFolder(themeId: string, path: string): Promise<AppState>
   /** Removes a repo or folder from the theme only (nothing on disk); refused for a repo with tasks. */
   removeItem(themeId: string, itemId: string): Promise<AppState>

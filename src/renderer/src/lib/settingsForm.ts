@@ -15,6 +15,9 @@ export interface SettingsForm {
   updateStrategy: UpdateStrategy
 }
 
+/** What the Settings dialog edits: everything but what the app remembers by itself (the last clone folder). */
+export type EditableSettings = Omit<Settings, 'cloneDirectory'>
+
 export type SettingsFormErrors = Partial<Record<keyof SettingsForm, string>>
 
 export const POLL_SECONDS = { min: POLL_INTERVAL_LIMITS.min / 1000, max: POLL_INTERVAL_LIMITS.max / 1000 }
@@ -40,7 +43,7 @@ const numberIn = (text: string, { min, max }: { min: number; max: number }): num
 /** The form as Settings, or the message to show under each invalid field. */
 export function parseForm(
   form: SettingsForm,
-): { settings: Settings; errors?: undefined } | { settings?: undefined; errors: SettingsFormErrors } {
+): { settings: EditableSettings; errors?: undefined } | { settings?: undefined; errors: SettingsFormErrors } {
   const errors: SettingsFormErrors = {}
   const words = (field: 'claudeArgs' | 'editorCommand'): string[] => {
     try {

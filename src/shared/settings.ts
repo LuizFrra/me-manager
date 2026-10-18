@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   remoteControl: true,
   skipPermissions: true,
   updateStrategy: 'rebase',
+  cloneDirectory: '',
 })
 
 export const clamp = (n: number, { min, max }: { min: number; max: number }): number => Math.min(max, Math.max(min, n))
@@ -42,5 +43,9 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
     updateStrategy: UPDATE_STRATEGIES.includes(r.updateStrategy as UpdateStrategy)
       ? (r.updateStrategy as UpdateStrategy)
       : base.updateStrategy,
+    cloneDirectory:
+      isArgString(r.cloneDirectory) && (r.cloneDirectory.trim() === '' || r.cloneDirectory.trim().startsWith('/'))
+        ? r.cloneDirectory.trim()
+        : base.cloneDirectory,
   }
 }

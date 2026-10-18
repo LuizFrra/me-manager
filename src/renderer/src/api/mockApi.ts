@@ -23,6 +23,7 @@ import {
   searchPattern,
 } from '../../../shared/search'
 import { emptyUiState, normalizeUiState } from '../../../shared/uiState'
+import { checkCloneName, checkCloneUrl } from '../../../shared/clone'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -140,6 +141,18 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       edit(themeId, (t) => {
         t.items.push({ id: id(), kind: 'repo', name: baseName(path), slug: slugify(baseName(path)), path, tasks: [] })
       }),
+    // Checked like main; a folder some theme already has counts as existing.
+    cloneRepo: async (themeId, url, parentDir, name) => {
+      checkCloneUrl(url)
+      const folder = checkCloneName(name)
+      if (!parentDir.startsWith('/')) throw new Error('Choose the folder to clone into')
+      const path = `${parentDir.replace(/\/+$/, '')}/${folder}`
+      if (state.themes.some((t) => t.items.some((i) => i.path === path)))
+        throw new Error(`${path} already exists; choose another folder name`)
+      const next = await api.addRepo(themeId, path)
+      settings = { ...settings, cloneDirectory: parentDir }
+      return next
+    },
     addFolder: (themeId, path) =>
       edit(themeId, (t) => {
         t.items.push({ id: id(), kind: 'folder', name: baseName(path), slug: slugify(baseName(path)), path })

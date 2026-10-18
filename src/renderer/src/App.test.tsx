@@ -2190,3 +2190,123 @@ describe('App removing themes, repos and folders', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('/home/me/code/my-api is already in this theme')
   })
 })
+
+describe('App clone repository', () => {
+  async function setupClone(extra: Partial<MeManagerApi> = {}): Promise<{ user: UserEvent; api: MeManagerApi }> {
+    const user = userEvent.setup()
+    const api = createMockApi({ pickDirectory: async () => '/home/me/src', ...extra })
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    return { user, api }
+  }
+  const cloneDialog = (): HTMLElement => screen.getByRole('dialog', { name: 'Clone repository into Client X' })
+  const field = (name: string): HTMLElement => within(cloneDialog()).getByLabelText(name)
+
+  it('clones from the theme row into the chosen folder, names it after the URL, and remembers the folder', async () => {
+    const { user, api } = await setupClone()
+    const cloneRepo = vi.spyOn(api, 'cloneRepo')
+    await user.click(screen.getByRole('button', { name: 'Clone repository into Client X' }))
+    expect(field('Repository URL')).toHaveFocus()
+    expect(field('Clone into')).toHaveValue('')
+    expect(within(cloneDialog()).getByRole('button', { name: 'Clone' })).toBeDisabled()
+
+    await user.type(field('Repository URL'), 'git@github.com:acme/my-api.git')
+    expect(field('Folder name')).toHaveValue('my-api')
+    await user.click(within(cloneDialog()).getByRole('button', { name: 'Choose…' }))
+    expect(field('Clone into')).toHaveValue('/home/me/src')
+    expect(cloneDialog()).toHaveTextContent('Clones to /home/me/src/my-api, which must not exist yet.')
+    await user.click(within(cloneDialog()).getByRole('button', { name: 'Clone' }))
+
+    expect(cloneRepo).toHaveBeenCalledWith(
+      expect.any(String),
+      'git@github.com:acme/my-api.git',
+      '/home/me/src',
+      'my-api',
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'New task in my-api' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Cloned my-api into Client X')
+
+    // The next clone starts in the same folder.
+    await user.click(screen.getByRole('button', { name: 'Clone repository into Client X' }))
+    expect(field('Clone into')).toHaveValue('/home/me/src')
+  })
+
+  it('starts in the last clone folder from Settings and keeps an edited name', async () => {
+    const api = createMockApi()
+    await api.updateSettings({ cloneDirectory: '/srv/code' })
+    const cloneRepo = vi.spyOn(api, 'cloneRepo')
+    const user = userEvent.setup()
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Clone repository into Client X' }))
+    await waitFor(() => expect(field('Clone into')).toHaveValue('/srv/code'))
+    await user.type(field('Repository URL'), 'https://github.com/acme/api')
+    await user.clear(field('Folder name'))
+    await user.type(field('Folder name'), 'acme-api')
+    await user.type(field('Repository URL'), '.git')
+    expect(field('Folder name')).toHaveValue('acme-api')
+    await user.keyboard('{Enter}')
+    expect(cloneRepo).toHaveBeenCalledWith(
+      expect.any(String),
+      'https://github.com/acme/api.git',
+      '/srv/code',
+      'acme-api',
+    )
+  })
+
+  it('explains a URL or name it refuses, with Clone off', async () => {
+    const { user, api } = await setupClone()
+    const cloneRepo = vi.spyOn(api, 'cloneRepo')
+    await user.click(screen.getByRole('button', { name: 'Clone repository into Client X' }))
+    await user.click(within(cloneDialog()).getByRole('button', { name: 'Choose…' }))
+    await user.type(field('Repository URL'), '-u touch /tmp/pwned')
+    await user.tab()
+    expect(within(cloneDialog()).getByRole('alert')).toHaveTextContent('A URL can’t start with “-”')
+    expect(field('Repository URL')).toHaveAttribute('aria-invalid', 'true')
+    expect(within(cloneDialog()).getByRole('button', { name: 'Clone' })).toBeDisabled()
+
+    await user.clear(field('Repository URL'))
+    await user.type(field('Repository URL'), 'ext::sh')
+    expect(within(cloneDialog()).getByRole('alert')).toHaveTextContent('ext:: and fd::')
+
+    await user.clear(field('Repository URL'))
+    await user.type(field('Repository URL'), 'https://github.com/a/b')
+    expect(within(cloneDialog()).queryByRole('alert')).not.toBeInTheDocument()
+    await user.clear(field('Folder name'))
+    await user.type(field('Folder name'), '..')
+    expect(within(cloneDialog()).getByRole('alert')).toHaveTextContent('Choose another folder name')
+    expect(within(cloneDialog()).getByRole('button', { name: 'Clone' })).toBeDisabled()
+    expect(cloneRepo).not.toHaveBeenCalled()
+  })
+
+  it('shows "Cloning…" while it runs, then git\'s error, staying open; Esc closes it after', async () => {
+    const gate = deferred()
+    const { user } = await setupClone({
+      cloneRepo: async () => {
+        await gate.promise
+        throw new Error(
+          "Error invoking remote method 'api:cloneRepo': Error: git clone failed: fatal: repository not found",
+        )
+      },
+    })
+    await user.click(screen.getByRole('button', { name: 'Clone repository into Client X' }))
+    await user.type(field('Repository URL'), 'https://github.com/acme/private')
+    await user.click(within(cloneDialog()).getByRole('button', { name: 'Choose…' }))
+    await user.click(within(cloneDialog()).getByRole('button', { name: 'Clone' }))
+    expect(within(cloneDialog()).getByRole('status')).toHaveTextContent('Cloning…')
+    expect(within(cloneDialog()).getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    expect(field('Repository URL')).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(cloneDialog()).toBeInTheDocument() // can't be closed while cloning
+
+    gate.resolve()
+    expect(await within(cloneDialog()).findByRole('alert')).toHaveTextContent(
+      'git clone failed: fatal: repository not found',
+    )
+    expect(field('Repository URL')).toHaveValue('https://github.com/acme/private')
+    expect(within(cloneDialog()).getByRole('button', { name: 'Clone' })).toBeEnabled()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})

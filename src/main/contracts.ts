@@ -37,6 +37,12 @@ export interface GitApi {
   listBranches(repoPath: string): Promise<string[]>
   /** Whether `ref` names a commit in the repo (`rev-parse --verify`); false for anything starting with '-'. */
   verifyRef(repoPath: string, ref: string): Promise<boolean>
+  /**
+   * `git clone -- <url> <dest>`, non-interactive, with the ext and fd transports off, giving up after
+   * CLONE_TIMEOUT_MS. The URL is checked with checkCloneUrl. `dest` (absolute) is created here first, so one that
+   * exists is refused; when the clone fails, `dest` (which this call created) is removed again.
+   */
+  clone(url: string, dest: string): Promise<void>
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>
   /** Removes the worktree (forced); prunes if its folder is already gone. */
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>
