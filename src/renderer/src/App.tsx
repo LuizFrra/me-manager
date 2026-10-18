@@ -32,6 +32,7 @@ import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from
 import { allTargets, visibleTargets } from './lib/targets'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
+import { sessionState } from './lib/sessionState'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -91,7 +92,7 @@ const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targe
 export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
-  const [status, setStatus] = useState<LiveStatus>({ running: [], missing: [] })
+  const [status, setStatus] = useState<LiveStatus>({ running: [], missing: [], activity: {} })
   // Git status of the visible tasks (and the selected one), by task id.
   const [gitStatus, setGitStatus] = useState<Record<string, TaskGitStatus>>({})
   const [selected, setSelected] = useState<Target | null>(null)
@@ -596,6 +597,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onOpenUsage={() => setUsageOpen(true)}
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
               baseRef={selectedTask?.baseRef}
+              session={sessionState(status, targetKey(selected))}
             />
             <TabBar
               tabs={tabs}

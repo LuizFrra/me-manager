@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   AppState,
   ChangeList,
+  ClaudeActivity,
   FileContent,
   FileList,
   LiveStatus,
@@ -22,6 +23,7 @@ import { mapLimit } from '../concurrency'
 import type { AppService, OrchestratorDeps } from '../contracts'
 import { taskWorktreePath } from '../paths'
 import * as m from '../store/mutations'
+import { isRecentlyActive, looksWaiting } from '../tmux/activity'
 
 /**
  * The shell string tmux runs to start Claude with the user's extra arguments (Settings.claudeArgs). tmux hands
@@ -45,6 +47,8 @@ export const FETCH_TIMEOUT_MS = 20_000
 export const GIT_STATUS_TTL_MS = 5_000
 /** Worktrees whose git status is read at the same time. */
 export const GIT_STATUS_CONCURRENCY = 4
+/** Quiet `claude` windows whose screen is captured at the same time (see getStatus). */
+export const PANE_CAPTURE_CONCURRENCY = 4
 
 export interface OrchestratorOptions {
   /** Overrides FETCH_TIMEOUT_MS (for tests). */
@@ -71,6 +75,11 @@ export class Orchestrator implements AppService {
   private readonly now: () => number
   /** Git status per worktree path, shared by overlapping calls and reused for GIT_STATUS_TTL_MS. */
   private readonly gitStatusCache = new Map<string, GitStatusEntry>()
+  /**
+   * Whether a quiet session's screen showed a waiting prompt, by session, with the `window_activity` it was
+   * captured at: the screen can't change without new activity, so it is captured again only after some.
+   */
+  private readonly waitingCache = new Map<string, { activitySec: number; waiting: boolean }>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -172,24 +181,66 @@ export class Orchestrator implements AppService {
     return this.deps.settings.update(patch)
   }
 
+  /**
+   * Sessions, missing folders and Claude's activity. Kept cheap for polling: two tmux calls, plus a screen capture
+   * only for a quiet session whose window printed something since its last capture.
+   */
   async getStatus(): Promise<LiveStatus> {
-    const sessions = new Set(await this.deps.tmux.listSessions().catch(() => [] as string[]))
+    const [sessionList, activityBySession] = await Promise.all([
+      this.deps.tmux.listSessions().catch(() => [] as string[]),
+      this.deps.tmux.windowActivity(CLAUDE_WINDOW).catch(() => ({}) as Record<string, number>),
+    ])
+    const sessions = new Set(sessionList)
     const running: string[] = []
     const missing: string[] = []
+    const live: { id: string; session: string }[] = []
+    const check = (id: string, session: string): void => {
+      if (!sessions.has(session)) return
+      running.push(id)
+      live.push({ id, session })
+    }
     for (const theme of this.state.themes) {
       for (const item of theme.items) {
         if (!this.deps.pathExists(item.path)) missing.push(item.id)
         if (item.kind === 'folder') {
-          if (sessions.has(sessionName(theme.slug, item.slug))) running.push(item.id)
+          check(item.id, sessionName(theme.slug, item.slug))
           continue
         }
         for (const task of item.tasks) {
           if (!this.deps.pathExists(task.worktreePath)) missing.push(task.id)
-          if (sessions.has(sessionName(theme.slug, item.slug, task.slug))) running.push(task.id)
+          check(task.id, sessionName(theme.slug, item.slug, task.slug))
         }
       }
     }
-    return { running, missing }
+    return { running, missing, activity: await this.claudeActivity(live, activityBySession) }
+  }
+
+  /** Busy from recent output; otherwise waiting or idle from the screen (see tmux/activity.ts). */
+  private async claudeActivity(
+    live: { id: string; session: string }[],
+    activityBySession: Record<string, number>,
+  ): Promise<Record<string, ClaudeActivity>> {
+    const nowMs = this.now()
+    const activity: Record<string, ClaudeActivity> = {}
+    const quiet: { id: string; session: string; activitySec: number }[] = []
+    for (const { id, session } of live) {
+      const activitySec = activityBySession[session]
+      if (activitySec === undefined) continue // the claude window was closed
+      if (isRecentlyActive(activitySec, nowMs)) activity[id] = 'busy'
+      else quiet.push({ id, session, activitySec })
+    }
+    const sessions = new Set(live.map((l) => l.session))
+    for (const session of this.waitingCache.keys()) if (!sessions.has(session)) this.waitingCache.delete(session)
+    await mapLimit(quiet, PANE_CAPTURE_CONCURRENCY, async ({ id, session, activitySec }) => {
+      let cached = this.waitingCache.get(session)
+      if (cached?.activitySec !== activitySec) {
+        const pane = await this.deps.tmux.capturePane(session, CLAUDE_WINDOW).catch(() => null)
+        cached = { activitySec, waiting: pane !== null && looksWaiting(pane) }
+        this.waitingCache.set(session, cached)
+      }
+      activity[id] = cached.waiting ? 'waiting' : 'idle'
+    })
+    return activity
   }
 
   async getGitStatus(targets: Target[]): Promise<Record<string, TaskGitStatus>> {

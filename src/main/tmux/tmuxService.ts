@@ -14,6 +14,24 @@ export function escapeFormat(value: string): string {
   return value.replace(/#/g, '##')
 }
 
+const isNoServer = (err: unknown): boolean =>
+  err instanceof CommandError && /no server running|error connecting/i.test(err.stderr)
+
+/**
+ * `list-windows -a -F '#{session_name}\t#{window_activity}\t#{window_name}'` output: the latest activity of the
+ * windows named `windowName`, by session. The name comes last because it is the only field that could hold a tab.
+ */
+export function parseWindowActivity(out: string, windowName: string): Record<string, number> {
+  const result: Record<string, number> = {}
+  for (const line of out.split('\n')) {
+    const [session, activity, ...name] = line.split('\t')
+    const at = Number(activity)
+    if (!session || name.join('\t') !== windowName || !Number.isFinite(at) || activity === '') continue
+    result[session] = Math.max(result[session] ?? 0, at)
+  }
+  return result
+}
+
 export class TmuxService implements TmuxApi {
   constructor(
     private readonly socket: string,
@@ -48,7 +66,28 @@ export class TmuxService implements TmuxApi {
       const out = await this.tmux(['list-sessions', '-F', '#{session_name}'])
       return out.split('\n').filter(Boolean)
     } catch (err) {
-      if (err instanceof CommandError && /no server running|error connecting/i.test(err.stderr)) return []
+      if (isNoServer(err)) return []
+      throw err
+    }
+  }
+
+  async windowActivity(windowName: string): Promise<Record<string, number>> {
+    let out: string
+    try {
+      out = await this.tmux(['list-windows', '-a', '-F', '#{session_name}\t#{window_activity}\t#{window_name}'])
+    } catch (err) {
+      if (isNoServer(err)) return {}
+      throw err
+    }
+    return parseWindowActivity(out, windowName)
+  }
+
+  async capturePane(session: string, windowName: string): Promise<string | null> {
+    try {
+      // `=` on both parts: exact session and window names, never a prefix or pattern match.
+      return await this.tmux(['capture-pane', '-p', '-t', `=${session}:=${windowName}`])
+    } catch (err) {
+      if (err instanceof CommandError) return null
       throw err
     }
   }

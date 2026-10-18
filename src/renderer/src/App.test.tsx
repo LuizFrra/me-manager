@@ -386,7 +386,7 @@ describe('App side panel', () => {
     const state = await api.getState()
     const repo = state.themes[0].items[0]
     const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
-    api.getStatus = async () => ({ running: [], missing: [taskId] })
+    api.getStatus = async () => ({ running: [], missing: [taskId], activity: {} })
     await togglePanel(user)
     await user.click(taskButton('fix login bug')) // re-open triggers a status refresh
     expect(await within(panel()).findByText("⚠ This task's folder is missing.")).toBeInTheDocument()
@@ -1489,5 +1489,21 @@ describe('App git status', () => {
     const state = await api.getState()
     const repo = state.themes[0].items[0]
     expect(getGitStatus.mock.lastCall?.[0][0].taskId).toBe(repo.kind === 'repo' ? repo.tasks[1].id : '')
+  })
+})
+
+describe('App Claude activity', () => {
+  it('shows the selected session state in the header and the dot in the sidebar', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    api.getStatus = async () => ({ running: [taskId], missing: [], activity: { [taskId]: 'waiting' } })
+    await user.click(taskButton('fix login bug')) // re-open triggers a status refresh
+    expect(await screen.findByLabelText('Session: Waiting for you')).toBeInTheDocument()
+    expect(taskButton('fix login bug').querySelector('.dot')).toHaveClass('running', 'waiting')
   })
 })

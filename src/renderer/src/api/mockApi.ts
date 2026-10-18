@@ -59,7 +59,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
 
   const api: MeManagerApi = {
     getState: async () => state,
-    getStatus: async () => ({ running: [], missing: [] }),
+    getStatus: async () => ({ running: [], missing: [], activity: {} }),
     getGitStatus: async (targets) => {
       const out: Record<string, TaskGitStatus> = {}
       for (const target of targets) {

@@ -1,5 +1,6 @@
 import type { AppState, LiveStatus, Target, TaskGitStatus } from '../../../shared/types'
 import { gitBadges } from '../lib/gitStatus'
+import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
 import { shortcutLabel } from '../lib/shortcuts'
 
@@ -55,23 +56,20 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   }
   const expanded = (id: string): boolean => filter !== null || !collapsed.has(id)
   const shown = (set: keyof NonNullable<typeof filter>, id: string): boolean => !filter || filter[set].has(id)
-  const running = new Set(p.status.running)
   const missing = new Set(p.status.missing)
   const arrow = (id: string): string => (expanded(id) ? '▼' : '▶')
-  const dot = (id: string): React.JSX.Element =>
-    missing.has(id) ? (
-      <span className="dot missing" title="Path missing">
-        ⚠
-      </span>
-    ) : running.has(id) ? (
-      <span className="dot running" title="Session running">
-        ●
-      </span>
-    ) : (
-      <span className="dot idle" title="No session">
-        ○
+  // ○ no session, ⚠ path missing, ● running: pulsing accent while Claude works, amber while it waits for the
+  // user, green when idle (or when the claude window is gone).
+  const dot = (id: string): React.JSX.Element => {
+    const state = sessionState(p.status, id)
+    const info = SESSION_STATE_INFO[state]
+    const cls = state === 'none' || state === 'missing' || state === 'running' ? state : `running ${state}`
+    return (
+      <span className={`dot ${cls}`} title={info.title}>
+        {info.glyph}
       </span>
     )
+  }
   const isSelected = (itemId: string, taskId?: string): boolean =>
     p.selected?.itemId === itemId && p.selected?.taskId === taskId
 

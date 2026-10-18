@@ -146,6 +146,22 @@ export class FakeTmux implements TmuxApi {
   attachCommand(session: string): { file: string; args: string[] } {
     return { file: 'tmux', args: ['attach', session] }
   }
+  /** `window_activity` of each session's claude window (Unix seconds); sessions without one are left out. */
+  activity = new Map<string, number>()
+  /** Screen text by session, for capturePane. */
+  panes = new Map<string, string>()
+  captureCalls: string[] = []
+  async windowActivity(windowName: string): Promise<Record<string, number>> {
+    const out: Record<string, number> = {}
+    for (const [session, at] of this.activity) {
+      if (this.sessions.get(session)?.windows.some((w) => w.name === windowName)) out[session] = at
+    }
+    return out
+  }
+  async capturePane(session: string, windowName: string): Promise<string | null> {
+    this.captureCalls.push(`${session}:${windowName}`)
+    return this.panes.get(session) ?? null
+  }
 }
 
 export class FakePty implements PtyApi {

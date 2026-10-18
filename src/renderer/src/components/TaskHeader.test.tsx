@@ -55,3 +55,17 @@ describe('TaskHeader git line', () => {
     expect(screen.queryByLabelText('Git status')).not.toBeInTheDocument()
   })
 })
+
+describe('TaskHeader session state', () => {
+  it.each([
+    ['busy', 'Working'],
+    ['waiting', 'Waiting for you'],
+    ['idle', 'Idle'],
+    ['none', 'No session'],
+  ] as const)('shows %s as "%s"', (session, label) => {
+    render(<TaskHeader {...base} session={session} />)
+    const pill = screen.getByLabelText(`Session: ${label}`)
+    expect(pill).toHaveTextContent(label)
+    expect(pill).toHaveClass('session-state', session)
+  })
+})

@@ -50,6 +50,13 @@ export interface TmuxApi {
   selectWindow(session: string, index: number): Promise<void>
   killWindow(session: string, index: number): Promise<void>
   attachCommand(session: string): { file: string; args: string[] }
+  /**
+   * `#{window_activity}` (the last time it printed anything, in Unix seconds) of the window named `windowName` in
+   * every session on our socket, by session name, from one `list-windows -a` call. {} when the server isn't running.
+   */
+  windowActivity(windowName: string): Promise<Record<string, number>>
+  /** The visible text of a window's active pane (`capture-pane -p`), or null when there is no such window. */
+  capturePane(session: string, windowName: string): Promise<string | null>
 }
 
 export interface PtyApi {

@@ -7,6 +7,7 @@
   --accent: #4fa3ff;
   --danger: #e5534b;
   --ok: #3fb950;
+  --waiting: #e3b341;
   font-family:
     system-ui,
     -apple-system,
@@ -155,14 +156,43 @@ button:disabled {
 .row:focus-within .row-actions {
   display: flex;
 }
+.dot {
+  display: inline-block;
+  min-width: 0.9em;
+  text-align: center;
+}
 .dot.running {
   color: var(--ok);
+}
+.dot.running.busy {
+  color: var(--accent);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+.dot.running.waiting {
+  color: var(--waiting);
+  text-shadow: 0 0 6px #e3b34166;
 }
 .dot.missing {
   color: #d29922;
 }
-.dot.idle {
+.dot.none {
   color: var(--muted);
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 6px #4fa3ff99;
+  }
+  50% {
+    opacity: 0.35;
+    text-shadow: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.running.busy {
+    animation: none;
+  }
 }
 
 .main {
@@ -1443,6 +1473,48 @@ kbd {
 .session-badge-warn {
   border-color: #d29922;
   color: #d29922;
+}
+.session-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  padding: 1px 8px 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+.session-state-dot {
+  font-size: 9px;
+  line-height: 1;
+}
+.session-state.busy {
+  color: var(--accent);
+  border-color: #4fa3ff55;
+  background: #4fa3ff14;
+}
+.session-state.busy .session-state-dot {
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+.session-state.waiting {
+  color: var(--waiting);
+  border-color: #e3b34166;
+  background: #e3b3411a;
+}
+.session-state.idle .session-state-dot,
+.session-state.running .session-state-dot {
+  color: var(--ok);
+}
+.session-state.missing {
+  color: #d29922;
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-state.busy .session-state-dot {
+    animation: none;
+  }
 }
 
 /* ---------- Claude usage: header badge and usage view ---------- */

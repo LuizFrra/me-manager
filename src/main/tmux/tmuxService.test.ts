@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { TmuxService } from './tmuxService'
+import { parseWindowActivity, TmuxService } from './tmuxService'
 
 const hasTmux = await run('tmux', ['-V']).then(
   () => true,
@@ -33,6 +33,7 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
   it('lists no sessions before the server starts', async () => {
     await expect(svc.listSessions()).resolves.toEqual([])
     await expect(svc.hasSession('nope')).resolves.toBe(false)
+    await expect(svc.windowActivity('claude')).resolves.toEqual({})
   })
 
   it('creates a session with a named first window', async () => {
@@ -91,9 +92,58 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmt_evil_x_y')
   })
 
+  it("reports each session's claude window activity in one call, and captures its screen", async () => {
+    const before = Math.floor(Date.now() / 1000)
+    await svc.newSession('mmt_act_x_y', cwd, 'claude', 'sh')
+    await svc.newWindow('mmt_act_x_y', cwd, 'shell')
+    await svc.newSession('mmf_act_shell', cwd, 'shell', 'sh') // no claude window: not reported
+    const activity = await svc.windowActivity('claude')
+    expect(Object.keys(activity).sort()).toEqual(['mmt_a_b_c', 'mmt_act_x_y'])
+    expect(activity['mmt_act_x_y']).toBeGreaterThanOrEqual(before - 1)
+    expect(activity['mmt_act_x_y']).toBeLessThanOrEqual(Math.floor(Date.now() / 1000))
+
+    // Output moves the activity time forward (tmux reports whole seconds).
+    await new Promise((r) => setTimeout(r, 1100))
+    await run('tmux', [
+      '-L',
+      socket,
+      'send-keys',
+      '-t',
+      '=mmt_act_x_y:=claude',
+      "printf 'Do you want to proceed?\\n'",
+      'Enter',
+    ])
+    await new Promise((r) => setTimeout(r, 300))
+    const later = await svc.windowActivity('claude')
+    expect(later['mmt_act_x_y']).toBeGreaterThan(activity['mmt_act_x_y'])
+
+    const screen = await svc.capturePane('mmt_act_x_y', 'claude')
+    expect(screen).toMatch(/^Do you want to proceed\?$/m)
+    await expect(svc.capturePane('mmt_act_x', 'claude')).resolves.toBeNull() // exact session names only
+    await expect(svc.capturePane('mmf_act_shell', 'claude')).resolves.toBeNull()
+    await svc.killSession('mmt_act_x_y')
+    await svc.killSession('mmf_act_shell')
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)
     await expect(svc.killSession('mmt_a_b_c')).resolves.toBeUndefined()
+  })
+})
+
+describe('parseWindowActivity', () => {
+  it('keeps the named windows, the latest per session, and skips malformed lines', () => {
+    const out = [
+      'mmt_a_b_c\t100\tclaude',
+      'mmt_a_b_c\t250\tclaude', // two windows named claude: the latest wins
+      'mmt_a_b_c\t300\tshell',
+      'mmf_t_notes\t200\tclaude',
+      'mmf_t_odd\t400\tclaude\textra', // a name with a tab is not "claude"
+      'broken line',
+      'mmt_x_y_z\t\tclaude',
+      '',
+    ].join('\n')
+    expect(parseWindowActivity(out, 'claude')).toEqual({ mmt_a_b_c: 250, mmf_t_notes: 200 })
   })
 })
