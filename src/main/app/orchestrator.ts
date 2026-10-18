@@ -40,7 +40,7 @@ import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
 import { mapLimit } from '../concurrency'
-import type { AppService, OrchestratorDeps } from '../contracts'
+import type { AppService, OrchestratorDeps, UsageSummaries } from '../contracts'
 import { baseBranchName } from '../git/gh'
 import { taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
@@ -135,6 +135,9 @@ export function resolvePrompt(strategy: UpdateStrategy, baseRef: string, files: 
   const action = strategy === 'rebase' ? `rebase this branch onto ${baseRef}` : `merge ${baseRef} into this branch`
   return `Please ${action} and resolve the conflicts in: ${shown}${more}`
 }
+
+/** The usage group of a theme's targets. */
+const themeGroup = (themeId: string): string => `theme:${themeId}`
 
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
@@ -864,20 +867,27 @@ export class Orchestrator implements AppService {
     return targets
   }
 
-  /** Every known root is passed along, so a message is counted for the most specific one only. */
-  async getUsage(target: Target): Promise<UsageSummary> {
-    const { root } = this.targetRoot(target)
-    const { roots } = await this.deps.usage.summarize(this.usageTargets().map((t) => t.path))
-    return roots[root] ?? emptyUsageSummary()
-  }
-
-  async getUsageReport(): Promise<UsageReport> {
+  /**
+   * Usage of every target and theme, and the total. getUsage asks for exactly this too, so the usage service's
+   * cached aggregation serves both instead of each evicting the other's. Every known root is passed along, so a
+   * message is counted for the most specific one only.
+   */
+  private async allUsage(): Promise<{ targets: Omit<UsageTargetReport, 'usage'>[]; usage: UsageSummaries }> {
     const targets = this.usageTargets()
-    const themeGroup = (themeId: string): string => `theme:${themeId}`
     const groups: Record<string, string[]> = { total: targets.map((t) => t.path) }
     for (const theme of this.state.themes) groups[themeGroup(theme.id)] = []
     for (const t of targets) groups[themeGroup(t.target.themeId)].push(t.path)
-    const usage = await this.deps.usage.summarize(groups.total, groups)
+    return { targets, usage: await this.deps.usage.summarize(groups.total, groups) }
+  }
+
+  async getUsage(target: Target): Promise<UsageSummary> {
+    const { root } = this.targetRoot(target)
+    const { usage } = await this.allUsage()
+    return usage.roots[root] ?? emptyUsageSummary()
+  }
+
+  async getUsageReport(): Promise<UsageReport> {
+    const { targets, usage } = await this.allUsage()
     return {
       generatedAt: new Date().toISOString(),
       total: usage.groups.total ?? emptyUsageSummary(),

@@ -1034,6 +1034,16 @@ describe('Orchestrator: usage', () => {
     expect(usage.calls[0].roots).toEqual(['/wt/client-x/my-api/fix', '/docs/notes', '/home/me/blog'])
   })
 
+  it('asks for the same usage for a target as for the report, so the two share one cached aggregation', async () => {
+    const { orch, usage, taskTarget } = await withTargets()
+    await orch.getUsage(taskTarget)
+    await orch.getUsageReport()
+    await orch.getUsage(taskTarget)
+    expect(usage.calls).toHaveLength(3)
+    expect(usage.calls[1]).toEqual(usage.calls[0])
+    expect(usage.calls[2]).toEqual(usage.calls[0])
+  })
+
   it('works for a target whose folder is gone, but not for a repo without a task', async () => {
     const ctx = await withTargets()
     ctx.deps.pathExists = () => false
