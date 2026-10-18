@@ -180,6 +180,27 @@ export interface Settings {
   showStatusBar: boolean
 }
 
+/**
+ * Whether each built-in Claude flag applies to the sessions the app starts, once the user's own arguments
+ * (Settings.claudeArgs) are counted: a toggle is moot when those arguments set the option themselves
+ * (`--permission-mode acceptEdits` keeps permissions on), and they can turn it on with the toggle off.
+ */
+export interface EffectiveClaudeFlags {
+  /** `--remote-control` is in the command. */
+  remoteControl: boolean
+  /** `--dangerously-skip-permissions` or `--permission-mode bypassPermissions` is in the command. */
+  skipPermissions: boolean
+}
+
+/** Settings as getSettings and updateSettings return them. */
+export interface SettingsView extends Settings {
+  /**
+   * What applies (see EffectiveClaudeFlags), worked out from the settings on every call; never saved, and
+   * dropped when sent back in an updateSettings patch. Optional for API stand-ins that predate it.
+   */
+  effective?: EffectiveClaudeFlags
+}
+
 /** `rebase`: `git rebase <base>` (a linear history); `merge`: `git merge --no-edit <base>` (a merge commit). */
 export type UpdateStrategy = 'rebase' | 'merge'
 
@@ -243,9 +264,13 @@ export interface MeManagerApi {
   /** Normalizes (see normalizeUiState) and saves the UI state for the next start. Saves run one at a time. */
   saveUiState(state: UiState): Promise<void>
 
-  getSettings(): Promise<Settings>
-  /** Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result. */
-  updateSettings(patch: Partial<Settings>): Promise<Settings>
+  /** The settings, with which built-in Claude flags apply (`effective`). */
+  getSettings(): Promise<SettingsView>
+  /**
+   * Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result, with
+   * `effective` as getSettings has it.
+   */
+  updateSettings(patch: Partial<Settings>): Promise<SettingsView>
 
   createTheme(name: string): Promise<AppState>
   /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */

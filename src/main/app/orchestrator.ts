@@ -21,6 +21,7 @@ import type {
   SearchOptions,
   SearchResult,
   Settings,
+  SettingsView,
   TabInfo,
   Target,
   Task,
@@ -35,6 +36,7 @@ import type {
   UsageSummary,
   UsageTargetReport,
 } from '../../shared/types'
+import { builtInClaudeFlags, effectiveClaudeFlags } from '../../shared/settings'
 import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
@@ -138,6 +140,9 @@ export function resolvePrompt(strategy: UpdateStrategy, baseRef: string, files: 
 
 /** The usage group of a theme's targets. */
 const themeGroup = (themeId: string): string => `theme:${themeId}`
+
+/** Settings as the renderer gets them: with the built-in Claude flags that apply. */
+const withEffective = (settings: Settings): SettingsView => ({ ...settings, effective: effectiveClaudeFlags(settings) })
 
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
@@ -254,15 +259,8 @@ export class Orchestrator implements AppService {
    * when the user's arguments already set that option. Read at each start, so a change applies to the next session.
    */
   private claudeArgs(label: string): string[] {
-    const { claudeArgs, remoteControl, skipPermissions } = this.deps.settings.get()
-    const sets = (...options: string[]): boolean =>
-      claudeArgs.some((arg) => options.some((o) => arg === o || arg.startsWith(`${o}=`)))
-    const flags: string[] = []
-    if (remoteControl && !sets('--remote-control')) flags.push('--remote-control', label)
-    if (skipPermissions && !sets('--dangerously-skip-permissions', '--permission-mode')) {
-      flags.push('--dangerously-skip-permissions')
-    }
-    return [...flags, ...claudeArgs]
+    const settings = this.deps.settings.get()
+    return [...builtInClaudeFlags(settings, label), ...settings.claudeArgs]
   }
 
   /**
@@ -313,13 +311,16 @@ export class Orchestrator implements AppService {
     await this.deps.ui.save(normalizeUiState(state, this.state))
   }
 
-  async getSettings(): Promise<Settings> {
-    return this.deps.settings.get()
+  async getSettings(): Promise<SettingsView> {
+    return withEffective(this.deps.settings.get())
   }
 
-  /** Settings have their own file and queue, so this doesn't wait for state mutations. */
-  async updateSettings(patch: Partial<Settings>): Promise<Settings> {
-    return this.deps.settings.update(patch)
+  /**
+   * Settings have their own file and queue, so this doesn't wait for state mutations. A patch's `effective` (the
+   * renderer may send back what it got) is dropped by normalizeSettings like any unknown key.
+   */
+  async updateSettings(patch: Partial<Settings>): Promise<SettingsView> {
+    return withEffective(await this.deps.settings.update(patch))
   }
 
   /**
