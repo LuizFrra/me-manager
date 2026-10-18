@@ -2,9 +2,17 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { GitService, parseBranchRefs, parseLastCommit, parseLeftRightCount } from './gitService'
+import { CommandError } from '../exec'
+import {
+  commandFailure,
+  GitService,
+  parseBranchRefs,
+  parseLastCommit,
+  parseLeftRightCount,
+  summarizeGitError,
+} from './gitService'
 import { commitFile, git, makeClonedRepo, makeLocalRepo } from './testRepos'
 
 const svc = new GitService()
@@ -327,5 +335,157 @@ describe('taskStatus parsers', () => {
       relativeDate: '2 hours ago',
     })
     expect(parseLastCommit('')).toBeUndefined()
+  })
+})
+
+/** Runs the tests with only the given git config as the global one: no identity, signing or hooks of the machine's. */
+function withGlobalConfig(config: string): void {
+  const keys = [
+    'GIT_CONFIG_GLOBAL',
+    'GIT_CONFIG_NOSYSTEM',
+    'EMAIL',
+    'GIT_AUTHOR_NAME',
+    'GIT_AUTHOR_EMAIL',
+    'GIT_COMMITTER_NAME',
+    'GIT_COMMITTER_EMAIL',
+  ]
+  const saved = new Map(keys.map((k) => [k, process.env[k]]))
+  beforeAll(async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'mm-gitconfig-')))
+    await writeFile(join(dir, 'gitconfig'), config)
+    for (const k of keys) delete process.env[k]
+    process.env.GIT_CONFIG_GLOBAL = join(dir, 'gitconfig')
+    process.env.GIT_CONFIG_NOSYSTEM = '1'
+  })
+  afterAll(() => {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+}
+
+const NO_SIGNING = '[commit]\n\tgpgsign = false\n[core]\n\thooksPath = /dev/null\n'
+
+describe('commitAll', () => {
+  withGlobalConfig(`[user]\n\tname = Test\n\temail = test@example.com\n${NO_SIGNING}`)
+
+  it('stages everything (new, changed, deleted) and commits it with the message verbatim', async () => {
+    const { wt } = await withTask()
+    await commitFile(wt, 'old.txt', 'old\n', 'add old')
+    await writeFile(join(wt, 'README.md'), 'changed\n')
+    await writeFile(join(wt, 'new file ç.txt'), 'new\n')
+    await rm(join(wt, 'old.txt'))
+    const message = '-fix: the login\n\n# not a comment\nbody $(id)'
+    const result = await svc.commitAll(wt, message)
+    expect(result.files).toBe(3)
+    expect(result.sha).toBe((await git(wt, 'rev-parse', '--short', 'HEAD')).trim())
+    expect(await git(wt, 'log', '-1', '--format=%B')).toBe(`${message}\n\n`)
+    expect(await git(wt, 'status', '--porcelain')).toBe('')
+    expect(
+      (await git(wt, '-c', 'core.quotepath=false', 'show', '--name-status', '--format=', 'HEAD'))
+        .split('\n')
+        .filter(Boolean)
+        .sort(),
+    ).toEqual(['D\told.txt', 'M\tREADME.md', 'A\tnew file ç.txt'].sort())
+  })
+
+  it('refuses when there is nothing to commit', async () => {
+    const { wt } = await withTask()
+    const before = await git(wt, 'rev-parse', 'HEAD')
+    await expect(svc.commitAll(wt, 'nothing')).rejects.toThrow('Nothing to commit')
+    expect(await git(wt, 'rev-parse', 'HEAD')).toBe(before)
+  })
+})
+
+describe('commitAll without an identity', () => {
+  withGlobalConfig(NO_SIGNING)
+
+  it("fails with git's message instead of guessing one", async () => {
+    const { wt } = await withTask()
+    const before = await git(wt, 'rev-parse', 'HEAD')
+    await writeFile(join(wt, 'a.txt'), 'a\n')
+    const err = await svc.commitAll(wt, 'add a').catch((e: Error) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/^git commit failed: Author identity unknown .*Please tell me who you are/)
+    expect((err as Error).message).toMatch(/auto-detection is disabled/)
+    expect(await git(wt, 'rev-parse', 'HEAD')).toBe(before)
+  })
+})
+
+describe('push', () => {
+  withGlobalConfig(`[user]\n\tname = Test\n\temail = test@example.com\n${NO_SIGNING}`)
+
+  it('pushes the branch to origin and sets it as the upstream', async () => {
+    const { root, wt, branch } = await withTask()
+    await commitFile(wt, 'a.txt', 'a\n', 'add a')
+    await svc.push(wt, branch)
+    expect((await git(wt, 'rev-parse', '--abbrev-ref', '@{u}')).trim()).toBe(`origin/${branch}`)
+    const remote = await run('git', ['-C', join(root, 'origin.git'), 'rev-parse', `refs/heads/${branch}`])
+    expect(remote).toBe(await git(wt, 'rev-parse', 'HEAD'))
+    // Up to date: pushing again succeeds.
+    await expect(svc.push(wt, branch)).resolves.toBeUndefined()
+  })
+
+  it("summarizes git's error when the push is rejected, without hints", async () => {
+    const { root, wt, branch } = await withTask()
+    await commitFile(wt, 'a.txt', 'a\n', 'add a')
+    await svc.push(wt, branch)
+    // Someone else pushes to the branch; our amended commit no longer fast-forwards.
+    const other = join(root, 'other')
+    await run('git', ['clone', '-b', branch, join(root, 'origin.git'), other])
+    await commitFile(other, 'b.txt', 'b\n', 'add b')
+    await git(other, 'push', 'origin', branch)
+    await git(wt, 'commit', '--amend', '-m', 'add a, amended')
+    const err = (await svc.push(wt, branch).catch((e: Error) => e)) as Error
+    expect(err.message).toMatch(/^git push failed: ! \[rejected\]\s+claude\/client-x\/fix -> claude\/client-x\/fix/)
+    expect(err.message).toContain('error: failed to push some refs')
+    expect(err.message).not.toContain('hint:')
+  })
+
+  it('fails without prompting when origin is unreachable', async () => {
+    const { clone, wt, branch } = await withTask()
+    await git(clone, 'remote', 'set-url', 'origin', join(clone, 'missing.git'))
+    await expect(svc.push(wt, branch)).rejects.toThrow(
+      /^git push failed: fatal: .*does not appear to be a git repository/,
+    )
+  })
+
+  it('refuses an option-like branch', async () => {
+    const { wt } = await withTask()
+    await expect(svc.push(wt, '--mirror')).rejects.toThrow('Invalid branch: --mirror')
+  })
+})
+
+describe('git error summaries', () => {
+  it('keeps the fatal, error and rejected lines, dropping hints', () => {
+    const stderr = [
+      'To github.com:acme/api.git',
+      ' ! [rejected]        x -> x (fetch first)',
+      "error: failed to push some refs to 'github.com:acme/api.git'",
+      'hint: Updates were rejected because the remote contains work that you do not',
+      'hint: have locally.',
+      '',
+    ].join('\n')
+    expect(summarizeGitError(stderr)).toBe(
+      "! [rejected] x -> x (fetch first) error: failed to push some refs to 'github.com:acme/api.git'",
+    )
+    expect(summarizeGitError('To x\nsomething odd\n')).toBe('To x something odd')
+    expect(summarizeGitError(`fatal: ${'x'.repeat(1000)}`)).toHaveLength(500)
+  })
+
+  it('words a timeout and passes on errors that are not command failures', () => {
+    const timedOut = new CommandError(
+      'git push -u origin x',
+      null,
+      '',
+      'git push -u origin x timed out after 60 s',
+      true,
+    )
+    expect(commandFailure('git push', timedOut).message).toBe('git push timed out after 60 s')
+    const plain = new Error('boom')
+    expect(commandFailure('git push', plain)).toBe(plain)
+    const noStderr = new CommandError('git x', 1, '', 'git x failed: exit code 1')
+    expect(commandFailure('git x', noStderr).message).toBe('git x failed: exit code 1')
   })
 })

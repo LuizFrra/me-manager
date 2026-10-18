@@ -1,6 +1,8 @@
 import type {
   AppState,
   ChangeList,
+  CommitResult,
+  PullRequestResult,
   FileContent,
   FileList,
   TabInfo,
@@ -10,6 +12,7 @@ import type {
 } from '../../shared/types'
 import type {
   FilesApi,
+  GhApi,
   GitApi,
   LauncherApi,
   OrchestratorDeps,
@@ -19,6 +22,7 @@ import type {
   UsageApi,
   UsageSummaries,
 } from '../contracts'
+import { GH_INSTALL_HINT } from '../../shared/git'
 import { emptyUsageSummary } from '../../shared/usage'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
@@ -101,6 +105,21 @@ export class FakeGit implements GitApi {
   statusGate: Promise<void> | null = null
   inFlightStatus = 0
   peakInFlightStatus = 0
+  /** When set, commitAll/push reject with it. */
+  failAction: string | null = null
+  /** When set, commitAll/push wait for it, so tests can hold them in flight. */
+  actionGate: Promise<void> | null = null
+  async commitAll(worktreePath: string, message: string): Promise<CommitResult> {
+    this.calls.push(`commitAll ${worktreePath} ${JSON.stringify(message)}`)
+    if (this.actionGate) await this.actionGate
+    if (this.failAction) throw new Error(this.failAction)
+    return { sha: 'abc1234', files: 3 }
+  }
+  async push(worktreePath: string, branch: string): Promise<void> {
+    this.calls.push(`push ${worktreePath} ${branch}`)
+    if (this.actionGate) await this.actionGate
+    if (this.failAction) throw new Error(this.failAction)
+  }
   async taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus> {
     this.statusCalls.push(`${worktreePath} ${baseRef}`)
     this.peakInFlightStatus = Math.max(this.peakInFlightStatus, ++this.inFlightStatus)
@@ -112,6 +131,23 @@ export class FakeGit implements GitApi {
     } finally {
       this.inFlightStatus--
     }
+  }
+}
+
+export class FakeGh implements GhApi {
+  installed = true
+  calls: string[] = []
+  /** What pullRequest resolves with; set `fail` to reject instead. */
+  result: PullRequestResult = { url: 'https://github.com/acme/my-api/pull/7', created: true }
+  fail: string | null = null
+  available(): boolean {
+    return this.installed
+  }
+  async pullRequest(worktreePath: string, branch: string, baseBranch: string): Promise<PullRequestResult> {
+    this.calls.push(`pullRequest ${worktreePath} ${branch} ${baseBranch}`)
+    if (!this.installed) throw new Error(GH_INSTALL_HINT)
+    if (this.fail) throw new Error(this.fail)
+    return this.result
   }
 }
 
@@ -259,6 +295,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   deps: OrchestratorDeps
   store: MemoryStore
   git: FakeGit
+  gh: FakeGh
   tmux: FakeTmux
   pty: FakePty
   files: FakeFiles
@@ -268,6 +305,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
+  const gh = new FakeGh()
   const tmux = new FakeTmux()
   const pty = new FakePty()
   const files = new FakeFiles()
@@ -277,6 +315,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const deps: OrchestratorDeps = {
     store,
     git,
+    gh,
     tmux,
     pty,
     files,
@@ -287,5 +326,5 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     pathExists: () => true,
     ...overrides,
   }
-  return { deps, store, git, tmux, pty, files, settings, launcher, usage }
+  return { deps, store, git, gh, tmux, pty, files, settings, launcher, usage }
 }

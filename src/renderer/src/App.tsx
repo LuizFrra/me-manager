@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppState,
+  GitTools,
   LiveStatus,
   MeManagerApi,
   NewTaskOptions,
@@ -8,6 +9,7 @@ import type {
   Settings,
   TabInfo,
   Target,
+  Task,
   TaskGitStatus,
   UnsavedWork,
   UsageSummary,
@@ -15,11 +17,12 @@ import type {
 import { hasUnsavedWork } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
+import { GH_INSTALL_HINT } from '../../shared/git'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
-import { NameDialog, NewTaskDialog, NotesDialog, RemoveTaskDialog } from './components/Dialogs'
+import { CommitDialog, NameDialog, NewTaskDialog, NotesDialog, RemoveTaskDialog } from './components/Dialogs'
 import { TaskHeader } from './components/TaskHeader'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
@@ -28,6 +31,8 @@ import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { useToasts } from './lib/toasts'
+import type { GitActionKind } from './lib/gitActions'
+import { plural } from './lib/gitStatus'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
@@ -56,6 +61,7 @@ type Dialog =
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
   | { kind: 'newTask'; themeId: string; repoId: string; repoName: string }
+  | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'settings' }
 
 type AppAction =
@@ -72,6 +78,9 @@ type AppAction =
         | 'settings'
         | 'help'
         | 'usage'
+        | 'commit'
+        | 'push'
+        | 'openPr'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -106,6 +115,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [usageOpen, setUsageOpen] = useState(false)
   // The selected target's usage, tagged with its targetKey so another target's numbers never show.
   const [usage, setUsage] = useState<{ key: string; summary: UsageSummary } | null>(null)
+  // gh is assumed missing until main says otherwise; the PR button then explains how to install it.
+  const [gitTools, setGitTools] = useState<GitTools>({ gh: false })
+  // The git action running on each task, by targetKey (one at a time per task, like main's queue).
+  const [gitBusy, setGitBusy] = useState<Record<string, GitActionKind>>({})
+  const gitBusyRef = useRef<Record<string, GitActionKind>>({})
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
@@ -227,6 +241,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     checkPrereqs()
     void attempt(async () => setState(await api.getState()))
     api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
+    api.getGitTools().then(setGitTools, () => {}) // without it, "PR" says gh is missing
     void attempt(async () => setSettings(await api.getSettings()))
   }, [api, attempt, checkPrereqs])
 
@@ -401,6 +416,65 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     })
   }
 
+  /**
+   * Runs a git action on a task, marking it busy (the header's Git buttons are off meanwhile), showing a failure
+   * as an error toast and refreshing the git badges after, whatever the outcome. Undefined when it failed or the
+   * task already had an action running.
+   */
+  const gitAction = async <T,>(target: Target, kind: GitActionKind, fn: () => Promise<T>): Promise<T | undefined> => {
+    const key = targetKey(target)
+    if (gitBusyRef.current[key]) return undefined
+    const mark = (next: Record<string, GitActionKind>): void => {
+      gitBusyRef.current = next
+      setGitBusy(next)
+    }
+    mark({ ...gitBusyRef.current, [key]: kind })
+    try {
+      return await attempt(fn)
+    } finally {
+      const rest = { ...gitBusyRef.current }
+      delete rest[key]
+      mark(rest)
+      refreshGit()
+    }
+  }
+
+  /** The selected target when it is a repo task, with the task. */
+  const taskOfSelection = (): { target: Target; task: Task } | null => {
+    const target = selectedRef.current
+    const task = target?.taskId ? resolveTarget(state, target)?.task : undefined
+    return target && task ? { target, task } : null
+  }
+
+  const commitAll = (): void => {
+    const found = taskOfSelection()
+    if (found) setDialog({ kind: 'commit', target: found.target, taskName: found.task.name, branch: found.task.branch })
+  }
+
+  const doCommit = async (target: Target, message: string): Promise<void> => {
+    const result = await gitAction(target, 'commit', () => api.commitAll(target, message))
+    if (!result) return
+    setDialog(null)
+    showInfo(`Committed ${plural(result.files, 'file')}`)
+  }
+
+  const push = async (): Promise<void> => {
+    const found = taskOfSelection()
+    if (!found) return
+    const result = await gitAction(found.target, 'push', () => api.pushTask(found.target))
+    if (result) showInfo(`Pushed ${result.branch}`)
+  }
+
+  const openPullRequest = async (): Promise<void> => {
+    const found = taskOfSelection()
+    if (!found) return
+    if (!gitTools.gh) return showError(GH_INSTALL_HINT)
+    const result = await gitAction(found.target, 'pr', () => api.createPullRequest(found.target))
+    if (!result) return
+    if (await attempt(async () => (await api.openExternal(result.url), true)))
+      showInfo(result.created ? `Created a pull request for ${found.task.branch}` : 'Opened the pull request')
+  }
+
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
@@ -487,7 +561,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
       action('Reveal in file manager', 'fileManager')
     }
-    if (selected?.taskId) action('Rename current task', 'renameTask')
+    if (selected?.taskId) {
+      action('Rename current task', 'renameTask')
+      action('Git: Commit all…', 'commit')
+      action('Git: Push branch', 'push')
+      action(gitTools.gh ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
+    }
     for (const { kind, label } of copiesFor(selected))
       commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
     action('Show usage', 'usage', shortcutLabel('usage'))
@@ -549,6 +628,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'usage') setUsageOpen(true)
     else if (action.type === 'openEditor') openExternally('editor')
     else if (action.type === 'fileManager') openExternally('fileManager')
+    else if (action.type === 'commit') commitAll()
+    else if (action.type === 'push') void push()
+    else if (action.type === 'openPr') void openPullRequest()
     else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
       if (entry) void copy(entry)
@@ -612,6 +694,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
               baseRef={selectedTask?.baseRef}
               session={sessionState(status, targetKey(selected))}
+              gitActions={
+                selectedTask
+                  ? {
+                      branch: selectedTask.branch,
+                      busy: gitBusy[targetKey(selected)],
+                      ghAvailable: gitTools.gh,
+                      onCommit: commitAll,
+                      onPush: () => void push(),
+                      onOpenPr: () => void openPullRequest(),
+                    }
+                  : undefined
+              }
             />
             <TabBar
               tabs={tabs}
@@ -695,6 +789,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           taskName={dialog.taskName}
           initial={dialog.notes}
           onSave={dialog.onSave}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'commit' && (
+        <CommitDialog
+          taskName={dialog.taskName}
+          branch={dialog.branch}
+          loadChanges={() => api.listChanges(dialog.target, 'uncommitted')}
+          onCommit={(message) => doCommit(dialog.target, message)}
           onCancel={() => setDialog(null)}
         />
       )}

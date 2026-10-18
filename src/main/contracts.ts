@@ -1,9 +1,11 @@
 import type {
   AppState,
   ChangeList,
+  CommitResult,
   FileContent,
   FileList,
   MeManagerApi,
+  PullRequestResult,
   Settings,
   TabInfo,
   TaskGitStatus,
@@ -41,6 +43,24 @@ export interface GitApi {
    * Rejects when the worktree is not a git work tree.
    */
   taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus>
+  /**
+   * `git add -A`, then `git commit -m <message>` with `user.useConfigOnly`, so a missing identity fails with
+   * git's message instead of a guessed one. Rejects with "Nothing to commit" when nothing is staged.
+   */
+  commitAll(worktreePath: string, message: string): Promise<CommitResult>
+  /** `git push -u origin <branch>`, non-interactive, giving up after a timeout. */
+  push(worktreePath: string, branch: string): Promise<void>
+}
+
+/** The GitHub CLI. Never through a shell. */
+export interface GhApi {
+  /** Whether `gh` is on PATH; looked up once. */
+  available(): boolean
+  /**
+   * `gh pr create --fill --head <branch> --base <baseBranch>` in the worktree, unless the branch already has a
+   * pull request, then the pull request's URL from `gh pr view`.
+   */
+  pullRequest(worktreePath: string, branch: string, baseBranch: string): Promise<PullRequestResult>
 }
 
 export interface TmuxApi {
@@ -139,6 +159,7 @@ export type AppService = Omit<
 export interface OrchestratorDeps {
   store: StoreApi
   git: GitApi
+  gh: GhApi
   tmux: TmuxApi
   pty: PtyApi
   files: FilesApi

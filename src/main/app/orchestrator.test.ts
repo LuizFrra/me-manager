@@ -11,7 +11,15 @@ import {
   claudePromptCommand,
   normalizeTaskOptions,
 } from './orchestrator'
-import { MAX_TASK_PROMPT, type AppState, type Target, type Task, type TaskGitStatus } from '../../shared/types'
+import { GH_INSTALL_HINT } from '../../shared/git'
+import {
+  MAX_COMMIT_MESSAGE,
+  MAX_TASK_PROMPT,
+  type AppState,
+  type Target,
+  type Task,
+  type TaskGitStatus,
+} from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { makeDeps } from './fakes'
 
@@ -983,5 +991,114 @@ describe('Orchestrator: Claude activity', () => {
     const status = await orch.getStatus()
     expect(status.running).toContain(task.id)
     expect(status.activity).toEqual({})
+  })
+})
+
+describe('Orchestrator: git actions', () => {
+  async function withTask(): Promise<Ctx & { target: Target; task: Task }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    ctx.git.calls = []
+    ctx.git.statuses.set(task.worktreePath, { ahead: 0, behind: 0, uncommitted: 2, branch: task.branch })
+    return { ...ctx, target: { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }, task }
+  }
+
+  it('commits all with the trimmed message in the worktree', async () => {
+    const { orch, git, target } = await withTask()
+    await expect(orch.commitAll(target, '  Fix the login\n\nDetails  ')).resolves.toEqual({ sha: 'abc1234', files: 3 })
+    expect(git.calls).toEqual([`commitAll /wt/client-x/my-api/fix "Fix the login\\n\\nDetails"`])
+  })
+
+  it('refuses an empty, too long or non-text message before touching git', async () => {
+    const { orch, git, target } = await withTask()
+    await expect(orch.commitAll(target, '  \n ')).rejects.toThrow('Write a commit message first')
+    await expect(orch.commitAll(target, 'x'.repeat(MAX_COMMIT_MESSAGE + 1))).rejects.toThrow(
+      'The commit message is limited to 5,000 characters',
+    )
+    await expect(orch.commitAll(target, 42 as unknown as string)).rejects.toThrow('Write a commit message first')
+    await expect(orch.commitAll(target, 'x'.repeat(MAX_COMMIT_MESSAGE))).resolves.toBeDefined()
+    expect(git.calls).toHaveLength(1)
+  })
+
+  it('pushes the task branch', async () => {
+    const { orch, git, target } = await withTask()
+    await expect(orch.pushTask(target)).resolves.toEqual({ branch: 'claude/client-x/fix' })
+    expect(git.calls).toEqual(['push /wt/client-x/my-api/fix claude/client-x/fix'])
+  })
+
+  it("opens a pull request into the base branch's name on GitHub", async () => {
+    const { orch, gh, target } = await withTask()
+    await expect(orch.getGitTools()).resolves.toEqual({ gh: true })
+    await expect(orch.createPullRequest(target)).resolves.toEqual({
+      url: 'https://github.com/acme/my-api/pull/7',
+      created: true,
+    })
+    expect(gh.calls).toEqual(['pullRequest /wt/client-x/my-api/fix claude/client-x/fix main'])
+    gh.installed = false
+    await expect(orch.getGitTools()).resolves.toEqual({ gh: false })
+    await expect(orch.createPullRequest(target)).rejects.toThrow(GH_INSTALL_HINT)
+  })
+
+  it('reads the git status again after an action, even when it fails', async () => {
+    const { orch, git, target, task } = await withTask()
+    await orch.getGitStatus([target])
+    await orch.getGitStatus([target]) // cached
+    expect(git.statusCalls).toHaveLength(1)
+    await orch.commitAll(target, 'msg')
+    git.statuses.set(task.worktreePath, { ahead: 1, behind: 0, uncommitted: 0, branch: task.branch })
+    expect((await orch.getGitStatus([target]))[task.id]).toMatchObject({ ahead: 1, uncommitted: 0 })
+    git.failAction = 'git push failed: rejected'
+    await expect(orch.pushTask(target)).rejects.toThrow('git push failed: rejected')
+    await orch.getGitStatus([target])
+    expect(git.statusCalls).toHaveLength(3)
+  })
+
+  it('refuses folders, repos without a task and missing worktrees', async () => {
+    const { orch, git, deps, themeId, repoId, target, task } = await withTask()
+    const folderId = (await orch.addFolder(themeId, '/docs')).themes[0].items[1].id
+    await expect(orch.pushTask({ themeId, itemId: folderId })).rejects.toThrow(/only available for repository tasks/)
+    await expect(orch.pushTask({ themeId, itemId: repoId })).rejects.toThrow(/only available for repository tasks/)
+    deps.pathExists = (p) => p !== task.worktreePath
+    await expect(orch.commitAll(target, 'x')).rejects.toThrow(`Folder not found: ${task.worktreePath}`)
+    expect(git.calls).toEqual([])
+  })
+
+  it("runs one task's actions one at a time, without holding up other mutations", async () => {
+    const { orch, git, target } = await withTask()
+    let release = (): void => {}
+    git.actionGate = new Promise<void>((r) => (release = r))
+    const push = orch.pushTask(target)
+    const commit = orch.commitAll(target, 'msg')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.calls).toEqual(['push /wt/client-x/my-api/fix claude/client-x/fix']) // commit waits for the push
+    await expect(orch.createTheme('Other')).resolves.toBeDefined() // the state queue is free
+    release()
+    await Promise.all([push, commit])
+    expect(git.calls.at(-1)).toMatch(/^commitAll /)
+  })
+
+  it('removes a task only after its running git action', async () => {
+    const { orch, git, themeId, repoId, target, task } = await withTask()
+    let release = (): void => {}
+    git.actionGate = new Promise<void>((r) => (release = r))
+    const push = orch.pushTask(target)
+    const removal = orch.removeTask(themeId, repoId, task.id, false)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.calls).not.toContain(`removeWorktree ${task.worktreePath}`)
+    release()
+    await push
+    await removal
+    expect(git.calls.at(-1)).toBe(`removeWorktree ${task.worktreePath}`)
+    await expect(orch.pushTask(target)).rejects.toThrow(/not found/i)
+  })
+
+  it('lists the uncommitted changes against HEAD', async () => {
+    const { orch, files, target } = await withTask()
+    await orch.listChanges(target, 'uncommitted')
+    await orch.listChanges(target)
+    expect(files.calls).toEqual([
+      'listChanges /wt/client-x/my-api/fix HEAD',
+      'listChanges /wt/client-x/my-api/fix origin/main',
+    ])
   })
 })

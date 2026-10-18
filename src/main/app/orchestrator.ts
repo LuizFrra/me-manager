@@ -1,14 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { MAX_TASK_PROMPT } from '../../shared/types'
+import { MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT } from '../../shared/types'
 import type {
   AppState,
   BranchList,
   ChangeList,
+  ChangeScope,
   ClaudeActivity,
+  CommitResult,
+  GitTools,
   FileContent,
   FileList,
   LiveStatus,
   NewTaskOptions,
+  PullRequestResult,
+  PushResult,
+  Repo,
   Settings,
   TabInfo,
   Target,
@@ -24,6 +30,7 @@ import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
 import { mapLimit } from '../concurrency'
 import type { AppService, OrchestratorDeps } from '../contracts'
+import { baseBranchName } from '../git/gh'
 import { taskWorktreePath } from '../paths'
 import * as m from '../store/mutations'
 import { isRecentlyActive, looksWaiting } from '../tmux/activity'
@@ -85,6 +92,9 @@ export function normalizeTaskOptions(raw: unknown): NewTaskOptions {
   return options
 }
 
+const STATE_QUEUE = 'state'
+const taskQueue = (taskId: string): string => `task:${taskId}`
+
 export interface OrchestratorOptions {
   /** Overrides FETCH_TIMEOUT_MS (for tests). */
   fetchTimeoutMs?: number
@@ -102,8 +112,11 @@ interface GitStatusEntry {
 export class Orchestrator implements AppService {
   private state: AppState = m.emptyState()
   private current: Target | null = null
-  /** Tail of the mutation queue; always resolves, so a failure never blocks later calls. */
-  private queue: Promise<void> = Promise.resolve()
+  /**
+   * Tails of the mutation queues, by key: STATE_QUEUE for app state, `task:<id>` for git actions on one task. A
+   * tail always resolves, so a failure never blocks later calls; an idle queue's entry is removed.
+   */
+  private readonly queues = new Map<string, Promise<void>>()
   private readonly fetchTimeoutMs: number
   /** Bumped by every openTarget call, so only the latest one attaches the terminal. */
   private openSeq = 0
@@ -138,13 +151,20 @@ export class Orchestrator implements AppService {
    * Runs state-changing operations one at a time: FileStore.save is not safe to call
    * concurrently, and overlapping operations would read stale state (lost updates,
    * duplicate tasks passing the slug check).
+   *
+   * `key` picks the queue: git actions on a task (commit, push, PR) queue per task, so a slow push neither
+   * overlaps another action on that worktree nor holds up the rest of the app.
    */
-  private exclusive<T>(op: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(op)
-    this.queue = run.then(
+  private exclusive<T>(op: () => Promise<T>, key = STATE_QUEUE): Promise<T> {
+    const run = (this.queues.get(key) ?? Promise.resolve()).then(op)
+    const tail = run.then(
       () => {},
       () => {},
     )
+    this.queues.set(key, tail)
+    void tail.then(() => {
+      if (this.queues.get(key) === tail) this.queues.delete(key)
+    })
     return run
   }
 
@@ -435,20 +455,30 @@ export class Orchestrator implements AppService {
   }
 
   async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState> {
-    return this.exclusive(async () => {
-      const theme = m.getTheme(this.state, themeId)
-      const repo = m.getRepo(this.state, themeId, repoId)
-      const task = m.getTask(this.state, themeId, repoId, taskId)
-      this.detachIf((t) => t.taskId === taskId)
-      await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
-      // GitService deletes the folder directly when the original repo was moved or deleted.
-      await this.deps.git.removeWorktree(repo.path, task.worktreePath)
-      // The branch lived in the original repo; if that is gone there is nothing to delete.
-      if (deleteBranch && this.deps.pathExists(repo.path)) {
-        await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
-      }
-      return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
-    })
+    // After the task's queued git actions too, so a push never runs in a worktree being removed.
+    return this.exclusive(() =>
+      this.exclusive(() => this.removeTaskNow(themeId, repoId, taskId, deleteBranch), taskQueue(taskId)),
+    )
+  }
+
+  private async removeTaskNow(
+    themeId: string,
+    repoId: string,
+    taskId: string,
+    deleteBranch: boolean,
+  ): Promise<AppState> {
+    const theme = m.getTheme(this.state, themeId)
+    const repo = m.getRepo(this.state, themeId, repoId)
+    const task = m.getTask(this.state, themeId, repoId, taskId)
+    this.detachIf((t) => t.taskId === taskId)
+    await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+    // GitService deletes the folder directly when the original repo was moved or deleted.
+    await this.deps.git.removeWorktree(repo.path, task.worktreePath)
+    // The branch lived in the original repo; if that is gone there is nothing to delete.
+    if (deleteBranch && this.deps.pathExists(repo.path)) {
+      await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+    }
+    return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
   }
 
   async openTarget(target: Target): Promise<TabInfo[]> {
@@ -502,6 +532,59 @@ export class Orchestrator implements AppService {
     return this.deps.tmux.listWindows(session)
   }
 
+  // Git actions on a task's worktree. Each runs on the task's own queue and refreshes its git status after.
+
+  async getGitTools(): Promise<GitTools> {
+    return { gh: this.deps.gh.available() }
+  }
+
+  /**
+   * Runs `op` on the task's queue, against the task as it is when its turn comes (it may have been removed while
+   * waiting), and drops its cached git status after, so the next poll reads it again.
+   */
+  private gitAction<T>(target: Target, op: (task: Task, repo: Repo) => Promise<T>): Promise<T> {
+    const queue = taskQueue(this.resolveTaskTarget(target).task.id)
+    return this.exclusive(async () => {
+      const { task, repo } = this.resolveTaskTarget(target)
+      if (!this.deps.pathExists(task.worktreePath)) throw new Error(`Folder not found: ${task.worktreePath}`)
+      try {
+        return await op(task, repo)
+      } finally {
+        this.gitStatusCache.delete(task.worktreePath)
+      }
+    }, queue)
+  }
+
+  /** A repo task's records; throws for folders, unknown targets and repos without a task. */
+  private resolveTaskTarget(target: Target): { task: Task; repo: Repo } {
+    const item = m.getItem(this.state, target.themeId, target.itemId)
+    if (item.kind !== 'repo' || !target.taskId) throw new Error('Git actions are only available for repository tasks')
+    const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
+    return { task, repo: item }
+  }
+
+  async commitAll(target: Target, message: string): Promise<CommitResult> {
+    const text = typeof message === 'string' ? message.trim() : ''
+    if (!text) throw new Error('Write a commit message first')
+    if (text.length > MAX_COMMIT_MESSAGE)
+      throw new Error(`The commit message is limited to ${MAX_COMMIT_MESSAGE.toLocaleString('en-US')} characters`)
+    if (text.includes('\0')) throw new Error('Invalid commit message')
+    return this.gitAction(target, (task) => this.deps.git.commitAll(task.worktreePath, text))
+  }
+
+  async pushTask(target: Target): Promise<PushResult> {
+    return this.gitAction(target, async (task) => {
+      await this.deps.git.push(task.worktreePath, task.branch)
+      return { branch: task.branch }
+    })
+  }
+
+  async createPullRequest(target: Target): Promise<PullRequestResult> {
+    return this.gitAction(target, (task) =>
+      this.deps.gh.pullRequest(task.worktreePath, task.branch, baseBranchName(task.baseRef)),
+    )
+  }
+
   // File viewer. Read-only, so these skip the mutation queue.
 
   /** A target's folder (task worktree or folder path), whether or not it still exists. */
@@ -550,9 +633,10 @@ export class Orchestrator implements AppService {
     return this.deps.files.readImage(root, path)
   }
 
-  async listChanges(target: Target): Promise<ChangeList> {
+  async listChanges(target: Target, scope: ChangeScope = 'base'): Promise<ChangeList> {
     const { root, baseRef } = this.resolveTask(target)
-    return this.deps.files.listChanges(root, baseRef)
+    // Against HEAD, the merge-base is HEAD itself: what a commit would take.
+    return this.deps.files.listChanges(root, scope === 'uncommitted' ? 'HEAD' : baseRef)
   }
 
   async fileDiff(target: Target, path: string, oldPath?: string): Promise<string> {

@@ -1,10 +1,13 @@
 import {
+  MAX_COMMIT_MESSAGE,
   MAX_TASK_NOTES,
   MAX_TASK_PROMPT,
   type AppState,
   type MeManagerApi,
   type Settings,
   type TabInfo,
+  type Target,
+  type Task,
   type TaskGitStatus,
   type Theme,
 } from '../../../shared/types'
@@ -51,6 +54,15 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
   const id = (): string => `id-${++counter}`
   const tabs: TabInfo[] = [{ index: 0, name: 'claude', active: true }]
   let settings: Settings = normalizeSettings(DEFAULT_SETTINGS)
+
+  /** Tasks that have a demo pull request. */
+  const prs = new Set<string>()
+  const taskOf = (target: Target): Task => {
+    const item = state.themes.find((t) => t.id === target.themeId)?.items.find((i) => i.id === target.itemId)
+    const task = item?.kind === 'repo' ? item.tasks.find((t) => t.id === target.taskId) : undefined
+    if (!task) throw new Error('Git actions are only available for repository tasks')
+    return task
+  }
 
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
     const next = clone(state)
@@ -165,9 +177,11 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       path.endsWith('.svg') && DEMO_FILES[path] !== undefined
         ? `data:image/svg+xml;base64,${btoa(DEMO_FILES[path])}`
         : null,
-    listChanges: async (target) => {
+    listChanges: async (target, scope = 'base') => {
       if (!target.taskId) throw new Error('Changes are only available for repository tasks')
-      return clone(DEMO_CHANGES)
+      const changes = clone(DEMO_CHANGES)
+      // The demo's uncommitted changes: a few of the files that differ from the base.
+      return scope === 'uncommitted' ? { files: changes.files.slice(0, 3) } : changes
     },
     fileDiff: async (target, path) => {
       if (!target.taskId) throw new Error('Changes are only available for repository tasks')
@@ -176,6 +190,23 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     openInEditor: async () => {},
     openInFileManager: async () => {},
     openExternal: async () => {},
+    getGitTools: async () => ({ gh: true }),
+    commitAll: async (target, message) => {
+      const text = message.trim()
+      if (!text) throw new Error('Write a commit message first')
+      if (text.length > MAX_COMMIT_MESSAGE)
+        throw new Error(`The commit message is limited to ${MAX_COMMIT_MESSAGE} characters`)
+      const files = (await api.listChanges(target, 'uncommitted')).files.length
+      if (files === 0) throw new Error('Nothing to commit')
+      return { sha: (++counter * 2654435761).toString(16).slice(-7).padStart(7, '0'), files }
+    },
+    pushTask: async (target) => ({ branch: taskOf(target).branch }),
+    createPullRequest: async (target) => {
+      const task = taskOf(target)
+      const created = !prs.has(task.id)
+      prs.add(task.id)
+      return { url: `https://github.com/demo/${task.slug}/pull/1`, created }
+    },
     getUsage: async (target) => demoUsage(targetKey(target)),
     getUsageReport: async () => demoUsageReport(state),
     ptyWrite: () => {},

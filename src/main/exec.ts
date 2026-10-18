@@ -6,6 +6,8 @@ export class CommandError extends Error {
     readonly code: number | null,
     readonly stderr: string,
     message: string,
+    /** Set when the command was killed for running past its `timeoutMs`. */
+    readonly timedOut = false,
   ) {
     super(message)
     this.name = 'CommandError'
@@ -54,6 +56,11 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
         if (errno === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
           const mb = Math.round((opts.maxBuffer ?? DEFAULT_MAX_BUFFER) / (1024 * 1024))
           reject(new CommandError(command, null, '', `${command} failed: output too large (over ${mb || '<1'} MB)`))
+          return
+        }
+        if ((err as { killed?: boolean }).killed && opts.timeoutMs) {
+          const after = `${Math.round(opts.timeoutMs / 100) / 10} s`
+          reject(new CommandError(command, null, String(stderr), `${command} timed out after ${after}`, true))
           return
         }
         const code = typeof err.code === 'number' ? err.code : null
@@ -130,7 +137,7 @@ export function streamNul(
     child.on('close', (code) =>
       settle(() => {
         if (stopped) return resolve({ stopped: true })
-        if (timedOut) return reject(new CommandError(command, null, stderr, `${command} timed out`))
+        if (timedOut) return reject(new CommandError(command, null, stderr, `${command} timed out`, true))
         if (code === 0 || (code !== null && opts.okExitCodes?.includes(code))) {
           if (partial.length > 0) emit(Buffer.concat(partial)) // a last item without a terminator
           return resolve({ stopped })

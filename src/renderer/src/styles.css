@@ -207,16 +207,29 @@ button:disabled {
 }
 .task-header-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 12px;
+  gap: 6px 12px;
 }
 .task-header-text {
-  flex: 1;
+  flex: 1 1 240px;
   min-width: 0;
 }
+/* Rows of button groups, right-aligned; the header text is taller, so a second row (Git) costs no height. */
 .task-header-actions {
-  flex: none;
+  flex: 0 1 auto;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  margin-left: auto;
+}
+/* Wraps (right-aligned) when the header is too narrow for every group. */
+.task-header-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 4px;
 }
@@ -245,6 +258,19 @@ button:disabled {
 }
 .copy-group button:hover {
   color: var(--text);
+}
+.copy-group button:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+}
+.copy-group button.unavailable {
+  color: var(--muted);
+  opacity: 0.6;
+  text-decoration: line-through dotted;
+}
+.git-actions[aria-busy='true'] .copy-group-label {
+  color: var(--accent);
 }
 .header-btn {
   font-size: 12px;
@@ -423,6 +449,42 @@ button:disabled {
   margin-top: -4px;
   color: var(--muted);
   font-size: 11px;
+}
+.commit-dialog {
+  width: min(600px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  gap: 12px;
+}
+.dialog .dialog-field-heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dialog ul.commit-files {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.commit-files li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 8px;
+  line-height: 18px;
+}
+.commit-file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .new-task-dialog {
   width: min(560px, 92vw);

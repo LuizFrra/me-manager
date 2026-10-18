@@ -36,6 +36,10 @@ export const INVOKE_METHODS = [
   'openInEditor',
   'openInFileManager',
   'openExternal',
+  'getGitTools',
+  'commitAll',
+  'pushTask',
+  'createPullRequest',
   'getUsage',
   'getUsageReport',
 ] as const satisfies readonly (keyof MeManagerApi)[]
