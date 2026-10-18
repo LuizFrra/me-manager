@@ -7,6 +7,7 @@ import type {
   Settings,
   TabInfo,
   UnsavedWork,
+  UsageSummary,
 } from '../shared/types'
 
 export interface StoreApi {
@@ -81,6 +82,23 @@ export interface LauncherApi {
   /** `editorCommand` is Settings.editorCommand; '' auto-detects an editor. */
   openInEditor(path: string, editorCommand: string): Promise<void>
   openInFileManager(path: string): Promise<void>
+}
+
+export interface UsageSummaries {
+  /** By root, exactly as passed in. */
+  roots: Record<string, UsageSummary>
+  /** By group name. */
+  groups: Record<string, UsageSummary>
+}
+
+/** Claude Code usage from its transcripts. Read-only: never writes to the Claude config folder. */
+export interface UsageApi {
+  /**
+   * Usage per root (a task worktree or folder path) and per named group of roots. A message counts for the most
+   * specific root (requested directly or through a group) whose path contains its working directory; pass every
+   * known root so a task inside a folder isn't also counted for the folder.
+   */
+  summarize(roots: readonly string[], groups?: Readonly<Record<string, readonly string[]>>): Promise<UsageSummaries>
 }
 
 /** What the orchestrator implements: everything except renderer/pty-only calls. */
