@@ -138,7 +138,7 @@ export function TaskHeader(props: {
   /** Opens the task's worktree or the folder in an editor / the file manager. */
   onOpenInEditor: () => void
   onRevealInFileManager: () => void
-  /** Settings flags that new Claude sessions start with; shown as badges so they're never forgotten. */
+  /** What new Claude sessions really start with (effectiveSessionFlags); shown as badges so it is never forgotten. */
   sessionFlags?: { remoteControl: boolean; skipPermissions: boolean }
   /** The target's Claude usage, once loaded: shown as a badge that opens the usage view. */
   usage?: UsageSummary
@@ -171,14 +171,17 @@ export function TaskHeader(props: {
               </span>
             )}
             {props.sessionFlags?.remoteControl && (
-              <span className="session-badge" title="New Claude sessions start with --remote-control">
+              <span
+                className="session-badge"
+                title="New Claude sessions start with Remote Control on (--remote-control)"
+              >
                 Remote
               </span>
             )}
             {props.sessionFlags?.skipPermissions && (
               <span
                 className="session-badge session-badge-warn"
-                title="New Claude sessions start with --dangerously-skip-permissions: Claude runs commands without asking"
+                title="New Claude sessions skip permission prompts (--dangerously-skip-permissions): Claude runs commands without asking"
               >
                 ⚠ permissions skipped
               </span>
