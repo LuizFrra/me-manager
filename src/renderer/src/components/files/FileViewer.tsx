@@ -6,6 +6,7 @@ import { formatSize, isMarkdown } from '../../lib/files'
 import { CodeView } from './CodeView'
 import { DiffView } from './DiffView'
 import { MarkdownView } from './MarkdownView'
+import { useLatestCallback } from '../../lib/useLatestCallback'
 
 export interface FileViewerProps {
   api: Pick<MeManagerApi, 'readImage' | 'openExternal'>
@@ -28,7 +29,8 @@ export interface FileViewerProps {
 }
 
 export function FileViewer(p: FileViewerProps): React.JSX.Element {
-  const { api, target, onError } = p
+  const { api, target } = p
+  const onError = useLatestCallback(p.onError)
   const loadImage = useCallback((rel: string) => api.readImage(target, rel), [api, target])
   const openExternal = useCallback((url: string) => void api.openExternal(url).catch(onError), [api, onError])
 

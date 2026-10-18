@@ -7,6 +7,7 @@ import { ChangesList } from './ChangesList'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { startVisibleInterval } from '../../lib/visibleInterval'
+import { useLatestCallback } from '../../lib/useLatestCallback'
 
 export interface SidePanelProps {
   api: MeManagerApi
@@ -157,17 +158,21 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
 
   const select = (nextTab: PanelTab, path: string): void =>
     onState({ ...state, tab: nextTab, selected: path, history: [] })
-  const openLink = (path: string): void =>
+  // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
+  const openLink = useLatestCallback((path: string): void =>
     onState({
       ...state,
       tab: 'files',
       selected: path,
       history: state.selected ? [...state.history, state.selected] : state.history,
-    })
-  const back = (): void => {
+    }),
+  )
+  const back = useLatestCallback((): void => {
     const history = state.history.slice(0, -1)
     onState({ ...state, tab: 'files', selected: state.history.at(-1), history })
-  }
+  })
+  const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void => onState({ ...state, mdMode }))
+  const openFile = useLatestCallback((path: string): void => select('files', path))
 
   const loaded = view && view.key === viewKey ? view.value : undefined
   const change = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath) : undefined
@@ -279,9 +284,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             mdMode={state.mdMode}
             canGoBack={state.history.length > 0}
             onBack={back}
-            onMdMode={(mdMode) => onState({ ...state, mdMode })}
+            onMdMode={setMdMode}
             onOpenLink={openLink}
-            onOpenFile={(path) => select('files', path)}
+            onOpenFile={openFile}
             onError={onError}
           />
         </div>
