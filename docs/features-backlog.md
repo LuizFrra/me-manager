@@ -54,3 +54,15 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 27 | Welcome / onboarding empty state with quick actions | ux | done (3f0daff) |
 | 28 | Start every Claude session with Remote Control (named `<theme>/<repo>/<task>`) and skipped permissions by default, as Settings toggles, with a warning and a header badge | feature | done (7076989) |
 | 29 | Claude usage and spend: per-task, per-theme and total tokens (input, output, cache) from Claude Code's transcripts in `~/.claude/projects/`, estimated cost at API prices (labelled as an estimate for subscription users), header badge, and a usage view for today, this week and this month | feature | done (7014c87) |
+| 30 | Fix findings from the full review of the loop features (`fv-1..HEAD`) | quality | todo (waiting on review) |
+| 31 | Review comments to Claude: select lines in a diff or file, write a note, "Send to Claude" types it into the task's claude window with file:line references | feature | todo |
+| 32 | Archive tasks: remove the worktree and kill the session but keep the branch; an Archived section lists them, with Restore (recreate the worktree from the branch) and Delete | feature | todo |
+| 33 | Task templates: saved new-task presets (name pattern, base branch, initial prompt), chosen in the New task dialog and managed in Settings | feature | todo |
+| 34 | Run command per repo: a configurable dev or test command (e.g. `npm run dev`) launched in a "run" tab with one click, with restart and stop | feature | todo |
+| 35 | Dev-server URLs: detect `http://localhost:<port>` printed in a task's tabs and show clickable links in the header and status bar | feature | todo |
+| 36 | Usage budgets: optional cost limits per task and per day, a warning toast or notification when crossed, and a badge in the sidebar | feature | todo |
+| 37 | Drag and drop: reorder themes, items and tasks in the sidebar, persisted | ux | todo |
+| 38 | Bulk actions: multi-select tasks (Shift/Ctrl-click) to push, update from base or remove together, with one confirmation | feature | todo |
+| 39 | Save the terminal transcript: export a tab's tmux scrollback to a file, or copy it | feature | todo |
+| 40 | Appearance: light theme and system-follow option, with the terminal colors matching | ux | todo |
+| 41 | Portuguese (pt-BR) UI translation, with a language setting (English default) | ux | todo |
