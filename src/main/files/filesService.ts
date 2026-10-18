@@ -1,6 +1,7 @@
 import type { Stats } from 'node:fs'
 import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { IMAGE_MIME, MAX_IMAGE_BYTES } from '../../shared/images'
 import {
   checkSearchQuery,
   makeMatch,
@@ -23,9 +24,9 @@ import { CommandError, run, streamNul } from '../exec'
 import { GIT_ENV } from '../git/gitEnv'
 import { LineMatcher, SearchTimeoutError, type LineHit } from './lineMatcher'
 
+export { MAX_IMAGE_BYTES }
 export const MAX_TEXT_BYTES = 1_000_000
 export const BINARY_SNIFF_BYTES = 8_192
-export const MAX_IMAGE_BYTES = 5_000_000
 export const MAX_WALK_ENTRIES = 20_000
 /** Repos list at most this many files; ls-files is stopped there. */
 export const MAX_REPO_ENTRIES = 50_000
@@ -41,17 +42,6 @@ const UNTRACKED_CACHE_MAX = 5_000
 const OUTSIDE = 'Path is outside the folder'
 const GIT_TIMEOUT_MS = 30_000
 const LSTAT_BATCH = 256
-
-const IMAGE_MIME: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp',
-  '.ico': 'image/x-icon',
-}
 
 /** Flags that pin diff output to the plain format the renderer parses, whatever the user's git config says. */
 const DIFF_FLAGS = [

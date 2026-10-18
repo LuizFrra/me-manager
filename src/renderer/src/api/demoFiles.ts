@@ -79,7 +79,11 @@ console.log(greetAll([{ id: 1, name: 'ana' }]))
 }
 
 /** Shown as binary in the viewer. */
-export const DEMO_BINARY: Record<string, number> = { 'assets/icon.png': 2048 }
+/** A 16×16 PNG with a transparent corner, so the image viewer has something to show. */
+export const DEMO_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAPElEQVR4nGPwX/yfgQD+jw9TpJmQAQQ14zOAKM1YDfhPABAygCDAZ8B/Sgz4T4kB/0cNID7R4EpIQ9wAAHzYD1KzGgS5AAAAAElFTkSuQmCC'
+
+export const DEMO_BINARY: Record<string, number> = { 'assets/icon.png': 117 }
 
 export const DEMO_PATHS = [...Object.keys(DEMO_FILES), ...Object.keys(DEMO_BINARY)].sort()
 

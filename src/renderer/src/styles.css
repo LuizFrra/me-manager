@@ -1297,6 +1297,76 @@ body.resizing .side-panel {
   text-align: center;
 }
 
+/* Image */
+.image-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.image-view.compact {
+  height: auto;
+  border-bottom: 1px solid #2d2d2d;
+}
+.image-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  min-height: 28px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #2d2d2d;
+  color: var(--muted);
+  font-size: 12px;
+}
+.image-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.image-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--mono);
+}
+.image-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 16px;
+  overflow: auto;
+}
+.image-view.compact .image-stage {
+  flex: 0 0 auto;
+  max-height: 260px;
+  padding: 12px;
+}
+/* margin: auto centers the image without clipping its left/top edge when it is larger than the stage (100%). */
+.image-stage img {
+  margin: auto;
+  flex: 0 0 auto;
+  image-rendering: auto;
+  /* Checkerboard behind the image, so transparent areas are visible. */
+  background: repeating-conic-gradient(#3a3a3a 0% 25%, #2a2a2a 0% 50%) 0 0 / 16px 16px;
+  box-shadow:
+    0 0 0 1px #ffffff14,
+    0 4px 18px #00000066;
+}
+.image-stage.zoom-fit img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.image-view.compact .image-stage.zoom-fit img {
+  max-height: 236px;
+}
+.image-stage.zoom-actual img {
+  max-width: none;
+  max-height: none;
+}
+
 /* Code */
 .code-view {
   position: relative;
