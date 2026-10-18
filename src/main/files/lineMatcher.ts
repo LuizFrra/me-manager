@@ -10,6 +10,14 @@ export class SearchTimeoutError extends Error {
   }
 }
 
+/** A search given up for a newer one (its signal aborted). */
+export class SearchCancelledError extends Error {
+  constructor() {
+    super('The search was replaced by a newer one')
+    this.name = 'SearchCancelledError'
+  }
+}
+
 /**
  * Plain JavaScript run in a worker thread: for each text, the first match of the pattern on every line, up to
  * `max` in all. A worker because a regular expression can backtrack for minutes on the wrong input, and only a
@@ -62,12 +70,17 @@ export class LineMatcher {
     this.worker.on('error', (err) => (this.failure = err))
   }
 
-  /** The hits for each text, in order; at most `max` in all. Rejects with SearchTimeoutError past the deadline. */
-  match(texts: string[], max: number): Promise<LineHit[][]> {
+  /**
+   * The hits for each text, in order; at most `max` in all. Rejects with SearchTimeoutError past the deadline, and
+   * with SearchCancelledError (stopping the worker) when `signal` aborts.
+   */
+  match(texts: string[], max: number, signal?: AbortSignal): Promise<LineHit[][]> {
+    if (signal?.aborted) return Promise.reject(new SearchCancelledError())
     if (texts.length === 0 || max <= 0) return Promise.resolve(texts.map(() => []))
     return new Promise((resolve, reject) => {
       const cleanup = (): void => {
         clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
         this.worker.off('message', onMessage)
         this.worker.off('error', onError)
         this.worker.off('exit', onExit)
@@ -84,6 +97,12 @@ export class LineMatcher {
         cleanup()
         reject(this.failure ? new Error(`The search failed: ${this.failure.message}`) : new Error('The search stopped'))
       }
+      const onAbort = (): void => {
+        cleanup()
+        void this.worker.terminate()
+        reject(new SearchCancelledError())
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
       const timer = setTimeout(
         () => {
           cleanup()

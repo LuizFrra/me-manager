@@ -23,7 +23,7 @@ import type { FilesApi } from '../contracts'
 import { CommandError, run, streamNul } from '../exec'
 import { GIT_ENV } from '../git/gitEnv'
 import { resolveBaseRef } from '../git/refs'
-import { LineMatcher, SearchTimeoutError, type LineHit } from './lineMatcher'
+import { LineMatcher, SearchCancelledError, SearchTimeoutError, type LineHit } from './lineMatcher'
 
 export { MAX_IMAGE_BYTES }
 export const MAX_TEXT_BYTES = 1_000_000
@@ -411,11 +411,18 @@ export class FilesService implements FilesApi {
     }
   }
 
-  async searchFiles(root: string, isRepo: boolean, query: string, options?: SearchOptions): Promise<SearchResult> {
+  async searchFiles(
+    root: string,
+    isRepo: boolean,
+    query: string,
+    options?: SearchOptions,
+    signal?: AbortSignal,
+  ): Promise<SearchResult> {
     const q = checkSearchQuery(query)
     const opts = normalizeSearchOptions(options)
+    if (signal?.aborted) throw new SearchCancelledError()
     const deadline = Date.now() + this.searchTimeoutMs
-    return isRepo ? this.grepRepo(root, q, opts, deadline) : this.searchFolder(root, q, opts, deadline)
+    return isRepo ? this.grepRepo(root, q, opts, deadline, signal) : this.searchFolder(root, q, opts, deadline, signal)
   }
 
   /**
@@ -429,6 +436,7 @@ export class FilesService implements FilesApi {
     query: string,
     opts: Required<SearchOptions>,
     deadline: number,
+    signal?: AbortSignal,
   ): Promise<SearchResult> {
     // Throws "Invalid regular expression: …" before git runs; for a literal search it always compiles.
     const pattern = searchPattern(query, opts)
@@ -436,14 +444,15 @@ export class FilesService implements FilesApi {
     let grep: GrepOutput
     try {
       try {
-        grep = await this.runGrep(root, query, opts, dialect, deadline)
+        grep = await this.runGrep(root, query, opts, dialect, deadline, signal)
       } catch (err) {
         if (dialect !== '-P' || !(err instanceof CommandError) || !isNoPcreError(err.stderr)) throw err
         this.perlRegex = false // looked up once: this git has no PCRE
         dialect = '-E'
-        grep = await this.runGrep(root, query, opts, dialect, deadline)
+        grep = await this.runGrep(root, query, opts, dialect, deadline, signal)
       }
     } catch (err) {
+      if (signal?.aborted) throw new SearchCancelledError() // git was killed
       if (err instanceof CommandError && err.timedOut) throw new SearchTimeoutError(this.searchTimeoutMs)
       throw grepError(err, query)
     }
@@ -458,6 +467,7 @@ export class FilesService implements FilesApi {
         hits = await matcher.match(
           found.map((f) => f.text),
           found.length,
+          signal,
         )
       } catch (err) {
         // git has found them already: show them where git says, just without the highlight's length.
@@ -488,6 +498,7 @@ export class FilesService implements FilesApi {
     opts: Required<SearchOptions>,
     dialect: GrepDialect,
     deadline: number,
+    signal?: AbortSignal,
   ): Promise<GrepOutput> {
     const args = [
       'grep',
@@ -554,6 +565,7 @@ export class FilesService implements FilesApi {
       env: GIT_ENV,
       timeoutMs: Math.max(1, deadline - Date.now()),
       okExitCodes: [1], // no matches
+      signal,
     })
     return { found, truncated }
   }
@@ -564,6 +576,7 @@ export class FilesService implements FilesApi {
     query: string,
     opts: Required<SearchOptions>,
     deadline: number,
+    signal?: AbortSignal,
   ): Promise<SearchResult> {
     const pattern = searchPattern(query, opts) // throws for an invalid regular expression
     const { paths, truncated: walkTruncated } = await walk(root, this.maxWalkEntries)
@@ -572,6 +585,7 @@ export class FilesService implements FilesApi {
     const matcher = new LineMatcher(pattern, deadline, this.searchTimeoutMs)
     try {
       for (let i = 0; i < paths.length && !truncated; i += SEARCH_BATCH) {
+        if (signal?.aborted) throw new SearchCancelledError()
         if (Date.now() >= deadline) throw new SearchTimeoutError(this.searchTimeoutMs)
         const batch = paths.slice(i, i + SEARCH_BATCH)
         const texts = await Promise.all(batch.map((rel) => searchableText(root, rel)))
@@ -580,6 +594,7 @@ export class FilesService implements FilesApi {
         const hits = await matcher.match(
           present.map((p) => p.text),
           MAX_SEARCH_MATCHES - matches.length + 1,
+          signal,
         )
         present.forEach(({ rel, text }, j) => {
           if (hits[j].length === 0 || truncated) return

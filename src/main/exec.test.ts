@@ -75,6 +75,19 @@ describe('streamNul', () => {
     expect(items).toHaveLength(5)
   })
 
+  it('kills the process and rejects when its signal aborts', async () => {
+    const [file, args] = node('process.stdout.write("x\\0"); setInterval(() => {}, 1000)')
+    const controller = new AbortController()
+    const started = Date.now()
+    const result = streamNul(file, args, () => controller.abort(new Error('superseded')), {
+      signal: controller.signal,
+    })
+    await expect(result).rejects.toThrow('superseded')
+    expect(Date.now() - started).toBeLessThan(5_000)
+    const aborted = AbortSignal.abort(new Error('before start'))
+    await expect(streamNul(file, args, () => {}, { signal: aborted })).rejects.toThrow('before start')
+  })
+
   it('rejects with stderr on a non-zero exit, and explains a missing binary', async () => {
     const [file, args] = node('console.error("boom"); process.exit(3)')
     const err = await streamNul(file, args, () => {}).catch((e) => e)

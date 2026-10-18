@@ -13,6 +13,7 @@ import {
 } from './filesService'
 import { MAX_SEARCH_MATCHES, MAX_SEARCH_PREVIEW, MAX_SEARCH_QUERY } from '../../shared/search'
 import type { SearchResult } from '../../shared/types'
+import { SearchCancelledError } from './lineMatcher'
 import { cleanupTempDirs, commitAll, git, makeRepo, makeTaskClone, makeTempDir, put } from './testRepos'
 
 const svc = new FilesService()
@@ -774,6 +775,22 @@ describe('searchFiles (repo)', () => {
     ])
   })
 
+  it('kills git and stops highlighting when its signal aborts', async () => {
+    const root = await makeRepo({ 'a.txt': `${'a'.repeat(40)}c\n` })
+    const noPcre = new FilesService({ perlRegex: false })
+    // Highlighting this backtracks for minutes: only an abort ends it before the 10 s timeout.
+    const controller = new AbortController()
+    const started = Date.now()
+    const search = noPcre.searchFiles(root, true, '(a+)+b|c', { regex: true }, controller.signal)
+    setTimeout(() => controller.abort(), 300)
+    await expect(search).rejects.toThrow(SearchCancelledError)
+    expect(Date.now() - started).toBeLessThan(3_000)
+    // Aborted before git starts: git never runs.
+    streamSpy.mockClear()
+    await expect(svc.searchFiles(root, true, 'c', {}, AbortSignal.abort())).rejects.toThrow(SearchCancelledError)
+    expect(grepCalls()).toEqual([])
+  })
+
   it('recognizes the error of a git built without Perl-compatible regexes', () => {
     expect(isNoPcreError('fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n')).toBe(true)
     expect(isNoPcreError("fatal: -e option, 'foo(': missing closing parenthesis")).toBe(false)
@@ -889,6 +906,17 @@ describe('searchFiles (folder)', () => {
       'The search timed out after 0.3 s',
     )
     expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('stops at once when its signal aborts, even inside a runaway regular expression', async () => {
+    const root = await makeTempDir()
+    await put(root, 'a.txt', `${'a'.repeat(40)}b\n`)
+    const controller = new AbortController()
+    const started = Date.now()
+    const search = svc.searchFiles(root, false, '(a+)+$', { regex: true }, controller.signal)
+    setTimeout(() => controller.abort(), 200)
+    await expect(search).rejects.toThrow(SearchCancelledError)
+    expect(Date.now() - started).toBeLessThan(3_000)
   })
 
   it('reports a walk stopped at its cap as truncated', async () => {

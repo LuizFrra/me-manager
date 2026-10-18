@@ -172,6 +172,8 @@ export class Orchestrator implements AppService {
    * captured at: the screen can't change without new activity, so it is captured again only after some.
    */
   private readonly waitingCache = new Map<string, { activitySec: number; waiting: boolean }>()
+  /** The search running for each target (by targetKey): a newer one there aborts it. */
+  private readonly searches = new Map<string, AbortController>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -793,10 +795,21 @@ export class Orchestrator implements AppService {
     return this.deps.files.readImage(root, path)
   }
 
-  /** The query and options are checked by the files service. */
+  /**
+   * The query and options are checked by the files service. Only the latest search per target runs: one still
+   * running there is cancelled (git killed, matching stopped) and rejects, as the renderer only shows the latest.
+   */
   async searchFiles(target: Target, query: string, options?: SearchOptions): Promise<SearchResult> {
     const { root, isRepo } = this.resolveRoot(target)
-    return this.deps.files.searchFiles(root, isRepo, query, options)
+    const key = targetKey(target)
+    this.searches.get(key)?.abort()
+    const controller = new AbortController()
+    this.searches.set(key, controller)
+    try {
+      return await this.deps.files.searchFiles(root, isRepo, query, options, controller.signal)
+    } finally {
+      if (this.searches.get(key) === controller) this.searches.delete(key)
+    }
   }
 
   async listChanges(target: Target, scope: ChangeScope = 'base'): Promise<ChangeList> {
