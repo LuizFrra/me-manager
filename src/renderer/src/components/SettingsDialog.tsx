@@ -4,18 +4,25 @@ import type { Settings, UpdateStrategy } from '../../../shared/types'
 import { parseForm, POLL_SECONDS, toForm, type EditableSettings, type SettingsForm } from '../lib/settingsForm'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 
-/** A labelled field with an optional hint, and its validation message (which also marks the input invalid). */
+/**
+ * A labelled field with an optional hint and warning, and its validation message (which also marks the input
+ * invalid).
+ */
 function Field(props: {
   label: string
   hint?: string
   error?: string
+  /** Shown under the field, e.g. what it can't edit; it doesn't stop saving. */
+  warning?: string
   suffix?: string
   children: (aria: { id: string; 'aria-invalid': boolean; 'aria-describedby'?: string }) => React.ReactNode
 }): React.JSX.Element {
   const id = useId()
   const hintId = `${id}-hint`
   const errorId = `${id}-error`
-  const describedBy = [props.error && errorId, props.hint && hintId].filter(Boolean).join(' ') || undefined
+  const warningId = `${id}-warning`
+  const describedBy =
+    [props.error && errorId, props.warning && warningId, props.hint && hintId].filter(Boolean).join(' ') || undefined
   return (
     <div className="settings-field">
       <label htmlFor={id}>{props.label}</label>
@@ -26,6 +33,11 @@ function Field(props: {
       {props.error && (
         <p id={errorId} className="settings-error">
           {props.error}
+        </p>
+      )}
+      {props.warning && (
+        <p id={warningId} className="settings-warning">
+          {props.warning}
         </p>
       )}
       {props.hint && (
@@ -50,9 +62,17 @@ export function SettingsDialog(props: {
   onCancel: () => void
 }): React.JSX.Element {
   const [form, setForm] = useState<SettingsForm>(() => toForm(props.settings))
+  // A one-line input can't show (or keep) a line break: such arguments are only saved back as they were, unless
+  // the field is edited, and a warning points to settings.json.
+  const [argsEdited, setArgsEdited] = useState(false)
+  const multilineArg = props.settings.claudeArgs.some((arg) => /[\r\n]/.test(arg))
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
-  const parsed = useMemo(() => parseForm(form), [form])
+  const parsed = useMemo(() => {
+    const result = parseForm(form)
+    if (!result.settings || argsEdited || !multilineArg) return result
+    return { settings: { ...result.settings, claudeArgs: [...props.settings.claudeArgs] } }
+  }, [form, argsEdited, multilineArg, props.settings.claudeArgs])
   const errors = parsed.errors ?? {}
   const notificationsHintId = useId()
   const statusBarHintId = useId()
@@ -109,6 +129,13 @@ export function SettingsDialog(props: {
             label="Extra claude arguments"
             hint="Added to every claude the app starts. Quote values with spaces, as in a shell."
             error={errors.claudeArgs}
+            warning={
+              !multilineArg
+                ? undefined
+                : argsEdited
+                  ? 'An argument had a line break, which this field drops: saving now saves it without. Edit settings.json to change this argument and keep it.'
+                  : 'An argument contains a line break, which this field can’t show. Edit settings.json to change this argument; saving here keeps it as it is.'
+            }
           >
             {(aria) => (
               <input
@@ -118,7 +145,10 @@ export function SettingsDialog(props: {
                 spellCheck={false}
                 placeholder="e.g. --model opus"
                 value={form.claudeArgs}
-                onChange={set('claudeArgs')}
+                onChange={(e) => {
+                  setArgsEdited(true)
+                  set('claudeArgs')(e)
+                }}
               />
             )}
           </Field>
