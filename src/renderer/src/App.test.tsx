@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi, type MockInstance } from 'vitest'
-import { App, ZOOM_SAVE_MS } from './App'
+import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
 import type { MeManagerApi, TabInfo, Target, TaskGitStatus, UsageReport, UsageSummary } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
@@ -1938,5 +1938,132 @@ describe('App update from base', () => {
     expect(palette.getAllByRole('option')[0]).toHaveAttribute('aria-label', 'Git: Update from base')
     await user.keyboard('{Enter}')
     expect(updateFromBase).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('App remembers the UI across restarts', () => {
+  /** A demo API with a theme, a repo and two tasks, as if left by an earlier run. */
+  async function seeded(extra: Partial<MeManagerApi> = {}): Promise<{
+    api: MeManagerApi
+    themeId: string
+    repoId: string
+    taskA: Target
+    taskB: Target
+  }> {
+    const api = repoApi(extra)
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/home/me/code/my-api')).themes[0].items[0].id
+    await api.createTask(themeId, repoId, 'task A')
+    const state = await api.createTask(themeId, repoId, 'task B')
+    const repo = state.themes[0].items[0]
+    const [a, b] = repo.kind === 'repo' ? repo.tasks : []
+    return {
+      api,
+      themeId,
+      repoId,
+      taskA: { themeId, itemId: repoId, taskId: a.id },
+      taskB: { themeId, itemId: repoId, taskId: b.id },
+    }
+  }
+
+  it('restores the selection, its panel, the panel width and the sidebar filter, and opens the target', async () => {
+    const { api, taskA } = await seeded()
+    await api.saveUiState({
+      version: 1,
+      selected: taskA,
+      collapsed: [],
+      panels: { [taskA.taskId as string]: { open: true, tab: 'files', selected: 'README.md' } },
+      panelWidth: 0.5,
+      sidebarFilter: 'task',
+    })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+    expect(openTarget).toHaveBeenCalledWith(taskA)
+    const panel = await screen.findByRole('complementary', { name: 'Files panel' })
+    expect(panel.style.getPropertyValue('--panel-width')).toBe('50.00%')
+    expect(await within(panel).findByRole('button', { name: 'README.md' })).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByRole('textbox', { name: 'Filter sidebar' })).toHaveValue('task')
+  })
+
+  it('restores collapsed groups', async () => {
+    const { api, repoId } = await seeded()
+    await api.saveUiState({ version: 1, collapsed: [repoId], panels: {} })
+    render(<App api={api} />)
+    expect(await screen.findByRole('button', { name: /📦 my-api$/ })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^(\S )?task A$/ })).not.toBeInTheDocument())
+  })
+
+  it('ignores a saved selection that no longer exists, without an error', async () => {
+    const { api, themeId, repoId, taskA } = await seeded()
+    await api.saveUiState({ version: 1, selected: taskA, collapsed: [], panels: {} })
+    await api.removeTask(themeId, repoId, taskA.taskId as string, true)
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    expect(await screen.findByText('Select a task or folder, or create one from the sidebar.')).toBeInTheDocument()
+    await act(() => new Promise((r) => setTimeout(r, 50)))
+    expect(openTarget).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it("doesn't open a saved selection whose folder is missing, or that fails to open, and shows no error", async () => {
+    const { api, taskA } = await seeded()
+    await api.saveUiState({ version: 1, selected: taskA, collapsed: [], panels: {} })
+    api.getStatus = async () => ({ running: [], missing: [taskA.taskId as string], activity: {} })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const { unmount } = render(<App api={api} />)
+    await screen.findByText('Select a task or folder, or create one from the sidebar.')
+    await act(() => new Promise((r) => setTimeout(r, 50)))
+    expect(openTarget).not.toHaveBeenCalled()
+    unmount() // which saves the UI as it is now: nothing selected
+
+    await api.saveUiState({ version: 1, selected: taskA, collapsed: [], panels: {} })
+    api.getStatus = async () => ({ running: [], missing: [], activity: {} })
+    openTarget.mockRejectedValue(new Error('tmux exploded'))
+    render(<App api={api} />)
+    await waitFor(() => expect(openTarget).toHaveBeenCalledWith(taskA))
+    expect(await screen.findByText('Select a task or folder, or create one from the sidebar.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('saves the UI debounced, and at once before the window unloads', async () => {
+    const user = userEvent.setup()
+    const { api, taskB } = await seeded()
+    const save = vi.spyOn(api, 'saveUiState')
+    render(<App api={api} />)
+    await waitFor(() => taskButton('task B'))
+    await user.click(taskButton('task B'))
+    await screen.findByText('my-api › task B')
+    await waitFor(() => expect(save).toHaveBeenCalled(), { timeout: 2_000 })
+    expect(save.mock.calls.at(-1)?.[0]).toMatchObject({ selected: taskB, collapsed: [] })
+
+    save.mockClear()
+    fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
+    expect(save).not.toHaveBeenCalled() // waits for UI_SAVE_MS
+    window.dispatchEvent(new Event('beforeunload'))
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].panels).toEqual({ [taskB.taskId as string]: { open: true, tab: 'files' } })
+    await act(() => new Promise((r) => setTimeout(r, UI_SAVE_MS + 100)))
+    expect(save).toHaveBeenCalledTimes(1) // the pending save went out with the flush
+  })
+
+  it('never saves before the saved UI state was read, so it cannot be overwritten', async () => {
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const { api } = await seeded()
+    const real = api.getUiState
+    api.getUiState = async () => {
+      await gate
+      return real()
+    }
+    const save = vi.spyOn(api, 'saveUiState')
+    render(<App api={api} />)
+    await waitFor(() => taskButton('task B'))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Filter sidebar' }), { target: { value: 'b' } })
+    await act(() => new Promise((r) => setTimeout(r, UI_SAVE_MS + 100)))
+    window.dispatchEvent(new Event('beforeunload'))
+    expect(save).not.toHaveBeenCalled()
+    release()
+    await waitFor(() => expect(save).toHaveBeenCalled(), { timeout: 2_000 })
   })
 })

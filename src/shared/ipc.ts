@@ -7,6 +7,8 @@ export const INVOKE_METHODS = [
   'getGitStatus',
   'checkPrereqs',
   'getTmuxSocket',
+  'getUiState',
+  'saveUiState',
   'getSettings',
   'updateSettings',
   'createTheme',

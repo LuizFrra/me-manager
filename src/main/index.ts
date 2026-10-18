@@ -12,11 +12,12 @@ import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
 import { NotificationWatcher } from './notify/watcher'
-import { settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
+import { settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, uiStateFile, worktreesRoot } from './paths'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
 import { SettingsService, SettingsStore } from './store/settings'
+import { UiStateStore } from './store/uiState'
 import { TmuxService } from './tmux/tmuxService'
 import { UsageService } from './usage/usageService'
 import { isAppUrl, isHttpUrl } from './urls'
@@ -109,6 +110,7 @@ async function bootstrap(): Promise<void> {
     pty: ptyService,
     files: new FilesService(),
     settings,
+    ui: new UiStateStore(uiStateFile()),
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
     usage: new UsageService(), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
     worktreesRoot: worktreesRoot(),
