@@ -384,6 +384,26 @@ describe('listChanges', () => {
     expect(res.files.map((f) => f.path)).toEqual(['mod.txt'])
   })
 
+  it("diffs against origin's branch when a tag or local branch is named like it", async () => {
+    for (const shadow of [
+      ['tag', 'origin/main'],
+      ['branch', 'origin/main'],
+    ]) {
+      const { clone } = await makeTaskClone(SEED)
+      await git(clone, 'checkout', '-q', '--orphan', 'unrelated')
+      await put(clone, 'other.txt', 'other\n')
+      await commitAll(clone, 'unrelated')
+      await git(clone, ...shadow)
+      await git(clone, 'checkout', '-q', '-f', 'main')
+      await put(clone, 'mod.txt', 'task\n')
+      await commitAll(clone, 'task')
+      // Against the unrelated commit there would be no merge-base, and so only the uncommitted changes.
+      const res = await svc.listChanges(clone, 'origin/main')
+      expect(res).toEqual({ files: [expect.objectContaining({ path: 'mod.txt', status: 'M' })] })
+      expect(await svc.fileDiff(clone, 'origin/main', 'mod.txt')).toContain('+task')
+    }
+  })
+
   it('falls back to uncommitted changes vs HEAD when the base ref is gone', async () => {
     const { clone } = await makeTaskClone(SEED)
     await put(clone, 'mod.txt', 'committed\n')
