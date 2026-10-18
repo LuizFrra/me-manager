@@ -6,6 +6,7 @@ import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
 import { ChangesList } from './ChangesList'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
+import { startVisibleInterval } from '../../lib/visibleInterval'
 
 export interface SidePanelProps {
   api: MeManagerApi
@@ -128,15 +129,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
         fetchView(isAlive),
       ])
     }
-    const id = setInterval(() => {
-      poll().then(
-        () => alive && setStale(false),
-        () => alive && setStale(true),
-      )
-    }, PANEL_POLL_MS)
+    const stop = startVisibleInterval(
+      () =>
+        poll().then(
+          () => alive && setStale(false),
+          () => alive && setStale(true),
+        ),
+      PANEL_POLL_MS,
+    )
     return () => {
       alive = false
-      clearInterval(id)
+      stop()
     }
   }, [missing, fetchChanges, fetchFiles, fetchView])
 

@@ -9,6 +9,7 @@ import { Splitter } from './components/Splitter'
 import { NameDialog, RemoveTaskDialog } from './components/Dialogs'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
+import { startVisibleInterval } from './lib/visibleInterval'
 import { describeTarget } from './lib/describe'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
@@ -106,8 +107,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   useEffect(() => {
     refresh()
-    const id = setInterval(refresh, POLL_MS)
-    return () => clearInterval(id)
+    return startVisibleInterval(refresh, POLL_MS)
   }, [refresh])
 
   useEffect(
