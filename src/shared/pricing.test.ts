@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MODEL_PRICES, messageCost, priceForModel, type TokenCounts } from './pricing'
+import { MODEL_PRICES, messageCost, priceForModel, UNPRICED_LEGACY_MODELS, type TokenCounts } from './pricing'
 
 const tokens = (over: Partial<TokenCounts> = {}): TokenCounts => ({
   input: 0,
@@ -33,6 +33,24 @@ describe('priceForModel', () => {
     expect(priceForModel('gpt-5')).toBeNull()
     expect(priceForModel('claude-opus-50')).toBeNull()
     expect(priceForModel('')).toBeNull()
+  })
+
+  it('leaves the legacy models unpriced: the pricing source lists no price for them', () => {
+    for (const id of [
+      'claude-sonnet-4-20250514',
+      'claude-sonnet-4-0',
+      'claude-opus-4-20250514',
+      'claude-opus-4-0',
+      'claude-opus-4-1-20250805',
+      'claude-3-7-sonnet-20250219',
+      'claude-3-5-haiku-20241022',
+      'claude-3-5-sonnet-20241022',
+      'claude-3-haiku-20240307',
+      'claude-3-opus-20240229',
+    ]) {
+      expect(priceForModel(id), id).toBeNull()
+    }
+    for (const prefix of UNPRICED_LEGACY_MODELS) expect(priceForModel(prefix), prefix).toBeNull()
   })
 
   it('has a price for every listed prefix', () => {

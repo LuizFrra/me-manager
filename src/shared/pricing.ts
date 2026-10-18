@@ -39,6 +39,22 @@ export const MODEL_PRICES: readonly { prefix: string; price: ModelPrice }[] = [
   { prefix: 'claude-haiku-4-5', price: price(1, 5, 0.1) },
 ]
 
+/**
+ * Older models Claude Code transcripts may still name, deliberately without a price: the pricing source above lists
+ * them (as legacy, deprecated or retired) but gives no price for them, and a guessed price would be a wrong
+ * estimate. Their tokens are still counted. Add one to MODEL_PRICES only with a price from the source.
+ */
+export const UNPRICED_LEGACY_MODELS: readonly string[] = [
+  'claude-sonnet-4',
+  'claude-opus-4-1',
+  'claude-opus-4',
+  'claude-3-7-sonnet',
+  'claude-3-5-sonnet',
+  'claude-3-5-haiku',
+  'claude-3-opus',
+  'claude-3-haiku',
+]
+
 const BY_LENGTH = [...MODEL_PRICES].sort((a, b) => b.prefix.length - a.prefix.length)
 
 /**
