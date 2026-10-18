@@ -52,12 +52,18 @@ import { isRecentlyActive, looksWaiting } from '../tmux/activity'
  */
 export const claudeCommand = (args: readonly string[] = []): string => ['claude', ...args].map(shellQuote).join(' ')
 /**
+ * The prompt as Claude's positional argument. Claude reads a lone one-word positional as a subcommand even after
+ * `--` (`claude -- mcp` runs `claude mcp`, `claude -- purge` would delete the project's state) and refuses a word
+ * close to one (`mcpx`: "unknown command"). A trailing space makes it never a single word, for any prompt.
+ */
+export const promptArgument = (prompt: string): string => `${prompt} `
+/**
  * The first start of a task's Claude with an initial prompt: Claude's positional `[prompt]` argument, after `--`
  * so that neither a prompt starting with '-' nor a variadic option in the user's arguments (`--add-dir a b`) can
  * swallow or misread it. Restarts use claudeContinueCommand, which never repeats the prompt.
  */
 export const claudePromptCommand = (args: readonly string[], prompt: string | undefined): string =>
-  claudeCommand(prompt ? [...args, '--', prompt] : args)
+  claudeCommand(prompt ? [...args, '--', promptArgument(prompt)] : args)
 /**
  * `--continue` fails when there is no previous conversation; fall back to a fresh one. With a `prompt` (only to
  * hand Claude a request when its window is restarted for one), both carry it as claudePromptCommand does.

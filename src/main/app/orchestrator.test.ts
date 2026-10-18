@@ -279,7 +279,7 @@ describe('Orchestrator: new-task options', () => {
     await orch.updateSettings({ claudeArgs: ['--model', 'opus'] })
     const prompt = "Fix the login bug; don't touch $(rm -rf ~) or `id`\nthen run the tests"
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { prompt: `  ${prompt}  ` }))
-    const quoted = `'Fix the login bug; don'\\''t touch $(rm -rf ~) or \`id\`\nthen run the tests'`
+    const quoted = `'Fix the login bug; don'\\''t touch $(rm -rf ~) or \`id\`\nthen run the tests '`
     expect(tmux.calls).toEqual([`newSession mmt_client-x_my-api_fix claude --model opus -- ${quoted}`])
 
     // A recreated session and a restarted Claude window continue the conversation instead.
@@ -302,8 +302,23 @@ describe('Orchestrator: new-task options', () => {
     const command = claudePromptCommand(['--model', 'opus'], prompt)
     // printf stands in for claude: the shell must hand it the prompt back verbatim, as one argument.
     const words = execFileSync('sh', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], { encoding: 'utf8' })
-    expect(words.split('\0').slice(0, -1)).toEqual(['--model', 'opus', '--', prompt])
+    expect(words.split('\0').slice(0, -1)).toEqual(['--model', 'opus', '--', `${prompt} `])
     expect(claudePromptCommand([], undefined)).toBe('claude')
+  })
+
+  it('never hands Claude a one-word prompt it would read as a subcommand', async () => {
+    const { execFileSync } = await import('node:child_process')
+    // `claude -- mcp` runs `claude mcp`, and a word close to a subcommand (`mcpx`) fails as an unknown command:
+    // Claude only reads its lone positional argument as a prompt when it is more than one word.
+    for (const prompt of ['mcp', 'purge', 'doctor', 'mcpx', 'hello']) {
+      const command = claudePromptCommand([], prompt)
+      const words = execFileSync('sh', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], { encoding: 'utf8' })
+      const [dashDash, arg, ...rest] = words.split('\0').slice(0, -1)
+      expect([dashDash, rest]).toEqual(['--', []])
+      expect(arg).not.toBe(prompt)
+      expect(arg).toMatch(/\s/)
+      expect(arg.trim()).toBe(prompt)
+    }
   })
 
   it('validates the options it gets over IPC', () => {
@@ -1351,7 +1366,7 @@ describe('Orchestrator: update from base', () => {
     await orch.newTab(target)
     await orch.closeTab(target, 0) // the claude window
     await orch.askClaudeToResolve(target, 'rebase', ['a.ts'])
-    const request = `'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts'`
+    const request = `'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts '`
     expect(tmux.sessions.get(session)?.windows.at(-1)).toEqual({
       name: 'claude',
       command: `claude --continue -- ${request} || claude -- ${request}`,
