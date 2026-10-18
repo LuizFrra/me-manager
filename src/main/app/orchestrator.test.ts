@@ -367,6 +367,52 @@ describe('Orchestrator: settings and claude arguments', () => {
   })
 })
 
+describe('Orchestrator: Remote Control and skipped permissions', () => {
+  it('starts every Claude session with Remote Control named after the task and permissions skipped', async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await orch.updateSettings({ remoteControl: true, skipPermissions: true })
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const flags = '--remote-control client-x/my-api/fix --dangerously-skip-permissions'
+    expect(tmux.calls).toContain(`newSession mmt_client-x_my-api_fix claude ${flags}`)
+
+    tmux.sessions.clear()
+    await orch.openTarget({ themeId, itemId: repoId, taskId: task.id })
+    expect(tmux.calls.at(-1)).toBe(`newSession mmt_client-x_my-api_fix claude ${flags} --continue || claude ${flags}`)
+  })
+
+  it('names folder sessions after the theme and folder', async () => {
+    const { orch, tmux, themeId } = await setup()
+    await orch.updateSettings({ remoteControl: true, skipPermissions: false })
+    const s = await orch.addFolder(themeId, '/docs/notes')
+    await orch.openTarget({ themeId, itemId: s.themes[0].items[1].id })
+    expect(tmux.calls.at(-1)).toBe(
+      'newSession mmf_client-x_notes claude --remote-control client-x/notes --continue || claude --remote-control client-x/notes',
+    )
+  })
+
+  it('puts the user arguments after the built-in flags', async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await orch.updateSettings({ remoteControl: false, skipPermissions: true, claudeArgs: ['--model', 'opus'] })
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(tmux.calls).toContain(
+      'newSession mmt_client-x_my-api_fix claude --dangerously-skip-permissions --model opus',
+    )
+  })
+
+  it('does not duplicate options the user already set in their own arguments', async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await orch.updateSettings({
+      remoteControl: true,
+      skipPermissions: true,
+      claudeArgs: ['--remote-control', 'mine', '--permission-mode', 'acceptEdits'],
+    })
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(tmux.calls).toContain(
+      'newSession mmt_client-x_my-api_fix claude --remote-control mine --permission-mode acceptEdits',
+    )
+  })
+})
+
 describe('Orchestrator: serialized mutations', () => {
   it('lets only one of two concurrent identical createTask calls succeed', async () => {
     const { orch, git, themeId, repoId } = await setup()

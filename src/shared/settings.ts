@@ -9,6 +9,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   pollIntervalMs: 3000,
   terminalFontSize: 13,
   notifications: true,
+  remoteControl: true,
+  skipPermissions: true,
 })
 
 export const clamp = (n: number, { min, max }: { min: number; max: number }): number => Math.min(max, Math.max(min, n))
@@ -34,5 +36,7 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
     pollIntervalMs: number(r.pollIntervalMs, base.pollIntervalMs, POLL_INTERVAL_LIMITS),
     terminalFontSize: number(r.terminalFontSize, base.terminalFontSize, FONT_SIZE_LIMITS),
     notifications: typeof r.notifications === 'boolean' ? r.notifications : base.notifications,
+    remoteControl: typeof r.remoteControl === 'boolean' ? r.remoteControl : base.remoteControl,
+    skipPermissions: typeof r.skipPermissions === 'boolean' ? r.skipPermissions : base.skipPermissions,
   }
 }

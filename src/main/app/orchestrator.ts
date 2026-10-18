@@ -92,18 +92,37 @@ export class Orchestrator implements AppService {
     }
   }
 
-  private resolve(target: Target): { session: string; cwd: string } {
+  /** The tmux session, working folder and Remote Control label (`<theme>/<repo>/<task>`) of a target. */
+  private resolve(target: Target): { session: string; cwd: string; label: string } {
     const theme = m.getTheme(this.state, target.themeId)
     const item = m.getItem(this.state, target.themeId, target.itemId)
-    if (item.kind === 'folder') return { session: sessionName(theme.slug, item.slug), cwd: item.path }
+    if (item.kind === 'folder') {
+      return { session: sessionName(theme.slug, item.slug), cwd: item.path, label: `${theme.slug}/${item.slug}` }
+    }
     if (!target.taskId) throw new Error('Choose a task to open')
     const task = m.getTask(this.state, theme.id, item.id, target.taskId)
-    return { session: sessionName(theme.slug, item.slug, task.slug), cwd: task.worktreePath }
+    return {
+      session: sessionName(theme.slug, item.slug, task.slug),
+      cwd: task.worktreePath,
+      label: `${theme.slug}/${item.slug}/${task.slug}`,
+    }
   }
 
-  /** The user's extra `claude` arguments, read at each start so a change applies to the next session. */
-  private claudeArgs(): string[] {
-    return this.deps.settings.get().claudeArgs
+  /**
+   * Arguments for starting Claude in a session labelled `label` (`<theme>/<repo>/<task>` or `<theme>/<folder>`):
+   * the Remote Control and skip-permissions flags when enabled, then the user's own arguments. A flag is left out
+   * when the user's arguments already set that option. Read at each start, so a change applies to the next session.
+   */
+  private claudeArgs(label: string): string[] {
+    const { claudeArgs, remoteControl, skipPermissions } = this.deps.settings.get()
+    const sets = (...options: string[]): boolean =>
+      claudeArgs.some((arg) => options.some((o) => arg === o || arg.startsWith(`${o}=`)))
+    const flags: string[] = []
+    if (remoteControl && !sets('--remote-control')) flags.push('--remote-control', label)
+    if (skipPermissions && !sets('--dangerously-skip-permissions', '--permission-mode')) {
+      flags.push('--dangerously-skip-permissions')
+    }
+    return [...flags, ...claudeArgs]
   }
 
   private detachIf(pred: (t: Target) => boolean): void {
@@ -205,7 +224,12 @@ export class Orchestrator implements AppService {
       const baseRef = await git.resolveBaseRef(repo.path)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
-        await tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudeCommand(this.claudeArgs()))
+        await tmux.newSession(
+          session,
+          worktreePath,
+          CLAUDE_WINDOW,
+          claudeCommand(this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)),
+        )
         const task: Task = {
           id: randomUUID(),
           name: name.trim(),
@@ -259,10 +283,10 @@ export class Orchestrator implements AppService {
 
   async openTarget(target: Target): Promise<TabInfo[]> {
     const seq = ++this.openSeq
-    const { session, cwd } = this.resolve(target)
+    const { session, cwd, label } = this.resolve(target)
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     if (!(await this.deps.tmux.hasSession(session))) {
-      await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs()))
+      await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
     }
     // Latest wins: if the user opened something else meanwhile, attaching here would send
     // their keystrokes to a session the UI is not showing.
@@ -300,11 +324,11 @@ export class Orchestrator implements AppService {
   }
 
   async restartClaude(target: Target): Promise<TabInfo[]> {
-    const { session, cwd } = this.resolve(target)
+    const { session, cwd, label } = this.resolve(target)
     if (!(await this.deps.tmux.hasSession(session))) return this.openTarget(target)
     const existing = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
-    else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs()))
+    else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
     return this.deps.tmux.listWindows(session)
   }
 

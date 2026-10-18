@@ -37,10 +37,16 @@ export class SettingsStore implements SettingsStoreApi {
 
 /** The current settings, in memory after init(); updates are normalized and saved one at a time. */
 export class SettingsService implements SettingsApi {
-  private current: Settings = defaults()
+  private current: Settings
   private queue: Promise<void> = Promise.resolve()
 
-  constructor(private readonly store: SettingsStoreApi) {}
+  /** `initial` is what `get()` returns until `init()` loads the saved settings. */
+  constructor(
+    private readonly store: SettingsStoreApi,
+    initial: Settings = defaults(),
+  ) {
+    this.current = initial
+  }
 
   async init(): Promise<void> {
     this.current = await this.store.load()

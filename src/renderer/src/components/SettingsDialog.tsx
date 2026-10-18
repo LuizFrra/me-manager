@@ -49,10 +49,12 @@ export function SettingsDialog(props: {
   const parsed = useMemo(() => parseForm(form), [form])
   const errors = parsed.errors ?? {}
   const notificationsHintId = useId()
+  const remoteHintId = useId()
+  const skipHintId = useId()
   useRestoreFocus()
 
   const set =
-    (field: Exclude<keyof SettingsForm, 'notifications'>) =>
+    (field: Exclude<keyof SettingsForm, 'notifications' | 'remoteControl' | 'skipPermissions'>) =>
     (e: React.ChangeEvent<HTMLInputElement>): void =>
       setForm((f) => ({ ...f, [field]: e.target.value }))
 
@@ -107,6 +109,41 @@ export function SettingsDialog(props: {
               />
             )}
           </Field>
+          <div className="settings-field">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                aria-describedby={remoteHintId}
+                checked={form.remoteControl}
+                onChange={(e) => setForm((f) => ({ ...f, remoteControl: e.target.checked }))}
+              />
+              Remote Control
+            </label>
+            <p id={remoteHintId} className="settings-hint settings-checkbox-hint">
+              Starts claude with <code>--remote-control</code>, named after the task (theme/repo/task), so you can
+              follow and steer it from claude.ai or the Claude app.
+            </p>
+          </div>
+          <div className="settings-field">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                aria-describedby={skipHintId}
+                checked={form.skipPermissions}
+                onChange={(e) => setForm((f) => ({ ...f, skipPermissions: e.target.checked }))}
+              />
+              Skip permission prompts
+            </label>
+            <p id={skipHintId} className="settings-hint settings-checkbox-hint">
+              Starts claude with <code>--dangerously-skip-permissions</code>.
+            </p>
+            {form.skipPermissions && (
+              <p role="alert" className="settings-warning">
+                Claude will run any command and edit any file without asking — including outside the task&apos;s
+                worktree. The worktree keeps edits off your main checkout, but it is not a sandbox.
+              </p>
+            )}
+          </div>
           <p className="settings-note">
             Applies to sessions started after saving; running sessions keep the arguments they started with.
           </p>

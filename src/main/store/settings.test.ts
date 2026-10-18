@@ -19,6 +19,8 @@ const custom: Settings = {
   pollIntervalMs: 5000,
   terminalFontSize: 15,
   notifications: false,
+  remoteControl: false,
+  skipPermissions: true,
 }
 
 describe('SettingsStore', () => {

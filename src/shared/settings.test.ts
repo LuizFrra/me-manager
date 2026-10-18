@@ -11,6 +11,8 @@ describe('normalizeSettings', () => {
       pollIntervalMs: 3000,
       terminalFontSize: 13,
       notifications: true,
+      remoteControl: true,
+      skipPermissions: true,
     })
   })
 
@@ -21,6 +23,8 @@ describe('normalizeSettings', () => {
       pollIntervalMs: 5000,
       terminalFontSize: 15,
       notifications: false,
+      remoteControl: false,
+      skipPermissions: false,
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -30,12 +34,16 @@ describe('normalizeSettings', () => {
       pollIntervalMs: 5000,
       terminalFontSize: 15,
       notifications: false,
+      remoteControl: false,
+      skipPermissions: false,
     })
     expect(Object.keys(s).sort()).toEqual([
       'claudeArgs',
       'editorCommand',
       'notifications',
       'pollIntervalMs',
+      'remoteControl',
+      'skipPermissions',
       'terminalFontSize',
     ])
   })
@@ -63,6 +71,8 @@ describe('normalizeSettings', () => {
         pollIntervalMs: '5000',
         terminalFontSize: Number.NaN,
         notifications: 'yes',
+        remoteControl: 1,
+        skipPermissions: 'true',
       }),
     ).toEqual(DEFAULT_SETTINGS)
     expect(normalizeSettings({ claudeArgs: 'opus' }).claudeArgs).toEqual([])

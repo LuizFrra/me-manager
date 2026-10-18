@@ -526,6 +526,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
               onRevealInFileManager={() => openExternally('fileManager')}
+              sessionFlags={settings}
             />
             <TabBar
               tabs={tabs}
