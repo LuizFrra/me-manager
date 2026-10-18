@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, LiveStatus, MeManagerApi, PrereqResult, TabInfo, Target, UnsavedWork } from '../../shared/types'
 import { hasUnsavedWork } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
@@ -14,7 +14,11 @@ import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget } from './lib/describe'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
-import { isPanelShortcut } from './lib/shortcuts'
+import { matchShortcut, shortcutLabel } from './lib/shortcuts'
+import { allTargets } from './lib/targets'
+import { useLatestCallback } from './lib/useLatestCallback'
+import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
+import { ShortcutHelp } from './components/ShortcutHelp'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -22,6 +26,14 @@ const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => 
 type Dialog =
   | { kind: 'name'; title: string; placeholder: string; onSubmit: (name: string) => Promise<void> }
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
+
+type AppAction =
+  { type: 'open'; target: Target } | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'help' }
+
+/** Palette entries carry data only; runCommand acts on them when one is picked. */
+interface AppCommand extends PaletteCommand {
+  action: AppAction
+}
 
 const EMPTY: AppState = { version: 1, themes: [] }
 const POLL_MS = 3000
@@ -36,6 +48,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [sessionEnded, setSessionEnded] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const { toasts, showError, dismiss } = useToasts()
   // Mirrors `selected` synchronously, so async responses can check whether their target is still selected.
   const selectedRef = useRef<Target | null>(null)
@@ -63,15 +77,28 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (target) updatePanel({ open: !panelsRef.current.get(targetKey(target))?.open })
   }, [updatePanel])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (!isPanelShortcut(e)) return
+  // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
+  // instead of sending them to tmux.
+  const onShortcutKey = useLatestCallback((e: KeyboardEvent): void => {
+    const shortcut = matchShortcut(e)
+    // A name or remove dialog is a modal flow of its own: leave it alone.
+    if (!shortcut || dialog) return
+    if (shortcut.id === 'palette') {
       e.preventDefault()
-      togglePanel()
+      setHelpOpen(false)
+      setPaletteOpen((o) => !o)
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [togglePanel])
+    // The palette and the help overlay are modal too: only their own toggles act while one is open.
+    if (paletteOpen || helpOpen) return
+    e.preventDefault()
+    togglePanel()
+  })
+
+  useEffect(() => {
+    window.addEventListener('keydown', onShortcutKey)
+    return () => window.removeEventListener('keydown', onShortcutKey)
+  }, [onShortcutKey])
 
   const attempt = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -170,6 +197,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       },
     })
 
+  const newTheme = (): void => askName('New theme', 'e.g. Client X', (name) => api.createTheme(name))
+
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
     const next = await attempt(fn)
     if (next) setState(next)
@@ -195,6 +224,45 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else await doRemove(true)
   }
 
+  const openFileInPanel = useCallback(
+    (path: string) => updatePanel({ open: true, tab: 'files', selected: path, history: [] }),
+    [updatePanel],
+  )
+  // Stable while the selection is, so the palette lists the files once per opening.
+  const loadPaletteFiles = useMemo(
+    () => (selected ? (): Promise<PaletteFiles> => api.listFiles(selected) : undefined),
+    [api, selected],
+  )
+
+  const paletteCommands = (): AppCommand[] => {
+    const commands: AppCommand[] = allTargets(state).map((entry) => ({
+      id: `target:${targetKey(entry.target)}`,
+      kind: entry.kind,
+      label: entry.label,
+      action: { type: 'open', target: entry.target },
+    }))
+    const action = (label: string, type: Exclude<AppAction['type'], 'open'>, shortcut?: string): void => {
+      commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
+    }
+    action('New theme', 'newTheme')
+    if (selected) {
+      action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
+      action('New shell tab', 'newTab')
+      action('Restart Claude', 'restartClaude')
+    }
+    action('Show keyboard shortcuts', 'help')
+    return commands
+  }
+
+  const runCommand = ({ action }: AppCommand): void => {
+    if (action.type === 'open') void open(action.target)
+    else if (action.type === 'newTheme') newTheme()
+    else if (action.type === 'togglePanel') togglePanel()
+    else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
+    else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
+    else setHelpOpen(true)
+  }
+
   if (prereqs && !prereqs.ok) return <PrereqScreen result={prereqs} onRetry={checkPrereqs} />
 
   const header = selected ? describeTarget(state, selected) : null
@@ -210,7 +278,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         status={status}
         selected={selected}
         onSelect={(t) => void open(t)}
-        onAddTheme={() => askName('New theme', 'e.g. Client X', (name) => api.createTheme(name))}
+        onAddTheme={newTheme}
         onRemoveTheme={async (themeId) => {
           if (await update(() => api.removeTheme(themeId))) clearSelectionIf((t) => t.themeId === themeId)
         }}
@@ -305,6 +373,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onCancel={() => setDialog(null)}
         />
       )}
+      {paletteOpen && (
+        <CommandPalette
+          commands={paletteCommands()}
+          onRun={runCommand}
+          loadFiles={loadPaletteFiles}
+          onOpenFile={openFileInPanel}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
       <Toasts toasts={toasts} onDismiss={dismiss} />
     </div>
   )
