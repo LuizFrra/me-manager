@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   ChangeList,
   ChangeStatus,
@@ -11,6 +11,7 @@ import type {
 import { ancestorDirs, buildTree, filterPaths } from '../../lib/fileTree'
 import { isSvgPath } from '../../../../shared/images'
 import { isMarkdown } from '../../lib/files'
+import { autoDiffLayout, loadDiffLayout, saveDiffLayout, type DiffLayout } from '../../lib/diff/layout'
 import type { PanelState, PanelTab, SearchState } from '../../lib/panelState'
 import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
 import { ChangesList } from './ChangesList'
@@ -73,6 +74,27 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const [reload, setReload] = useState(0)
   // Last JSON per data slot, so polls that return the same data don't re-render.
   const lastJson = useRef(new Map<string, string>())
+
+  // The diff layout: the user's last pick (kept for every target), else split when the panel is wide enough.
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [pickedLayout, setPickedLayout] = useState<DiffLayout | null>(loadDiffLayout)
+  const [fitLayout, setFitLayout] = useState<DiffLayout>('unified')
+  // Measured before the first paint, so a wide panel doesn't flash a unified diff first.
+  useLayoutEffect(() => {
+    const el = panelRef.current
+    if (!el) return
+    const measure = (): void => setFitLayout(autoDiffLayout(el.getBoundingClientRect().width))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  const diffLayout = pickedLayout ?? fitLayout
+  const pickLayout = useLatestCallback((layout: DiffLayout): void => {
+    setPickedLayout(layout)
+    saveDiffLayout(layout)
+  })
 
   // In Changes, only files in the change list have something to show; Search shows no file.
   const inChanges = Boolean(changes?.files.some((f) => f.path === state.selected))
@@ -229,7 +251,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const change = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath) : undefined
 
   return (
-    <div className="panel">
+    <div className="panel" ref={panelRef}>
       <div className="panel-header">
         <div className="panel-tabs" role="tablist" aria-label="Side panel">
           <button role="tab" aria-selected={tab === 'files'} onClick={() => onState({ ...state, tab: 'files' })}>
@@ -362,6 +384,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             diff={tab === 'changes' && typeof loaded === 'string' ? loaded : undefined}
             change={change}
             mdMode={state.mdMode}
+            diffLayout={diffLayout}
+            onDiffLayout={pickLayout}
             highlightLine={tab === 'files' ? state.line : undefined}
             canGoBack={state.history.length > 0}
             onBack={back}

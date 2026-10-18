@@ -1,7 +1,7 @@
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MeManagerApi, SearchMatch, Target } from '../../../../shared/types'
 import { createMockApi } from '../../api/mockApi'
 import { DEFAULT_PANEL, type PanelState } from '../../lib/panelState'
@@ -26,7 +26,13 @@ vi.mock('./MarkdownView', () => ({
     )
   },
 }))
-vi.mock('./DiffView', () => ({ DiffView: (p: { diff: string }) => <pre data-testid="diff">DIFF:{p.diff}</pre> }))
+vi.mock('./DiffView', () => ({
+  DiffView: (p: { diff: string; layout?: string }) => (
+    <pre data-testid="diff" data-layout={p.layout ?? 'unified'}>
+      DIFF:{p.diff}
+    </pre>
+  ),
+}))
 
 const TASK: Target = { themeId: 't1', itemId: 'r1', taskId: 'k1' }
 const FOLDER: Target = { themeId: 't1', itemId: 'f1' }
@@ -223,6 +229,71 @@ describe('SidePanel', () => {
     expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
     expect(fileButton('app\\.ts')).toHaveAttribute('aria-current', 'true')
     await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+  })
+
+  describe('diff layout', () => {
+    /** Node's own `localStorage` shadows jsdom's and needs a file, so these tests bring one. */
+    function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> {
+      const data = new Map<string, string>()
+      return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, String(v)) }
+    }
+    const layoutToggle = (): HTMLElement => screen.getByRole('group', { name: 'Diff layout' })
+    const pressed = (): string[] =>
+      within(layoutToggle())
+        .getAllByRole('button', { pressed: true })
+        .map((b) => b.textContent ?? '')
+    /** Opens Changes and the first changed file's diff. */
+    async function openDiff(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+      await user.click(await screen.findByRole('tab', { name: 'Changes 4' }))
+      await user.click(screen.getByRole('button', { name: /src\/app\.ts/ }))
+      return screen.findByTestId('diff')
+    }
+
+    beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()))
+    afterEach(() => {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    })
+
+    it('starts unified in a narrow panel, and the toggle switches to split and back', async () => {
+      const user = userEvent.setup()
+      render(<Harness api={createMockApi()} />)
+      expect(await openDiff(user)).toHaveAttribute('data-layout', 'unified')
+      expect(pressed()).toEqual(['Unified'])
+      await user.click(within(layoutToggle()).getByRole('button', { name: 'Split' }))
+      expect(screen.getByTestId('diff')).toHaveAttribute('data-layout', 'split')
+      expect(pressed()).toEqual(['Split'])
+      await user.click(within(layoutToggle()).getByRole('button', { name: 'Unified' }))
+      expect(screen.getByTestId('diff')).toHaveAttribute('data-layout', 'unified')
+    })
+
+    it('starts split in a panel wider than 700 px', async () => {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 900 } as DOMRect)
+      const user = userEvent.setup()
+      render(<Harness api={createMockApi()} />)
+      expect(await openDiff(user)).toHaveAttribute('data-layout', 'split')
+      expect(pressed()).toEqual(['Split'])
+    })
+
+    it('keeps the picked layout for every panel after, whatever its width', async () => {
+      const wide = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 900 } as DOMRect)
+      const user = userEvent.setup()
+      const { unmount } = render(<Harness api={createMockApi()} />)
+      await openDiff(user)
+      await user.click(within(layoutToggle()).getByRole('button', { name: 'Unified' }))
+      unmount()
+
+      render(<Harness api={createMockApi()} target={{ ...TASK, taskId: 'k2' }} />)
+      expect(await openDiff(user)).toHaveAttribute('data-layout', 'unified')
+      expect(localStorage.getItem('me-manager.diffLayout')).toBe('unified')
+      wide.mockRestore()
+    })
+
+    it('has no layout toggle in Files', async () => {
+      render(<Harness api={createMockApi()} />)
+      await screen.findByRole('button', { name: 'README.md' })
+      expect(screen.queryByRole('group', { name: 'Diff layout' })).not.toBeInTheDocument()
+    })
   })
 
   it('allows Open file for a deletion whose file is still on disk', async () => {
