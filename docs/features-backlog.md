@@ -27,12 +27,12 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 0 | Fix findings from the file-viewer code review | quality | done (9d73c69..97b9447) |
 | 1 | Lazy-load the Markdown viewer and highlight.js, shrinking the 2.2 MB startup bundle | perf | done (139b497) |
 | 2 | Pause polling while the window is hidden or minimized, using `visibilitychange` | perf | done (32c97b7) |
-| 3 | Command palette (Ctrl/Cmd+K): fuzzy jump to any task, folder, or file of the current task, and run app actions | ux | done (8561443) |
-| 4 | Keyboard shortcuts: Ctrl/Cmd+1..9 to switch tasks, Ctrl/Cmd+Shift+T for a new shell tab, Ctrl/Cmd+Shift+W to close a tab, Ctrl/Cmd+Shift+[ / ] to switch tabs, Ctrl/Cmd+/ to show a shortcut help overlay | ux | done (b082539) |
+| 3 | Command palette (Ctrl/Cmd+Shift+P, plus Cmd+K on macOS): fuzzy jump to any task, folder, or file of the current task, and run app actions | ux | done (8561443) |
+| 4 | Keyboard shortcuts: Ctrl/Cmd+1..9 to switch tasks, Ctrl/Cmd+Shift+T for a new shell tab, Ctrl/Cmd+Shift+W to close a tab, Ctrl/Cmd+Shift+[ / ] to switch tabs, Ctrl/Cmd+Shift+/ to show a shortcut help overlay. Fixed in 6bb3820: the palette moved from Ctrl+K to Ctrl+Shift+P and help from Ctrl+/ to Ctrl+Shift+/, so Linux Ctrl+K (kill line) and Ctrl+/ (undo) reach the terminal again; macOS also keeps Cmd+K and Cmd+/ | ux | done (b082539, 6bb3820) |
 | 5 | Sidebar filter box: filter themes, repos and tasks by name | ux | done (d5dc635) |
-| 6 | Rename a theme or task (display name only; slug, branch and path stay unchanged) | feature | todo |
-| 7 | Task notes: a free-text description per task, shown in the header and editable | feature | todo |
-| 8 | Copy actions: copy the branch name, worktree path, or `tmux attach` command | ux | todo |
+| 6 | Rename a theme or task (display name only; slug, branch and path stay unchanged) | feature | done (68c499f) |
+| 7 | Task notes: a free-text description per task, shown in the header and editable | feature | done (c7dff9e) |
+| 8 | Copy actions: copy the branch name, worktree path, or `tmux attach` command | ux | done (cbf39fc) |
 | 9 | Open the task in an external editor (VS Code, or `$EDITOR`, set in Settings) or the system file manager | feature | todo |
 | 10 | Git status per task: commits ahead of the base, and the uncommitted file count, shown as a sidebar badge and in the header | feature | todo |
 | 11 | Claude activity indicator: busy, waiting or idle per task, based on tmux pane activity, shown in the sidebar | feature | todo |
