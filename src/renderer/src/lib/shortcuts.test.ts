@@ -88,6 +88,7 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+Shift+E'], description: 'Toggle files panel' },
       { keys: ['Ctrl+Shift+F'], description: 'Filter the sidebar' },
       { keys: ['Ctrl+Shift+O'], description: 'Open in editor' },
+      { keys: ['Ctrl+Shift+U'], description: 'Claude usage and cost' },
       { keys: ['Ctrl+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
       { keys: ['Ctrl+Shift+T'], description: 'New shell tab' },
       { keys: ['Ctrl+Shift+W'], description: 'Close the active tab' },
@@ -104,6 +105,7 @@ describe('shortcut labels', () => {
       ['⌘⇧E'],
       ['⌘⇧F'],
       ['⌘⇧O'],
+      ['⌘⇧U'],
       ['⌘1…9'],
       ['⌘⇧T'],
       ['⌘⇧W'],
@@ -176,6 +178,13 @@ describe.each([
     expect(shortcutLabel('settings', mac)).toBe(mac ? '⌘,' : 'Ctrl+,')
   })
 
+  it('opens the usage view with Mod+Shift+U, never plain Mod+U', () => {
+    expect(shifted('U')).toEqual({ id: 'usage' })
+    expect(shifted('u')).toEqual({ id: 'usage' })
+    expect(press('u')).toBeNull()
+    expect(shortcutLabel('usage', mac)).toBe(mac ? '⌘⇧U' : 'Ctrl+Shift+U')
+  })
+
   it('opens the editor with Mod+Shift+O, never plain Mod+O', () => {
     expect(shifted('O')).toEqual({ id: 'openEditor' })
     expect(press('o')).toBeNull()
@@ -217,10 +226,11 @@ describe.each([
 })
 
 describe('worksWhileTyping', () => {
-  it('lets only the palette, help and panel toggles through in text fields', () => {
+  it('lets only the palette, help, usage and panel toggles through in text fields', () => {
     expect(worksWhileTyping('palette')).toBe(true)
     expect(worksWhileTyping('help')).toBe(true)
     expect(worksWhileTyping('panel')).toBe(true)
+    expect(worksWhileTyping('usage')).toBe(true)
     for (const id of ['filterSidebar', 'target', 'newTab', 'closeTab', 'prevTab', 'nextTab'] as const)
       expect(worksWhileTyping(id)).toBe(false)
   })

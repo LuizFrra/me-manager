@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import type { UsageSummary } from '../../../shared/types'
 import type { CopyEntry } from '../lib/copy'
 import { shortcutLabel } from '../lib/shortcuts'
+import { UsageBadge } from './UsageBadge'
 
 /**
  * The selected task's or folder's header: title, path line, and the task's notes, collapsed to one line until
@@ -20,6 +22,9 @@ export function TaskHeader(props: {
   onRevealInFileManager: () => void
   /** Settings flags that new Claude sessions start with; shown as badges so they're never forgotten. */
   sessionFlags?: { remoteControl: boolean; skipPermissions: boolean }
+  /** The target's Claude usage, once loaded: shown as a badge that opens the usage view. */
+  usage?: UsageSummary
+  onOpenUsage?: () => void
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -45,6 +50,7 @@ export function TaskHeader(props: {
           <div className="task-subtitle">{props.subtitle}</div>
         </div>
         <div className="task-header-actions">
+          {props.usage && props.onOpenUsage && <UsageBadge usage={props.usage} onOpen={props.onOpenUsage} />}
           <div className="copy-group" role="group" aria-label="Open">
             <span className="copy-group-label" aria-hidden="true">
               Open

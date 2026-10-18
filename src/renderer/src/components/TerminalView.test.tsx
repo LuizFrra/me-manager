@@ -70,6 +70,7 @@ describe('TerminalView key handler', () => {
       key({ key: '?', shiftKey: true }),
       key({ key: ',' }),
       key({ key: 'O', shiftKey: true }),
+      key({ key: 'U', shiftKey: true }),
       key({ key: '=' }),
       key({ key: '+', shiftKey: true, code: 'Equal' }),
       key({ key: '-' }),
@@ -92,6 +93,7 @@ describe('TerminalView key handler', () => {
       key({ key: 'p' }),
       key({ key: ',', shiftKey: true }),
       key({ key: 'o' }),
+      key({ key: 'u' }), // readline: kill to the start of the line
       key({ key: 'a', ctrlKey: false }),
     ]
     for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)

@@ -26,6 +26,7 @@ export type ShortcutId =
   | 'panel'
   | 'filterSidebar'
   | 'openEditor'
+  | 'usage'
   | 'target'
   | 'newTab'
   | 'closeTab'
@@ -88,6 +89,7 @@ const SHORTCUTS: ShortcutDef[] = [
   { id: 'panel', description: 'Toggle files panel', chords: [letter(true, 'E')] },
   { id: 'filterSidebar', description: 'Filter the sidebar', chords: [letter(true, 'F')] },
   { id: 'openEditor', description: 'Open in editor', chords: [letter(true, 'O')] },
+  { id: 'usage', description: 'Claude usage and cost', chords: [letter(true, 'U')] },
   {
     id: 'target',
     description: 'Go to the 1st…9th task or folder in the sidebar',
@@ -134,7 +136,7 @@ const chordsFor = (def: ShortcutDef, mac: boolean): Chord[] => def.chords.filter
  * ignored in inputs and textareas (the terminal's hidden textarea excepted, see isEditableTarget), so a field
  * keeps its own keys and a stray chord doesn't switch tasks under the user.
  */
-const WHILE_TYPING: ReadonlySet<ShortcutId> = new Set(['palette', 'help', 'panel'])
+const WHILE_TYPING: ReadonlySet<ShortcutId> = new Set(['palette', 'help', 'usage', 'panel'])
 
 export const worksWhileTyping = (id: ShortcutId): boolean => WHILE_TYPING.has(id)
 

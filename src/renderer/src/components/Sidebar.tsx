@@ -24,6 +24,7 @@ export interface SidebarProps {
   onRenameTask: (themeId: string, repoId: string, taskId: string, currentName: string) => void
   onRemoveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
   onOpenSettings: () => void
+  onOpenUsage: () => void
 }
 
 export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
@@ -205,6 +206,14 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           ))}
       </div>
       <div className="sidebar-footer">
+        <button
+          className="sidebar-settings"
+          aria-label="Usage"
+          title={`Claude usage and estimated cost (${shortcutLabel('usage')})`}
+          onClick={p.onOpenUsage}
+        >
+          <span aria-hidden="true">$</span> Usage
+        </button>
         <button
           className="sidebar-settings"
           aria-label="Settings"
