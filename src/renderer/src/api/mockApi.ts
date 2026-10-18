@@ -32,6 +32,8 @@ const DEMO_BRANCHES = ['origin/main', 'origin/develop', 'origin/release/2.0', 'm
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
 const baseName = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
 
+const sameName = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
 /** The checks main makes on a new display name: trimmed, not empty, not taken (ignoring case). */
 function checkName(name: string, what: string, taken: { id: string; name: string }[], selfId: string): string {
   const trimmed = name.trim()
@@ -118,7 +120,19 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         t.name = checkName(name, 'Theme', state.themes, themeId)
       }),
     removeTheme: async (themeId) => {
+      const theme = state.themes.find((t) => t.id === themeId)
+      if (theme?.items.some((i) => i.kind === 'repo' && i.tasks.length > 0))
+        throw new Error(`Remove the tasks in "${theme.name}" first`)
       state = { ...state, themes: state.themes.filter((t) => t.id !== themeId) }
+      return state
+    },
+    // Like main: back with the same ids, at the old position, unless something took its place meanwhile.
+    restoreTheme: async (theme, index) => {
+      if (state.themes.some((t) => t.id === theme.id || t.slug === theme.slug || sameName(t.name, theme.name)))
+        throw new Error(`A theme named "${theme.name}" already exists`)
+      const themes = [...state.themes]
+      themes.splice(index ?? themes.length, 0, clone(theme))
+      state = { ...state, themes }
       return state
     },
     pickDirectory: async () => `/home/demo/project-${++counter}`,
@@ -132,7 +146,17 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       }),
     removeItem: (themeId, itemId) =>
       edit(themeId, (t) => {
+        const item = t.items.find((i) => i.id === itemId)
+        if (item?.kind === 'repo' && item.tasks.length > 0) throw new Error(`Remove the tasks in "${item.name}" first`)
         t.items = t.items.filter((i) => i.id !== itemId)
+      }),
+    restoreItem: (themeId, item, index) =>
+      edit(themeId, (t) => {
+        if (t.items.some((i) => i.id === item.id || i.path === item.path))
+          throw new Error(`${item.path} is already in this theme`)
+        if (t.items.some((i) => i.slug === item.slug))
+          throw new Error(`An item named "${item.name}" already exists in this theme`)
+        t.items.splice(index ?? t.items.length, 0, clone(item))
       }),
     listBranches: async () => ({ default: 'origin/main', branches: [...DEMO_BRANCHES] }),
     createTask: (themeId, repoId, name, options = {}) =>

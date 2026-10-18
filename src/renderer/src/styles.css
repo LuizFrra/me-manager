@@ -711,6 +711,42 @@ button:disabled {
   border-radius: 3px;
   background: #ffffff10;
 }
+.confirm-remove-dialog {
+  width: min(480px, 92vw);
+}
+.confirm-remove-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.confirm-remove-body p {
+  margin: 0;
+  line-height: 1.5;
+}
+.confirm-remove-path {
+  display: block;
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.dialog-safe {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  background: #3fb95014;
+  border-left: 2px solid var(--ok);
+  border-radius: 2px;
+}
+.dialog-safe span {
+  color: var(--ok);
+  font-weight: 700;
+}
 .dialog-warning {
   background: #5a1d1d;
   border: 1px solid var(--danger);
@@ -759,6 +795,19 @@ button:disabled {
 }
 .toast-info button {
   color: var(--muted);
+}
+.toast-message {
+  overflow-wrap: anywhere;
+}
+.toast-info button.toast-action {
+  margin-left: 4px;
+  padding: 2px 10px;
+  color: var(--accent);
+  font-weight: 600;
+  border-color: #4fa3ff66;
+}
+.toast-info button.toast-action:hover {
+  background: #4fa3ff1f;
 }
 .prereq {
   max-width: 560px;

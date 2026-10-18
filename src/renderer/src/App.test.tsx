@@ -2067,3 +2067,126 @@ describe('App remembers the UI across restarts', () => {
     await waitFor(() => expect(save).toHaveBeenCalled(), { timeout: 2_000 })
   })
 })
+
+describe('App removing themes, repos and folders', () => {
+  /** A theme "Client X" with the repo my-api and the folder notes (in that order); `paths` picks them. */
+  async function setupTheme(user: UserEvent, extra: Partial<MeManagerApi> = {}): Promise<MeManagerApi> {
+    const paths = ['/home/me/code/my-api', '/home/me/docs/notes']
+    const api = createMockApi({ pickDirectory: async () => paths.shift() ?? null, ...extra })
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await screen.findByRole('button', { name: 'Remove notes' })
+    return api
+  }
+  const itemNames = async (api: MeManagerApi): Promise<string[]> =>
+    (await api.getState()).themes.flatMap((t) => t.items.map((i) => `${t.name}/${i.name}`))
+
+  it('asks before removing a repo, saying the files stay; Cancel and Esc keep it', async () => {
+    const user = userEvent.setup()
+    const api = await setupTheme(user)
+    const removeItem = vi.spyOn(api, 'removeItem')
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove repository my-api' })
+    expect(dialog).toHaveTextContent('Remove repository “my-api”?')
+    expect(dialog).toHaveTextContent('The repository is removed from Client X.')
+    expect(dialog).toHaveTextContent('/home/me/code/my-api')
+    expect(dialog).toHaveTextContent('Your files on disk are not touched.')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(removeItem).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Remove my-api' })).toBeInTheDocument()
+  })
+
+  it('removes a repo once confirmed, and Undo puts it back as it was, in its place', async () => {
+    const user = userEvent.setup()
+    const api = await setupTheme(user)
+    const before = (await api.getState()).themes[0].items
+    const restoreItem = vi.spyOn(api, 'restoreItem')
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove my-api' })).not.toBeInTheDocument())
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(await itemNames(api)).toEqual(['Client X/notes'])
+    const toast = screen.getByRole('status')
+    expect(toast).toHaveTextContent('Removed repository “my-api”')
+
+    await user.click(within(toast).getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByRole('button', { name: 'Remove my-api' })).toBeInTheDocument()
+    expect(restoreItem).toHaveBeenCalledWith(expect.any(String), before[0], 0)
+    expect((await api.getState()).themes[0].items).toEqual(before)
+    expect(screen.getByRole('status')).toHaveTextContent('Restored repository “my-api”')
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument()
+  })
+
+  it('removes a folder, closing its selection, and Undo brings it back', async () => {
+    const user = userEvent.setup()
+    const api = await setupTheme(user)
+    await user.click(screen.getByRole('button', { name: /📁 notes$/ }))
+    expect(await screen.findByTestId('terminal')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove notes' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove folder notes' })
+    expect(dialog).toHaveTextContent('The folder is removed from Client X, and its terminal session is closed.')
+    expect(dialog).toHaveTextContent('Your files on disk are not touched.')
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByTestId('terminal')).not.toBeInTheDocument())
+    expect(await itemNames(api)).toEqual(['Client X/my-api'])
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByRole('button', { name: 'Remove notes' })).toBeInTheDocument()
+    expect(await itemNames(api)).toEqual(['Client X/my-api', 'Client X/notes'])
+  })
+
+  it('removes a theme with its items once confirmed, and Undo restores all of it', async () => {
+    const user = userEvent.setup()
+    const api = await setupTheme(user)
+    await user.click(screen.getByRole('button', { name: 'New theme' }))
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Personal')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await screen.findByRole('button', { name: 'Remove theme Personal' })
+    const before = await api.getState()
+
+    await user.click(screen.getByRole('button', { name: 'Remove theme Client X' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove theme Client X' })
+    expect(dialog).toHaveTextContent('The theme is removed from me-manager, with its 1 repository and 1 folder.')
+    expect(dialog).toHaveTextContent('Your files on disk are not touched.')
+    await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument())
+    expect(screen.getByRole('status')).toHaveTextContent('Removed theme “Client X”')
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(await screen.findByRole('button', { name: 'Remove theme Client X' })).toBeInTheDocument()
+    expect(await api.getState()).toEqual(before)
+    expect(screen.getByRole('button', { name: 'Remove my-api' })).toBeInTheDocument()
+  })
+
+  it('refuses at once, without a dialog, while a repo or theme has tasks', async () => {
+    const user = userEvent.setup()
+    const api = await setupTheme(user)
+    const removeItem = vi.spyOn(api, 'removeItem')
+    await createTask(user, 'fix')
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Remove the tasks in "my-api" first')
+    await user.click(screen.getByRole('button', { name: 'Remove theme Client X' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('alert').at(-1)).toHaveTextContent('Remove the tasks in "Client X" first')
+    expect(removeItem).not.toHaveBeenCalled()
+  })
+
+  it('shows why an undo failed', async () => {
+    const user = userEvent.setup()
+    await setupTheme(user, {
+      restoreItem: async () => {
+        throw new Error('/home/me/code/my-api is already in this theme')
+      },
+    })
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(await screen.findByRole('button', { name: 'Undo' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('/home/me/code/my-api is already in this theme')
+  })
+})

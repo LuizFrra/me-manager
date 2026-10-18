@@ -236,12 +236,24 @@ export interface MeManagerApi {
   createTheme(name: string): Promise<AppState>
   /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */
   renameTheme(themeId: string, name: string): Promise<AppState>
+  /** Removes the theme from the app only (nothing on disk); refused while it has tasks. Kills its folder sessions. */
   removeTheme(themeId: string): Promise<AppState>
+  /**
+   * Undoes removeTheme: re-adds the theme as it was (same id, name, slug, items), at `index` (its old position)
+   * when given. Rejects it when its id, slug or name, or one of its items, is in use meanwhile.
+   */
+  restoreTheme(theme: Theme, index?: number): Promise<AppState>
 
   pickDirectory(): Promise<string | null>
   addRepo(themeId: string, path: string): Promise<AppState>
   addFolder(themeId: string, path: string): Promise<AppState>
+  /** Removes a repo or folder from the theme only (nothing on disk); refused for a repo with tasks. */
   removeItem(themeId: string, itemId: string): Promise<AppState>
+  /**
+   * Undoes removeItem: re-adds the repo (without tasks) or folder with the same id, name, slug and path, at
+   * `index` when given. Rejects it when its id, path or slug is in use meanwhile. A folder's session isn't restarted.
+   */
+  restoreItem(themeId: string, item: Item, index?: number): Promise<AppState>
 
   /**
    * Fetches origin (giving up after a timeout, like createTask), then lists the branches a new task in the repo can

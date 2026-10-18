@@ -1,14 +1,28 @@
 import { useCallback, useRef, useState } from 'react'
 
+/** A button on a toast, e.g. "Undo". Clicking it dismisses the toast, then runs `run`. */
+export interface ToastAction {
+  label: string
+  run: () => void | Promise<void>
+}
+
 export interface Toast {
   id: number
   /** An error stays for a while; an info toast is a short, neutral confirmation ("Copied branch name"). */
   kind: 'error' | 'info'
   message: string
+  /** Info toasts only: a button, shown for ACTION_MS instead of INFO_MS. */
+  action?: ToastAction
+}
+
+export interface InfoOptions {
+  action?: ToastAction
 }
 
 const ERROR_MS = 8000
 export const INFO_MS = 2000
+/** How long an info toast with an action (an "Undo") stays. */
+export const ACTION_MS = 8000
 
 export function cleanError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
@@ -18,7 +32,7 @@ export function cleanError(err: unknown): string {
 export function useToasts(): {
   toasts: Toast[]
   showError: (err: unknown) => void
-  showInfo: (message: string) => void
+  showInfo: (message: string, options?: InfoOptions) => void
   dismiss: (id: number) => void
 } {
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -32,12 +46,14 @@ export function useToasts(): {
     },
     [dismiss],
   )
-  // A new confirmation replaces the previous one instead of stacking up.
+  // A new confirmation replaces the previous plain one instead of stacking up. One with an action (an "Undo")
+  // is never replaced, so a later "Copied…" can't take the undo away; it goes when it times out or is used.
   const showInfo = useCallback(
-    (message: string) => {
+    (message: string, options: InfoOptions = {}) => {
       const id = ++nextId.current
-      setToasts((ts) => [...ts.filter((t) => t.kind !== 'info'), { id, kind: 'info', message }])
-      setTimeout(() => dismiss(id), INFO_MS)
+      const toast: Toast = { id, kind: 'info', message, ...(options.action ? { action: options.action } : {}) }
+      setToasts((ts) => [...ts.filter((t) => t.kind !== 'info' || t.action), toast])
+      setTimeout(() => dismiss(id), options.action ? ACTION_MS : INFO_MS)
     },
     [dismiss],
   )

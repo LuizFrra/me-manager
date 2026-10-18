@@ -83,6 +83,103 @@ describe('items', () => {
   })
 })
 
+describe('restoring a removed item or theme (undo)', () => {
+  function withFolder(): { s: AppState; themeId: string; repoId: string; folderId: string } {
+    const { s: base, themeId, repoId } = setup()
+    const s = m.addFolder(base, themeId, '/docs/notes')
+    return { s, themeId, repoId, folderId: s.themes[0].items[1].id }
+  }
+
+  it('puts a removed repo back as it was, at its old position', () => {
+    const { s, themeId, repoId } = withFolder()
+    const repo = m.getItem(s, themeId, repoId)
+    const removed = m.removeItem(s, themeId, repoId)
+    const restored = m.restoreItem(removed, themeId, repo, 0)
+    expect(restored.themes[0].items).toEqual(s.themes[0].items)
+    expect(removed.themes[0].items).toHaveLength(1) // input untouched
+  })
+
+  it('puts a removed folder back at the end without an index, and clamps the index', () => {
+    const { s, themeId, folderId } = withFolder()
+    const folder = m.getItem(s, themeId, folderId)
+    const removed = m.removeItem(s, themeId, folderId)
+    expect(
+      m
+        .restoreItem(removed, themeId, folder)
+        .themes[0].items.map((i) => i.id)
+        .at(-1),
+    ).toBe(folderId)
+    expect(m.restoreItem(removed, themeId, folder, 99).themes[0].items).toEqual(s.themes[0].items)
+    expect(m.restoreItem(removed, themeId, folder, -3).themes[0].items[0]).toEqual(folder)
+  })
+
+  it('rejects an item whose id, path or slug is taken meanwhile', () => {
+    const { s, themeId, repoId } = withFolder()
+    const repo = m.getItem(s, themeId, repoId)
+    expect(() => m.restoreItem(s, themeId, repo)).toThrow('"my-api" is already in me-manager')
+    const removed = m.removeItem(s, themeId, repoId)
+    const readded = m.addRepo(removed, themeId, '/code/my-api')
+    expect(() => m.restoreItem(readded, themeId, repo)).toThrow('/code/my-api is already in this theme')
+    const sameSlug = m.addFolder(removed, themeId, '/elsewhere/my-api')
+    expect(() => m.restoreItem(sameSlug, themeId, repo)).toThrow('An item named "my-api" already exists')
+    expect(() => m.restoreItem(removed, 'nope', repo)).toThrow(/Theme not found/)
+  })
+
+  it('rejects malformed items, unsafe slugs, relative paths and repos with tasks', () => {
+    const { s, themeId, repoId } = withFolder()
+    const repo = m.getItem(s, themeId, repoId)
+    const removed = m.removeItem(s, themeId, repoId)
+    for (const bad of [
+      null,
+      'x',
+      { ...repo, kind: 'task' },
+      { ...repo, id: '' },
+      { ...repo, name: 3 },
+      { ...repo, slug: '../etc' },
+      { ...repo, slug: 'a_b' },
+      { ...repo, path: 'code/my-api' },
+    ]) {
+      expect(() => m.restoreItem(removed, themeId, bad)).toThrow(/Invalid item to restore/)
+    }
+    expect(() => m.restoreItem(removed, themeId, { ...repo, tasks: [task('fix')] })).toThrow(/with tasks/)
+  })
+
+  it('keeps only the known fields of a restored item', () => {
+    const { s, themeId, folderId } = withFolder()
+    const folder = m.getItem(s, themeId, folderId)
+    const removed = m.removeItem(s, themeId, folderId)
+    const restored = m.restoreItem(removed, themeId, { ...folder, extra: 'x', tasks: [] })
+    expect(m.getItem(restored, themeId, folderId)).toEqual(folder)
+  })
+
+  it('puts a removed theme back with its items, at its old position', () => {
+    let { s } = withFolder()
+    s = m.addTheme(s, 'Personal')
+    const theme = s.themes[0]
+    const removed = m.removeTheme(s, theme.id)
+    const restored = m.restoreTheme(removed, theme, 0)
+    expect(restored).toEqual(s)
+    expect(m.restoreTheme(removed, theme).themes.map((t) => t.name)).toEqual(['Personal', 'Client X'])
+  })
+
+  it('rejects a theme whose id, slug or name is taken meanwhile, or whose items clash', () => {
+    const { s } = withFolder()
+    const theme = s.themes[0]
+    expect(() => m.restoreTheme(s, theme)).toThrow('"Client X" is already in me-manager')
+    const removed = m.removeTheme(s, theme.id)
+    expect(() => m.restoreTheme(m.addTheme(removed, 'client-x'), theme)).toThrow(/already exists/)
+    const other = m.addTheme(removed, 'Other')
+    const renamed = m.renameTheme(other, other.themes[0].id, 'CLIENT X') // slug "other", name taken
+    expect(() => m.restoreTheme(renamed, theme)).toThrow('A theme named "Client X" already exists')
+    const twice = { ...theme, items: [theme.items[0], { ...theme.items[0], id: 'other-id' }] }
+    expect(() => m.restoreTheme(removed, twice)).toThrow(/lists an item twice/)
+    const sharedId = { ...theme, items: [theme.items[0], { ...theme.items[1], id: theme.items[0].id }] }
+    expect(() => m.restoreTheme(removed, sharedId)).toThrow(/already in me-manager/)
+    expect(() => m.restoreTheme(removed, { ...theme, slug: 'Client X' })).toThrow(/Invalid theme/)
+    expect(() => m.restoreTheme(removed, { ...theme, items: 'x' })).toThrow(/Invalid theme/)
+  })
+})
+
 describe('tasks', () => {
   it('adds and removes tasks', () => {
     const { s, themeId, repoId } = setup()
