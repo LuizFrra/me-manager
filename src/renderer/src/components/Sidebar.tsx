@@ -1,4 +1,6 @@
 import type { AppState, LiveStatus, Target } from '../../../shared/types'
+import { filterSidebar } from '../lib/sidebarFilter'
+import { shortcutLabel } from '../lib/shortcuts'
 
 export interface SidebarProps {
   state: AppState
@@ -7,6 +9,10 @@ export interface SidebarProps {
   /** Ids of collapsed themes and repos. App owns this, since Mod+1..9 counts only visible entries. */
   collapsed: ReadonlySet<string>
   onToggleCollapsed: (id: string) => void
+  /** The filter box's text; App owns it too, for the same reason. */
+  filter: string
+  onFilterChange: (filter: string) => void
+  filterRef?: React.Ref<HTMLInputElement>
   onSelect: (target: Target) => void
   onAddTheme: () => void
   onRemoveTheme: (themeId: string) => void
@@ -17,11 +23,19 @@ export interface SidebarProps {
   onRemoveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
 }
 
-export function Sidebar(p: SidebarProps): React.JSX.Element {
-  const { collapsed, onToggleCollapsed: toggle } = p
+export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
+  const { collapsed } = p
+  const filter = filterSidebar(p.state, p.filter) // cheap: one pass over the names
+  // While filtering, every group is expanded and only matches (and their ancestors) show. Collapsing is off
+  // then, so a click can't silently collapse a group that reappears collapsed once the filter is cleared.
+  const toggle = (id: string): void => {
+    if (!filter) p.onToggleCollapsed(id)
+  }
+  const expanded = (id: string): boolean => filter !== null || !collapsed.has(id)
+  const shown = (set: keyof NonNullable<typeof filter>, id: string): boolean => !filter || filter[set].has(id)
   const running = new Set(p.status.running)
   const missing = new Set(p.status.missing)
-  const arrow = (id: string): string => (collapsed.has(id) ? '▶' : '▼')
+  const arrow = (id: string): string => (expanded(id) ? '▼' : '▶')
   const dot = (id: string): React.JSX.Element =>
     missing.has(id) ? (
       <span className="dot missing" title="Path missing">
@@ -41,108 +55,132 @@ export function Sidebar(p: SidebarProps): React.JSX.Element {
 
   return (
     <nav className="sidebar">
+      <input
+        ref={filterRef}
+        className="sidebar-filter"
+        aria-label="Filter sidebar"
+        placeholder={`Filter (${shortcutLabel('filterSidebar')})`}
+        spellCheck={false}
+        value={p.filter}
+        onChange={(e) => p.onFilterChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          p.onFilterChange('')
+        }}
+      />
       <div className="sidebar-header">
         <span>THEMES</span>
         <button aria-label="New theme" title="New theme" onClick={p.onAddTheme}>
           +
         </button>
       </div>
-      {p.state.themes.length === 0 && <p className="hint">Create a theme to get started.</p>}
-      {p.state.themes.map((theme) => (
-        <div key={theme.id} className="theme">
-          <div className="row theme-row">
-            <button className="row-label" onClick={() => toggle(theme.id)}>
-              {arrow(theme.id)} {theme.name}
-            </button>
-            <span className="row-actions">
-              <button
-                aria-label={`Add repository to ${theme.name}`}
-                title="Add repository"
-                onClick={() => p.onAddRepo(theme.id)}
-              >
-                📦+
+      {p.state.themes.length === 0 && !filter && <p className="hint">Create a theme to get started.</p>}
+      {filter && filter.themes.size === 0 && <p className="hint">No matches</p>}
+      {p.state.themes
+        .filter((theme) => shown('themes', theme.id))
+        .map((theme) => (
+          <div key={theme.id} className="theme">
+            <div className="row theme-row">
+              <button className="row-label" onClick={() => toggle(theme.id)}>
+                {arrow(theme.id)} {theme.name}
               </button>
-              <button
-                aria-label={`Add folder to ${theme.name}`}
-                title="Add folder"
-                onClick={() => p.onAddFolder(theme.id)}
-              >
-                📁+
-              </button>
-              <button
-                aria-label={`Remove theme ${theme.name}`}
-                title="Remove theme"
-                onClick={() => p.onRemoveTheme(theme.id)}
-              >
-                ×
-              </button>
-            </span>
-          </div>
-          {!collapsed.has(theme.id) &&
-            theme.items.map((item) =>
-              item.kind === 'folder' ? (
-                <div key={item.id} className={`row item-row${isSelected(item.id) ? ' selected' : ''}`}>
-                  <button className="row-label" onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id })}>
-                    {dot(item.id)} 📁 {item.name}
-                  </button>
-                  <span className="row-actions">
-                    <button
-                      aria-label={`Remove ${item.name}`}
-                      title="Remove folder"
-                      onClick={() => p.onRemoveItem(theme.id, item.id)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                </div>
-              ) : (
-                <div key={item.id}>
-                  <div className="row item-row">
-                    <button className="row-label" onClick={() => toggle(item.id)}>
-                      {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}📦 {item.name}
-                    </button>
-                    <span className="row-actions">
-                      <button
-                        aria-label={`New task in ${item.name}`}
-                        title="New task"
-                        onClick={() => p.onAddTask(theme.id, item.id)}
-                      >
-                        +
+              <span className="row-actions">
+                <button
+                  aria-label={`Add repository to ${theme.name}`}
+                  title="Add repository"
+                  onClick={() => p.onAddRepo(theme.id)}
+                >
+                  📦+
+                </button>
+                <button
+                  aria-label={`Add folder to ${theme.name}`}
+                  title="Add folder"
+                  onClick={() => p.onAddFolder(theme.id)}
+                >
+                  📁+
+                </button>
+                <button
+                  aria-label={`Remove theme ${theme.name}`}
+                  title="Remove theme"
+                  onClick={() => p.onRemoveTheme(theme.id)}
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+            {expanded(theme.id) &&
+              theme.items
+                .filter((item) => shown('items', item.id))
+                .map((item) =>
+                  item.kind === 'folder' ? (
+                    <div key={item.id} className={`row item-row${isSelected(item.id) ? ' selected' : ''}`}>
+                      <button className="row-label" onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id })}>
+                        {dot(item.id)} 📁 {item.name}
                       </button>
-                      <button
-                        aria-label={`Remove ${item.name}`}
-                        title="Remove repository"
-                        onClick={() => p.onRemoveItem(theme.id, item.id)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  </div>
-                  {!collapsed.has(item.id) &&
-                    item.tasks.map((task) => (
-                      <div key={task.id} className={`row task-row${isSelected(item.id, task.id) ? ' selected' : ''}`}>
+                      <span className="row-actions">
                         <button
-                          className="row-label"
-                          onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id, taskId: task.id })}
+                          aria-label={`Remove ${item.name}`}
+                          title="Remove folder"
+                          onClick={() => p.onRemoveItem(theme.id, item.id)}
                         >
-                          {dot(task.id)} {task.name}
+                          ×
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <div key={item.id}>
+                      <div className="row item-row">
+                        <button className="row-label" onClick={() => toggle(item.id)}>
+                          {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}📦 {item.name}
                         </button>
                         <span className="row-actions">
                           <button
-                            aria-label={`Remove task ${task.name}`}
-                            title="Remove task"
-                            onClick={() => p.onRemoveTask(theme.id, item.id, task.id, task.name)}
+                            aria-label={`New task in ${item.name}`}
+                            title="New task"
+                            onClick={() => p.onAddTask(theme.id, item.id)}
+                          >
+                            +
+                          </button>
+                          <button
+                            aria-label={`Remove ${item.name}`}
+                            title="Remove repository"
+                            onClick={() => p.onRemoveItem(theme.id, item.id)}
                           >
                             ×
                           </button>
                         </span>
                       </div>
-                    ))}
-                </div>
-              ),
-            )}
-        </div>
-      ))}
+                      {expanded(item.id) &&
+                        item.tasks
+                          .filter((task) => shown('tasks', task.id))
+                          .map((task) => (
+                            <div
+                              key={task.id}
+                              className={`row task-row${isSelected(item.id, task.id) ? ' selected' : ''}`}
+                            >
+                              <button
+                                className="row-label"
+                                onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id, taskId: task.id })}
+                              >
+                                {dot(task.id)} {task.name}
+                              </button>
+                              <span className="row-actions">
+                                <button
+                                  aria-label={`Remove task ${task.name}`}
+                                  title="Remove task"
+                                  onClick={() => p.onRemoveTask(theme.id, item.id, task.id, task.name)}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            </div>
+                          ))}
+                    </div>
+                  ),
+                )}
+          </div>
+        ))}
     </nav>
   )
 }

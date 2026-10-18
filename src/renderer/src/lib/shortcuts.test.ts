@@ -74,13 +74,24 @@ describe('shortcut labels', () => {
       { keys: 'Ctrl+K', description: 'Command palette' },
       { keys: 'Ctrl+/', description: 'Keyboard shortcuts' },
       { keys: 'Ctrl+Shift+E', description: 'Toggle files panel' },
+      { keys: 'Ctrl+Shift+F', description: 'Filter the sidebar' },
       { keys: 'Ctrl+1…9', description: 'Go to the 1st…9th task or folder in the sidebar' },
       { keys: 'Ctrl+Shift+T', description: 'New shell tab' },
       { keys: 'Ctrl+Shift+W', description: 'Close the active tab' },
       { keys: 'Ctrl+Shift+[', description: 'Previous tab' },
       { keys: 'Ctrl+Shift+]', description: 'Next tab' },
     ])
-    expect(shortcutHelp(true).map((e) => e.keys)).toEqual(['⌘K', '⌘/', '⌘⇧E', '⌘1…9', '⌘⇧T', '⌘⇧W', '⌘⇧[', '⌘⇧]'])
+    expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
+      '⌘K',
+      '⌘/',
+      '⌘⇧E',
+      '⌘⇧F',
+      '⌘1…9',
+      '⌘⇧T',
+      '⌘⇧W',
+      '⌘⇧[',
+      '⌘⇧]',
+    ])
   })
 })
 
@@ -131,9 +142,11 @@ describe.each([
     expect(shifted('?')).toEqual({ id: 'help' })
   })
 
-  it('opens the palette and toggles the panel', () => {
+  it('opens the palette, toggles the panel and focuses the sidebar filter', () => {
     expect(press('k')).toEqual({ id: 'palette' })
     expect(shifted('E')).toEqual({ id: 'panel' })
+    expect(shifted('F')).toEqual({ id: 'filterSidebar' })
+    expect(press('f')).toBeNull()
   })
 
   it("ignores the other platform's modifier, Alt, both modifiers and keyups", () => {
@@ -152,7 +165,7 @@ describe('worksWhileTyping', () => {
     expect(worksWhileTyping('palette')).toBe(true)
     expect(worksWhileTyping('help')).toBe(true)
     expect(worksWhileTyping('panel')).toBe(true)
-    for (const id of ['target', 'newTab', 'closeTab', 'prevTab', 'nextTab'] as const)
+    for (const id of ['filterSidebar', 'target', 'newTab', 'closeTab', 'prevTab', 'nextTab'] as const)
       expect(worksWhileTyping(id)).toBe(false)
   })
 })

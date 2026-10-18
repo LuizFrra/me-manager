@@ -18,7 +18,8 @@ export interface KeyLike {
  * mean something to shells and editors running in the terminal. The help overlay is Mod+/ rather than `?`,
  * which would fire while typing.
  */
-export type ShortcutId = 'palette' | 'help' | 'panel' | 'target' | 'newTab' | 'closeTab' | 'prevTab' | 'nextTab'
+export type ShortcutId =
+  'palette' | 'help' | 'panel' | 'filterSidebar' | 'target' | 'newTab' | 'closeTab' | 'prevTab' | 'nextTab'
 
 /** `target` carries the 0-based position of the task or folder to select (Mod+1 is index 0). */
 export type Shortcut = { id: Exclude<ShortcutId, 'target'> } | { id: 'target'; index: number }
@@ -44,6 +45,7 @@ const BINDINGS: Binding[] = [
   { id: 'palette', shift: false, keys: ['k'], display: 'K', description: 'Command palette' },
   { id: 'help', shift: 'any', keys: ['/', '?'], display: '/', description: 'Keyboard shortcuts' },
   { id: 'panel', shift: true, keys: ['e'], display: 'E', description: 'Toggle files panel' },
+  { id: 'filterSidebar', shift: true, keys: ['f'], display: 'F', description: 'Filter the sidebar' },
   {
     id: 'target',
     shift: false,

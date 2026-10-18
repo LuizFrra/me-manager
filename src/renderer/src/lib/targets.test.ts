@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
+import { filterSidebar } from './sidebarFilter'
 import { allTargets, visibleTargets } from './targets'
 
 describe('allTargets', () => {
@@ -45,5 +46,14 @@ describe('visibleTargets', () => {
     expect(ids(['api'])).toEqual(['notes', 'blog', 't3'])
     expect(ids(['A'])).toEqual(['blog', 't3'])
     expect(ids(['A', 'web'])).toEqual(['blog'])
+  })
+
+  it('counts only filter matches, with collapsed groups expanded', () => {
+    const filtered = (query: string, collapsed: string[] = []): string[] =>
+      visibleTargets(state, new Set(collapsed), filterSidebar(state, query)).map((t) => t.taskId ?? t.itemId)
+    expect(filtered('t3', ['B', 'web'])).toEqual(['t3'])
+    expect(filtered('api', ['api'])).toEqual(['t1', 't2'])
+    expect(filtered('o')).toEqual(['notes', 'blog'])
+    expect(filtered('zzz')).toEqual([])
   })
 })
