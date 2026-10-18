@@ -53,4 +53,4 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 26 | Virtualize the file tree and changes list for large repos, and cap the repo file listing | perf | todo |
 | 27 | Welcome / onboarding empty state with quick actions | ux | todo |
 | 28 | Start every Claude session with Remote Control (named `<theme>/<repo>/<task>`) and skipped permissions by default, as Settings toggles, with a warning and a header badge | feature | done (7076989) |
-| 29 | Claude usage and spend: per-task, per-theme and total tokens (input, output, cache) from Claude Code's transcripts in `~/.claude/projects/`, estimated cost at API prices (labelled as an estimate for subscription users), header badge, and a usage view for today, this week and this month | feature | todo |
+| 29 | Claude usage and spend: per-task, per-theme and total tokens (input, output, cache) from Claude Code's transcripts in `~/.claude/projects/`, estimated cost at API prices (labelled as an estimate for subscription users), header badge, and a usage view for today, this week and this month | feature | done (7014c87) |
