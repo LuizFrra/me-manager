@@ -261,6 +261,19 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     refresh()
   }
 
+  // A desktop notification was clicked: show its target, expanding its theme and repo if they are collapsed.
+  const onSelectTarget = useLatestCallback((target: Target): void => {
+    setCollapsed((prev) => {
+      if (!prev.has(target.themeId) && !prev.has(target.itemId)) return prev
+      const next = new Set(prev)
+      next.delete(target.themeId)
+      next.delete(target.itemId)
+      return next
+    })
+    if (!sameTarget(selectedRef.current, target)) void open(target)
+  })
+  useEffect(() => api.onSelectTarget(onSelectTarget), [api, onSelectTarget])
+
   const tabAction = async (fn: (target: Target) => Promise<TabInfo[]>): Promise<void> => {
     const target = selectedRef.current
     if (!target) return

@@ -107,11 +107,11 @@ export interface Settings {
   /** How often the sidebar status and the side panel refresh, in ms. */
   pollIntervalMs: number
   terminalFontSize: number
-  /** Desktop notifications (used by a later feature). */
   /** Start every Claude session with Remote Control on, named `<theme>/<repo>/<task>` (`--remote-control`). */
   remoteControl: boolean
   /** Start every Claude session with `--dangerously-skip-permissions`: Claude runs commands without asking. */
   skipPermissions: boolean
+  /** Desktop notifications when Claude finishes or waits for input in a task or folder the user isn't looking at. */
   notifications: boolean
 }
 
@@ -194,6 +194,8 @@ export interface MeManagerApi {
   ptyResize(cols: number, rows: number): void
   onPtyData(cb: (data: string) => void): () => void
   onPtyExit(cb: (code: number) => void): () => void
+  /** Main asks to select a target (a desktop notification for it was clicked). Returns an unsubscribe function. */
+  onSelectTarget(cb: (target: Target) => void): () => void
 }
 
 /** The files of a target, as relative POSIX paths, sorted. */

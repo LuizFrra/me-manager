@@ -9,6 +9,8 @@ import { FilesService } from './files/filesService'
 import { GitService } from './git/gitService'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
+import { createDesktopNotifier } from './notify/desktop'
+import { NotificationWatcher } from './notify/watcher'
 import { settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
@@ -20,6 +22,7 @@ import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
 let ptyService: PtyService | null = null
+let notificationWatcher: NotificationWatcher | null = null
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -114,6 +117,20 @@ async function bootstrap(): Promise<void> {
   registerIpc({ app: orchestrator, pty: ptyService, getWindow: () => mainWindow })
   buildMenu()
 
+  // Desktop notifications when a background task's Claude finishes or waits for input (Settings.notifications).
+  notificationWatcher = new NotificationWatcher({
+    getStatus: () => orchestrator.getStatus(),
+    getState: () => orchestrator.getState(),
+    getSettings: () => settings.get(),
+    currentTarget: () => orchestrator.currentTarget(),
+    isWindowFocused: () => mainWindow?.isFocused() ?? false,
+    notify: createDesktopNotifier({
+      getWindow: () => mainWindow ?? (mainWindow = createWindow()),
+      ...(process.platform === 'linux' ? { icon } : {}),
+    }),
+  })
+  notificationWatcher.start()
+
   // zoom: true only stops the toolkit from swallowing Mod+- and Mod+Shift+= (there is no page zoom: no menu item
   // has it), so they reach the renderer's terminal zoom.
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window, { zoom: true }))
@@ -135,7 +152,10 @@ app
   })
 
 // Detach only: tmux sessions (and Claude) keep running after the app closes.
-app.on('before-quit', () => ptyService?.detach())
+app.on('before-quit', () => {
+  notificationWatcher?.stop()
+  ptyService?.detach()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

@@ -125,6 +125,7 @@ export type AppService = Omit<
   | 'ptyResize'
   | 'onPtyData'
   | 'onPtyExit'
+  | 'onSelectTarget'
   | 'openExternal'
 >
 

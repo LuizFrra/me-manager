@@ -172,6 +172,11 @@ export class Orchestrator implements AppService {
     return this.state
   }
 
+  /** The target the terminal is attached to (what the user has selected), or null. Main-process only. */
+  currentTarget(): Target | null {
+    return this.current
+  }
+
   async getSettings(): Promise<Settings> {
     return this.deps.settings.get()
   }
