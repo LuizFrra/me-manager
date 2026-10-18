@@ -37,11 +37,11 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 10 | Git status per task: commits ahead of the base, and the uncommitted file count, shown as a sidebar badge and in the header | feature | done (c8bde46) |
 | 11 | Claude activity indicator: busy, waiting or idle per task, based on tmux pane activity, shown in the sidebar | feature | done (788ae65) |
 | 12 | Desktop notification when a background task's Claude finishes or waits for input | feature | done (5d5c890) |
-| 13 | New task: choose the base branch (dropdown, defaulting to origin's default) and an optional initial prompt passed to `claude` | feature | todo |
+| 13 | New task: choose the base branch (dropdown, defaulting to origin's default) and an optional initial prompt passed to `claude` | feature | done (ccef010) |
 | 14 | Settings screen: extra `claude` args (e.g. `--model`), editor command, poll interval, terminal font size, notifications toggle | feature | done (dae9a31) |
 | 15 | Terminal zoom: Ctrl/Cmd +/−/0 changes the font size, which is remembered | ux | done (7b478d9) |
-| 16 | Git actions per task: commit all (with a message), push the branch, and open a PR via `gh` if it's installed | feature | todo |
-| 17 | Update the task from base: fetch, then rebase or merge `origin/<default>` into the task branch, with conflict reporting | feature | todo |
+| 16 | Git actions per task: commit all (with a message), push the branch, and open a PR via `gh` if it's installed | feature | done (8c13e64) |
+| 17 | Update the task from base: fetch, then rebase or merge `origin/<default>` into the task branch, with conflict reporting | feature | done (a7857e8) |
 | 18 | Search file contents in the side panel (`git grep` or a folder walk), with clickable results | feature | todo |
 | 19 | Image preview in the file viewer (png, jpg, gif, webp, svg) | feature | todo |
 | 20 | Remember the last selected task and the sidebar's collapsed state across restarts | ux | todo |
