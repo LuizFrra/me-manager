@@ -3,7 +3,7 @@ import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi, type MockInstance } from 'vitest'
 import { App, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
-import type { MeManagerApi, TabInfo, Target, UsageReport, UsageSummary } from '../../shared/types'
+import type { MeManagerApi, TabInfo, Target, TaskGitStatus, UsageReport, UsageSummary } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 
 vi.mock('./components/TerminalView', () => ({
@@ -1447,5 +1447,47 @@ describe('App usage', () => {
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     expect(within(help).getByText('Ctrl+Shift+U')).toBeInTheDocument()
     expect(within(help).getByText('Claude usage and cost')).toBeInTheDocument()
+  })
+})
+
+describe('App git status', () => {
+  const status = (ahead: number, uncommitted = 0): TaskGitStatus => ({
+    ahead,
+    behind: 0,
+    uncommitted,
+    branch: 'claude/client-x/fix-login-bug',
+    lastCommit: { sha: 'abc1234', subject: 'Fix the redirect', relativeDate: '5 minutes ago' },
+  })
+
+  it('shows badges for visible tasks and the git line for the selected one', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const getGitStatus = vi.fn(async (targets: Target[]) =>
+      Object.fromEntries(targets.map((t) => [t.taskId!, status(2, 1)])),
+    )
+    api.getGitStatus = getGitStatus
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const sidebar = within(screen.getByRole('navigation'))
+    expect(await sidebar.findByTitle('2 commits ahead of origin/main')).toHaveTextContent('↑2')
+    expect(sidebar.getByTitle('1 uncommitted file')).toHaveTextContent('●1')
+    const line = screen.getByLabelText('Git status')
+    expect(line).toHaveTextContent('↑2 ↓0 vs origin/main')
+    expect(line).toHaveTextContent('abc1234 Fix the redirect')
+  })
+
+  it('asks only for visible tasks, plus the selected one', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const getGitStatus = vi.fn<MeManagerApi['getGitStatus']>(async () => ({}))
+    api.getGitStatus = getGitStatus
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'one', 'two') // "two" is selected (opened after creation)
+    await waitFor(() => expect(getGitStatus.mock.lastCall?.[0]).toHaveLength(2))
+    await user.click(screen.getByRole('button', { name: /^▼ 📦 my-api$/ }))
+    await waitFor(() => expect(getGitStatus.mock.lastCall?.[0]).toHaveLength(1))
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    expect(getGitStatus.mock.lastCall?.[0][0].taskId).toBe(repo.kind === 'repo' ? repo.tasks[1].id : '')
   })
 })

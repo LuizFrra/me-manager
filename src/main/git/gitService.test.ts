@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { GitService } from './gitService'
+import { GitService, parseLastCommit, parseLeftRightCount } from './gitService'
 import { commitFile, git, makeClonedRepo, makeLocalRepo } from './testRepos'
 
 const svc = new GitService()
@@ -48,11 +48,11 @@ describe('resolveBaseRef', () => {
   })
 })
 
-async function withTask(): Promise<{ clone: string; wt: string; branch: string }> {
+async function withTask(): Promise<{ root: string; clone: string; wt: string; branch: string }> {
   const { root, clone } = await makeClonedRepo()
   const wt = join(root, 'worktrees', 'client-x', 'clone', 'fix')
   await svc.addWorktree(clone, wt, 'claude/client-x/fix', 'origin/main')
-  return { clone, wt, branch: 'claude/client-x/fix' }
+  return { root, clone, wt, branch: 'claude/client-x/fix' }
 }
 
 describe('addWorktree', () => {
@@ -195,5 +195,91 @@ describe('removeWorktree / deleteBranch', () => {
     await rename(clone, clone + '-moved')
     await svc.removeWorktree(clone, wt)
     expect(existsSync(wt)).toBe(false)
+  })
+})
+
+describe('taskStatus', () => {
+  it('is clean and level with the base for a fresh task', async () => {
+    const { wt, branch } = await withTask()
+    const status = await svc.taskStatus(wt, 'origin/main')
+    expect(status).toMatchObject({ ahead: 0, behind: 0, uncommitted: 0, branch })
+    expect(status.baseMissing).toBeUndefined()
+    expect(status.lastCommit).toMatchObject({ subject: 'init' })
+    expect(status.lastCommit?.sha).toMatch(/^[0-9a-f]{4,}$/)
+    expect(status.lastCommit?.relativeDate).toMatch(/ago|now/)
+  })
+
+  it('counts commits ahead and behind the base, and uncommitted files', async () => {
+    const { root, clone, wt } = await withTask()
+    await commitFile(wt, 'a.txt', 'a', 'add a')
+    await commitFile(wt, 'b.txt', 'b', 'add b: a subject with spaces')
+    // Someone else pushes to main; after a fetch the task is one commit behind origin/main.
+    const other = join(root, 'other')
+    await run('git', ['clone', join(root, 'origin.git'), other])
+    await commitFile(other, 'c.txt', 'c', 'upstream change')
+    await git(other, 'push', 'origin', 'main')
+    await git(clone, 'fetch', 'origin')
+    await writeFile(join(wt, 'untracked ç.txt'), 'x')
+    await writeFile(join(wt, 'README.md'), 'changed\n')
+    const status = await svc.taskStatus(wt, 'origin/main')
+    expect(status).toMatchObject({ ahead: 2, behind: 1, uncommitted: 2 })
+    expect(status.lastCommit?.subject).toBe('add b: a subject with spaces')
+  })
+
+  it('counts a rename once', async () => {
+    const { wt } = await withTask()
+    await git(wt, 'mv', 'README.md', 'read me.md')
+    await expect(svc.taskStatus(wt, 'origin/main')).resolves.toMatchObject({ uncommitted: 1 })
+  })
+
+  it('flags a missing base ref and reports 0 ahead/behind', async () => {
+    const { wt } = await withTask()
+    await commitFile(wt, 'a.txt', 'a', 'add a')
+    const status = await svc.taskStatus(wt, 'origin/gone')
+    expect(status).toMatchObject({ ahead: 0, behind: 0, baseMissing: true })
+    expect(status.lastCommit?.subject).toBe('add a')
+  })
+
+  it('refuses a base ref that looks like an option', async () => {
+    const { wt } = await withTask()
+    const marker = join(wt, 'PWNED')
+    const status = await svc.taskStatus(wt, `--output=${marker}`)
+    expect(status).toMatchObject({ ahead: 0, behind: 0, baseMissing: true })
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('reports a detached HEAD', async () => {
+    const { wt } = await withTask()
+    await git(wt, 'checkout', '--detach')
+    await expect(svc.taskStatus(wt, 'origin/main')).resolves.toMatchObject({ branch: 'HEAD', ahead: 0 })
+  })
+
+  it('still works while another git process holds index.lock', async () => {
+    const { wt } = await withTask()
+    await writeFile(join(wt, 'README.md'), 'changed\n')
+    const gitDir = (await git(wt, 'rev-parse', '--git-dir')).trim()
+    await writeFile(join(gitDir, 'index.lock'), '')
+    await expect(svc.taskStatus(wt, 'origin/main')).resolves.toMatchObject({ uncommitted: 1 })
+    await rm(join(gitDir, 'index.lock'))
+  })
+
+  it('rejects outside a git work tree', async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'mm-norepo-')))
+    await expect(svc.taskStatus(dir, 'origin/main')).rejects.toThrow()
+  })
+})
+
+describe('taskStatus parsers', () => {
+  it('reads rev-list --left-right --count as behind, ahead', () => {
+    expect(parseLeftRightCount('1\t3\n')).toEqual({ behind: 1, ahead: 3 })
+    expect(parseLeftRightCount('garbage')).toBeNull()
+  })
+  it('reads the last commit, keeping subjects verbatim', () => {
+    expect(parseLastCommit('abc1234\0fix: a | b\0' + '2 hours ago\n')).toEqual({
+      sha: 'abc1234',
+      subject: 'fix: a | b',
+      relativeDate: '2 hours ago',
+    })
+    expect(parseLastCommit('')).toBeUndefined()
   })
 })

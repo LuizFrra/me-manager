@@ -6,6 +6,7 @@ import type {
   MeManagerApi,
   Settings,
   TabInfo,
+  TaskGitStatus,
   UnsavedWork,
   UsageSummary,
 } from '../shared/types'
@@ -27,6 +28,12 @@ export interface GitApi {
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>
   deleteBranch(repoPath: string, branch: string): Promise<void>
   getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork>
+  /**
+   * Ahead/behind counts against `baseRef`, the uncommitted file count, the checked-out branch and the last commit
+   * of a task worktree. Read-only (`--no-optional-locks`); a missing or unsafe base ref sets `baseMissing`.
+   * Rejects when the worktree is not a git work tree.
+   */
+  taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus>
 }
 
 export interface TmuxApi {

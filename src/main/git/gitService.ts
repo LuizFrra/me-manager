@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { UnsavedWork } from '../../shared/types'
+import type { TaskGitStatus, UnsavedWork } from '../../shared/types'
 import type { GitApi } from '../contracts'
 import { run } from '../exec'
+import { GIT_ENV } from './gitEnv'
 
 /** A GUI app has no terminal to answer credential prompts, so fail fast instead of hanging. */
 const FETCH_TIMEOUT_MS = 30_000
@@ -11,6 +12,9 @@ const NON_INTERACTIVE_ENV = {
   GIT_TERMINAL_PROMPT: '0',
   GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes',
 }
+
+/** taskStatus is polled; a stuck git (huge repo, network filesystem) must not hold the poll forever. */
+const STATUS_TIMEOUT_MS = 10_000
 
 /**
  * Paths from `git status --porcelain -z`: "XY path" entries separated by NUL, never quoted.
@@ -28,9 +32,33 @@ export function parsePorcelainZ(out: string): string[] {
   return files
 }
 
+/** `git rev-list --left-right --count <base>...HEAD` prints "<behind>\t<ahead>". */
+export function parseLeftRightCount(out: string): { ahead: number; behind: number } | null {
+  const match = /^(\d+)\s+(\d+)\s*$/.exec(out)
+  return match ? { behind: Number(match[1]), ahead: Number(match[2]) } : null
+}
+
+/** `git log -1 --format=%h%x00%s%x00%cr` output; undefined when there is no commit. */
+export function parseLastCommit(out: string): TaskGitStatus['lastCommit'] {
+  const [sha, subject, relativeDate] = out.replace(/\n$/, '').split('\0')
+  return sha && subject !== undefined && relativeDate !== undefined ? { sha, subject, relativeDate } : undefined
+}
+
 export class GitService implements GitApi {
   private git(cwd: string, args: string[]): Promise<string> {
     return run('git', ['-C', cwd, ...args])
+  }
+
+  /**
+   * Read-only git for status polling, hardened like FilesService: no optional locks (so polling never blocks the
+   * user's own git commands on index.lock), no redirecting GIT_* variables, and output pinned against user config.
+   */
+  private inspect(cwd: string, args: string[]): Promise<string> {
+    return run(
+      'git',
+      ['-C', cwd, '--no-optional-locks', '-c', 'core.quotepath=false', '-c', 'log.showSignature=false', ...args],
+      { env: GIT_ENV, timeoutMs: STATUS_TIMEOUT_MS },
+    )
   }
 
   private async hasOrigin(repoPath: string): Promise<boolean> {
@@ -154,5 +182,37 @@ export class GitService implements GitApi {
         : [branch, '--not', `--exclude=${branch}`, '--branches']
     const log = await this.git(repoPath, ['log', '--format=%h %s', ...range, '--'])
     return withWarning({ uncommittedFiles, unpushedCommits: log.split('\n').filter(Boolean) })
+  }
+
+  async taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus> {
+    // A ref starting with '-' would be read as an option; refuse it rather than pass it to git.
+    const usableBase = baseRef !== '' && !baseRef.startsWith('-')
+    const [porcelain, branch, last, counts] = await Promise.all([
+      this.inspect(worktreePath, ['status', '--porcelain', '-z', '--untracked-files=normal']),
+      this.inspect(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD']).then(
+        (out) => out.trim(),
+        () => 'HEAD', // unborn branch: no commit yet
+      ),
+      this.inspect(worktreePath, ['log', '-1', '--no-color', '--format=%h%x00%s%x00%cr', 'HEAD', '--']).then(
+        parseLastCommit,
+        () => undefined,
+      ),
+      // `--` makes git read the range as revisions only, never as a path.
+      usableBase
+        ? this.inspect(worktreePath, ['rev-list', '--left-right', '--count', `${baseRef}...HEAD`, '--']).then(
+            parseLeftRightCount,
+            () => null, // the base ref is gone (pruned, renamed) or was never fetched
+          )
+        : Promise.resolve(null),
+    ])
+    const status: TaskGitStatus = {
+      ahead: counts?.ahead ?? 0,
+      behind: counts?.behind ?? 0,
+      uncommitted: parsePorcelainZ(porcelain).length,
+      branch,
+    }
+    if (!counts) status.baseMissing = true
+    if (last) status.lastCommit = last
+    return status
   }
 }

@@ -7,6 +7,7 @@ import type {
   Settings,
   TabInfo,
   Target,
+  TaskGitStatus,
   UnsavedWork,
   UsageSummary,
 } from '../../shared/types'
@@ -91,6 +92,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
   const [status, setStatus] = useState<LiveStatus>({ running: [], missing: [] })
+  // Git status of the visible tasks (and the selected one), by task id.
+  const [gitStatus, setGitStatus] = useState<Record<string, TaskGitStatus>>({})
   const [selected, setSelected] = useState<Target | null>(null)
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [sessionEnded, setSessionEnded] = useState(false)
@@ -156,12 +159,39 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [showError],
   )
 
+  // The tasks whose git status is polled: the ones the sidebar shows, plus the selected one for the header.
+  const gitTargets = useMemo(() => {
+    const targets = visibleTargets(state, collapsed, filterSidebar(state, sidebarFilter)).filter((t) => t.taskId)
+    if (selected?.taskId && !targets.some((t) => sameTarget(selected, t))) targets.push(selected)
+    return targets
+  }, [state, collapsed, sidebarFilter, selected])
+  const gitTargetsRef = useRef<Target[]>([])
+  // Responses can arrive out of order; only a newer request's answer replaces what is shown.
+  const gitSeq = useRef({ sent: 0, shown: 0 })
+  const refreshGit = useCallback(() => {
+    const targets = gitTargetsRef.current
+    const seq = ++gitSeq.current.sent
+    const show = (next: Record<string, TaskGitStatus>): void => {
+      if (seq < gitSeq.current.shown) return
+      gitSeq.current.shown = seq
+      setGitStatus(keepIfEqual(next))
+    }
+    if (targets.length === 0) return show({})
+    // Main reads each worktree at most every few seconds, so this is cheap at any poll interval.
+    api.getGitStatus(targets).then(show, () => {}) // the badges keep their last values
+  }, [api])
+  useEffect(() => {
+    gitTargetsRef.current = gitTargets
+    refreshGit()
+  }, [gitTargets, refreshGit])
+
   const refresh = useCallback(() => {
     // Polled every few seconds: only update (and re-render) when something actually changed.
     api.getStatus().then(
       (next) => setStatus(keepIfEqual(next)),
       () => {},
     )
+    refreshGit()
     const current = selectedRef.current
     if (current)
       api.listTabs(current).then(
@@ -170,7 +200,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         },
         () => {},
       )
-  }, [api])
+  }, [api, refreshGit])
 
   const refreshUsage = useCallback((): Promise<void> | undefined => {
     const current = selectedRef.current
@@ -514,6 +544,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       <Sidebar
         state={state}
         status={status}
+        gitStatus={gitStatus}
         selected={selected}
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
@@ -563,6 +594,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               sessionFlags={settings}
               usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
               onOpenUsage={() => setUsageOpen(true)}
+              git={selectedTask ? gitStatus[selectedTask.id] : undefined}
+              baseRef={selectedTask?.baseRef}
             />
             <TabBar
               tabs={tabs}

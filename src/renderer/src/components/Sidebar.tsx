@@ -1,10 +1,13 @@
-import type { AppState, LiveStatus, Target } from '../../../shared/types'
+import type { AppState, LiveStatus, Target, TaskGitStatus } from '../../../shared/types'
+import { gitBadges } from '../lib/gitStatus'
 import { filterSidebar } from '../lib/sidebarFilter'
 import { shortcutLabel } from '../lib/shortcuts'
 
 export interface SidebarProps {
   state: AppState
   status: LiveStatus
+  /** Git status of the visible tasks, by task id; a task without one shows no badges. */
+  gitStatus?: Readonly<Record<string, TaskGitStatus>>
   selected: Target | null
   /** Ids of collapsed themes and repos. App owns this, since Mod+1..9 counts only visible entries. */
   collapsed: ReadonlySet<string>
@@ -25,6 +28,21 @@ export interface SidebarProps {
   onRemoveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
   onOpenSettings: () => void
   onOpenUsage: () => void
+}
+
+/** ↑ ahead, ↓ behind, ● uncommitted; one accessible label for the group, a tooltip on each badge. */
+function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string }): React.JSX.Element | null {
+  const badges = gitBadges(status, baseRef)
+  if (badges.length === 0) return null
+  return (
+    <span className="git-badges" role="img" aria-label={badges.map((b) => b.title).join(', ')}>
+      {badges.map((b) => (
+        <span key={b.kind} className={`git-badge git-${b.kind}`} title={b.title} aria-hidden="true">
+          {b.text}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
@@ -181,6 +199,9 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 >
                                   {dot(task.id)} {task.name}
                                 </button>
+                                {p.gitStatus?.[task.id] && (
+                                  <GitBadges status={p.gitStatus[task.id]} baseRef={task.baseRef} />
+                                )}
                                 <span className="row-actions">
                                   <button
                                     aria-label={`Rename task ${task.name}`}

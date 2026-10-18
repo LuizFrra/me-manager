@@ -4,6 +4,7 @@ import type { MeManagerApi } from './types'
 export const INVOKE_METHODS = [
   'getState',
   'getStatus',
+  'getGitStatus',
   'checkPrereqs',
   'getTmuxSocket',
   'getSettings',

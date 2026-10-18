@@ -4,10 +4,12 @@ import {
   CLAUDE_CMD,
   CLAUDE_CONTINUE_CMD,
   FETCH_TIMEOUT_MS,
+  GIT_STATUS_CONCURRENCY,
+  GIT_STATUS_TTL_MS,
   claudeCommand,
   claudeContinueCommand,
 } from './orchestrator'
-import type { AppState, Target, Task } from '../../shared/types'
+import type { AppState, Target, Task, TaskGitStatus } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { makeDeps } from './fakes'
 
@@ -692,5 +694,100 @@ describe('Orchestrator: usage', () => {
       ['folder', 'notes', '/docs/notes'],
     ])
     expect(report.themes[1].targets[0].usage.all.cost).toBe(3)
+  })
+})
+
+describe('Orchestrator: git status', () => {
+  const clean = (branch: string): TaskGitStatus => ({ ahead: 0, behind: 0, uncommitted: 0, branch })
+
+  async function withTasks(
+    names: string[],
+  ): Promise<Ctx & { clock: { now: number }; targets: Target[]; tasks: Task[] }> {
+    const ctx = makeDeps()
+    ctx.git.roots.set('/code/my-api', '/code/my-api')
+    const clock = { now: 1_000_000 }
+    const orch = new Orchestrator(ctx.deps, { now: () => clock.now })
+    await orch.init()
+    const themeId = (await orch.createTheme('Client X')).themes[0].id
+    const repoId = (await orch.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    let state: AppState = await orch.getState()
+    for (const name of names) state = await orch.createTask(themeId, repoId, name)
+    const repo = state.themes[0].items[0]
+    if (repo.kind !== 'repo') throw new Error('expected repo')
+    for (const task of repo.tasks) ctx.git.statuses.set(task.worktreePath, clean(task.branch))
+    const targets = repo.tasks.map((t) => ({ themeId, itemId: repoId, taskId: t.id }))
+    return { ...ctx, orch, themeId, repoId, clock, targets, tasks: repo.tasks }
+  }
+
+  it('returns each task status by task id, passing the task base ref', async () => {
+    const { orch, git, targets, tasks } = await withTasks(['a', 'b'])
+    git.statuses.set(tasks[0].worktreePath, { ahead: 3, behind: 1, uncommitted: 2, branch: tasks[0].branch })
+    const result = await orch.getGitStatus(targets)
+    expect(result).toEqual({
+      [tasks[0].id]: { ahead: 3, behind: 1, uncommitted: 2, branch: tasks[0].branch },
+      [tasks[1].id]: clean(tasks[1].branch),
+    })
+    expect(git.statusCalls).toEqual(['/wt/client-x/my-api/a origin/main', '/wt/client-x/my-api/b origin/main'])
+  })
+
+  it('skips folders, unknown targets, missing worktrees and failed reads', async () => {
+    const ctx = await withTasks(['a', 'b', 'c'])
+    const { orch, git, deps, themeId, targets, tasks } = ctx
+    const folderId = (await orch.addFolder(themeId, '/docs')).themes[0].items[1].id
+    deps.pathExists = (p) => p !== tasks[1].worktreePath
+    git.statuses.delete(tasks[2].worktreePath) // git fails there
+    const result = await orch.getGitStatus([
+      ...targets,
+      { themeId, itemId: folderId },
+      { themeId, itemId: ctx.repoId, taskId: 'gone' },
+    ])
+    expect(Object.keys(result)).toEqual([tasks[0].id])
+    expect(git.statusCalls).toEqual(['/wt/client-x/my-api/a origin/main', '/wt/client-x/my-api/c origin/main'])
+  })
+
+  it('reuses a worktree status for GIT_STATUS_TTL_MS, then reads it again', async () => {
+    const { orch, git, clock, targets } = await withTasks(['a'])
+    await orch.getGitStatus(targets)
+    clock.now += GIT_STATUS_TTL_MS - 1 // a faster poll
+    await orch.getGitStatus(targets)
+    expect(git.statusCalls).toHaveLength(1)
+    clock.now += 1
+    await orch.getGitStatus(targets)
+    expect(git.statusCalls).toHaveLength(2)
+  })
+
+  it('shares one read between overlapping calls and caches failures for the TTL too', async () => {
+    const { orch, git, clock, targets, tasks } = await withTasks(['a'])
+    let release: () => void = () => {}
+    git.statusGate = new Promise((r) => (release = r))
+    const first = orch.getGitStatus(targets)
+    const second = orch.getGitStatus(targets)
+    release()
+    expect(await first).toEqual(await second)
+    expect(git.statusCalls).toHaveLength(1)
+
+    git.statusGate = null
+    git.statuses.delete(tasks[0].worktreePath)
+    clock.now += GIT_STATUS_TTL_MS
+    await expect(orch.getGitStatus(targets)).resolves.toEqual({})
+    await expect(orch.getGitStatus(targets)).resolves.toEqual({})
+    expect(git.statusCalls).toHaveLength(2)
+  })
+
+  it(`reads at most ${GIT_STATUS_CONCURRENCY} worktrees at once`, async () => {
+    const { orch, git, targets } = await withTasks(['a', 'b', 'c', 'd', 'e', 'f'])
+    let release: () => void = () => {}
+    git.statusGate = new Promise((r) => (release = r))
+    const pending = orch.getGitStatus(targets)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.inFlightStatus).toBe(GIT_STATUS_CONCURRENCY)
+    release()
+    expect(Object.keys(await pending)).toHaveLength(6)
+    expect(git.peakInFlightStatus).toBe(GIT_STATUS_CONCURRENCY)
+  })
+
+  it('ignores a non-array argument', async () => {
+    const { orch } = await withTasks(['a'])
+    await expect(orch.getGitStatus(null as unknown as Target[])).resolves.toEqual({})
   })
 })

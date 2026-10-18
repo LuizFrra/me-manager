@@ -4,6 +4,7 @@ import type {
   FileContent,
   FileList,
   TabInfo,
+  TaskGitStatus,
   UnsavedWork,
   UsageSummary,
 } from '../../shared/types'
@@ -82,6 +83,25 @@ export class FakeGit implements GitApi {
   }
   async getUnsavedWork(): Promise<UnsavedWork> {
     return this.unsaved
+  }
+  /** By worktree path; a path without an entry rejects, like a folder that isn't a work tree. */
+  statuses = new Map<string, TaskGitStatus>()
+  statusCalls: string[] = []
+  /** When set, taskStatus waits for it, so tests can hold calls in flight. */
+  statusGate: Promise<void> | null = null
+  inFlightStatus = 0
+  peakInFlightStatus = 0
+  async taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus> {
+    this.statusCalls.push(`${worktreePath} ${baseRef}`)
+    this.peakInFlightStatus = Math.max(this.peakInFlightStatus, ++this.inFlightStatus)
+    try {
+      if (this.statusGate) await this.statusGate
+      const status = this.statuses.get(worktreePath)
+      if (!status) throw new Error(`not a work tree: ${worktreePath}`)
+      return status
+    } finally {
+      this.inFlightStatus--
+    }
   }
 }
 
