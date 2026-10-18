@@ -43,6 +43,7 @@ import { mapLimit } from '../concurrency'
 import type { AppService, OrchestratorDeps } from '../contracts'
 import { baseBranchName } from '../git/gh'
 import { taskWorktreePath } from '../paths'
+import { promptFromFile } from '../promptFiles'
 import * as m from '../store/mutations'
 import { isRecentlyActive, looksWaiting } from '../tmux/activity'
 
@@ -60,16 +61,18 @@ export const promptArgument = (prompt: string): string => `${prompt} `
 /**
  * The first start of a task's Claude with an initial prompt: Claude's positional `[prompt]` argument, after `--`
  * so that neither a prompt starting with '-' nor a variadic option in the user's arguments (`--add-dir a b`) can
- * swallow or misread it. Restarts use claudeContinueCommand, which never repeats the prompt.
+ * swallow or misread it. The prompt itself is read from `promptFile` (see PromptFiles, which holds
+ * promptArgument(prompt)), as tmux can't take a long one in the command. Restarts use claudeContinueCommand,
+ * which never repeats the prompt.
  */
-export const claudePromptCommand = (args: readonly string[], prompt: string | undefined): string =>
-  claudeCommand(prompt ? [...args, '--', promptArgument(prompt)] : args)
+export const claudePromptCommand = (args: readonly string[], promptFile: string | undefined): string =>
+  promptFile === undefined ? claudeCommand(args) : `${claudeCommand([...args, '--'])} ${promptFromFile(promptFile)}`
 /**
- * `--continue` fails when there is no previous conversation; fall back to a fresh one. With a `prompt` (only to
- * hand Claude a request when its window is restarted for one), both carry it as claudePromptCommand does.
+ * `--continue` fails when there is no previous conversation; fall back to a fresh one. With a `promptFile` (only
+ * to hand Claude a request when its window is restarted for one), both carry it as claudePromptCommand does.
  */
-export const claudeContinueCommand = (args: readonly string[] = [], prompt?: string): string =>
-  `${claudePromptCommand([...args, '--continue'], prompt)} || ${claudePromptCommand(args, prompt)}`
+export const claudeContinueCommand = (args: readonly string[] = [], promptFile?: string): string =>
+  `${claudePromptCommand([...args, '--continue'], promptFile)} || ${claudePromptCommand(args, promptFile)}`
 
 export const CLAUDE_CMD = claudeCommand()
 export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
@@ -255,6 +258,28 @@ export class Orchestrator implements AppService {
       flags.push('--dangerously-skip-permissions')
     }
     return [...flags, ...claudeArgs]
+  }
+
+  /**
+   * Runs `start` (a tmux call starting `claude`) with `prompt` in a private file (see claudePromptCommand), or
+   * without a file when there is no prompt. The file is removed once the command had time to read it, or right
+   * away when `start` fails.
+   */
+  private async withPromptFile<T>(
+    prompt: string | undefined,
+    start: (promptFile: string | undefined) => Promise<T>,
+  ): Promise<T> {
+    if (prompt === undefined) return start(undefined)
+    const { promptFiles } = this.deps
+    const file = await promptFiles.write(promptArgument(prompt))
+    try {
+      const result = await start(file)
+      promptFiles.release(file)
+      return result
+    } catch (err) {
+      promptFiles.release(file, true)
+      throw err
+    }
   }
 
   private detachIf(pred: (t: Target) => boolean): void {
@@ -507,11 +532,9 @@ export class Orchestrator implements AppService {
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
-        await tmux.newSession(
-          session,
-          worktreePath,
-          CLAUDE_WINDOW,
-          claudePromptCommand(this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`), prompt),
+        const args = this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)
+        await this.withPromptFile(prompt, (file) =>
+          tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file)),
         )
         const task: Task = {
           id: randomUUID(),
@@ -697,7 +720,10 @@ export class Orchestrator implements AppService {
       await this.deps.tmux.selectWindow(session, claude.index)
     } else {
       // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
-      await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label), text))
+      const args = this.claudeArgs(label)
+      await this.withPromptFile(text, (file) =>
+        this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file)),
+      )
     }
     return this.deps.tmux.listWindows(session)
   }

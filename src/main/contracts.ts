@@ -101,8 +101,22 @@ export interface TmuxApi {
   windowActivity(windowName: string): Promise<Record<string, number>>
   /** The visible text of a window's active pane (`capture-pane -p`), or null when there is no such window. */
   capturePane(session: string, windowName: string): Promise<string | null>
-  /** Types `text` literally into a window's active pane (`send-keys -l`), then presses Enter. */
+  /**
+   * Pastes `text` literally into a window's active pane (through a tmux paste buffer, so any length works), then
+   * presses Enter.
+   */
   sendText(session: string, windowName: string, text: string): Promise<void>
+}
+
+/** Private files that hand a long prompt to a command tmux starts (see PromptFiles). */
+export interface PromptFilesApi {
+  /** Writes `text` to a new private file (mode 0600) and returns its absolute path. */
+  write(text: string): Promise<string>
+  /**
+   * Deletes the file once the command reading it had time to start, or right away with `immediately` (when the
+   * command never started).
+   */
+  release(path: string, immediately?: boolean): void
 }
 
 export interface PtyApi {
@@ -192,6 +206,7 @@ export interface OrchestratorDeps {
   ui: UiStateStoreApi
   launcher: LauncherApi
   usage: UsageApi
+  promptFiles: PromptFilesApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
 }

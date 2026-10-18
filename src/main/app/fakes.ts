@@ -21,6 +21,7 @@ import type {
   GitApi,
   LauncherApi,
   OrchestratorDeps,
+  PromptFilesApi,
   PtyApi,
   StoreApi,
   TmuxApi,
@@ -323,6 +324,28 @@ export class FakeLauncher implements LauncherApi {
   }
 }
 
+/** Prompt files in memory: `files` holds what is written and not yet released, `written` everything, by path. */
+export class FakePromptFiles implements PromptFilesApi {
+  files = new Map<string, string>()
+  written = new Map<string, string>()
+  calls: string[] = []
+  private n = 0
+  /** When set, write rejects with it. */
+  failWrite: string | null = null
+  async write(text: string): Promise<string> {
+    if (this.failWrite) throw new Error(this.failWrite)
+    const path = `/prompts/prompt-${++this.n}.txt`
+    this.files.set(path, text)
+    this.written.set(path, text)
+    this.calls.push(`write ${path}`)
+    return path
+  }
+  release(path: string, immediately = false): void {
+    this.calls.push(`release ${path}${immediately ? ' now' : ''}`)
+    this.files.delete(path)
+  }
+}
+
 /** Returns `byRoot[root]` for each root and `byGroup[name]` for each group (empty usage otherwise). */
 export class FakeUsage implements UsageApi {
   calls: { roots: string[]; groups: Record<string, string[]> }[] = []
@@ -355,6 +378,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   ui: MemoryUiStore
   launcher: FakeLauncher
   usage: FakeUsage
+  promptFiles: FakePromptFiles
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
@@ -366,6 +390,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const launcher = new FakeLauncher()
   const usage = new FakeUsage()
   const ui = new MemoryUiStore()
+  const promptFiles = new FakePromptFiles()
   const deps: OrchestratorDeps = {
     store,
     git,
@@ -377,9 +402,10 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     ui,
     launcher,
     usage,
+    promptFiles,
     worktreesRoot: '/wt',
     pathExists: () => true,
     ...overrides,
   }
-  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage }
+  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles }
 }

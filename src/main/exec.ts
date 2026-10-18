@@ -23,6 +23,8 @@ export interface RunOptions {
   okExitCodes?: number[]
   /** Largest stdout/stderr accepted by `run`, in bytes (default 16 MB). */
   maxBuffer?: number
+  /** Written to the command's stdin, which is then closed (`run` only). */
+  input?: string | Buffer
 }
 
 const DEFAULT_MAX_BUFFER = 16 * 1024 * 1024
@@ -34,7 +36,7 @@ const childEnv = (opts: RunOptions): NodeJS.ProcessEnv => (opts.env ? { ...proce
 export function run(file: string, args: string[], opts: RunOptions = {}): Promise<string> {
   const command = [file, ...args].join(' ')
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       file,
       args,
       {
@@ -72,6 +74,10 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
         reject(new CommandError(command, code, String(stderr), `${command} failed: ${detail}`))
       },
     )
+    if (opts.input !== undefined) {
+      child.stdin?.on('error', () => {}) // EPIPE when the command exits without reading it; its exit code says why
+      child.stdin?.end(opts.input)
+    }
   })
 }
 

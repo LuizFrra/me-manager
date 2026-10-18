@@ -31,6 +31,10 @@ describe('run', () => {
     expect(err).toBeInstanceOf(CommandError)
     expect(err.code).toBe(2)
   })
+  it('writes `input` to stdin', async () => {
+    const script = 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => process.stdout.write(s))'
+    await expect(run(process.execPath, ['-e', script], { input: 'é'.repeat(50_000) })).resolves.toBe('é'.repeat(50_000))
+  })
   it('says when the command was killed for running past its timeout', async () => {
     const err = await run(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { timeoutMs: 100 }).catch((e) => e)
     expect(err).toBeInstanceOf(CommandError)

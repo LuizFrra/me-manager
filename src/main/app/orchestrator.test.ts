@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Orchestrator,
@@ -11,6 +15,7 @@ import {
   claudePromptCommand,
   MAX_RESOLVE_FILES,
   normalizeTaskOptions,
+  promptArgument,
   resolvePrompt,
 } from './orchestrator'
 import { GH_INSTALL_HINT } from '../../shared/git'
@@ -37,6 +42,22 @@ async function setup(): Promise<Ctx> {
   s = await orch.addRepo(themeId, '/code/my-api/src')
   const repoId = s.themes[0].items[0].id
   return { ...ctx, orch, themeId, repoId }
+}
+
+/**
+ * The words `command` (a claude command line) hands `claude`, run by sh with `promptFile` holding `content`.
+ * printf stands in for claude.
+ */
+function claudeWords(command: (promptFile: string) => string, content: string): string[] {
+  const dir = mkdtempSync(join(tmpdir(), 'mm-prompt-'))
+  try {
+    const file = join(dir, "it's a prompt.txt")
+    writeFileSync(file, content)
+    const script = `claude() { printf '%s\\0' "$@"; }; ${command(file)}`
+    return execFileSync('sh', ['-c', script], { encoding: 'utf8' }).split('\0').slice(0, -1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 const taskOf = (s: AppState): Task => {
@@ -274,13 +295,16 @@ describe('Orchestrator: new-task options', () => {
     expect(store.saved.length).toBe(saves)
   })
 
-  it('passes the initial prompt, shell-quoted, on the first start only', async () => {
-    const { orch, tmux, themeId, repoId } = await setup()
+  it('passes the initial prompt through a private file, on the first start only', async () => {
+    const { orch, tmux, promptFiles, themeId, repoId } = await setup()
     await orch.updateSettings({ claudeArgs: ['--model', 'opus'] })
     const prompt = "Fix the login bug; don't touch $(rm -rf ~) or `id`\nthen run the tests"
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { prompt: `  ${prompt}  ` }))
-    const quoted = `'Fix the login bug; don'\\''t touch $(rm -rf ~) or \`id\`\nthen run the tests '`
-    expect(tmux.calls).toEqual([`newSession mmt_client-x_my-api_fix claude --model opus -- ${quoted}`])
+    const file = '/prompts/prompt-1.txt'
+    expect(tmux.calls).toEqual([`newSession mmt_client-x_my-api_fix claude --model opus -- "$(cat -- ${file})"`])
+    expect(promptFiles.written.get(file)).toBe(`${prompt} `)
+    // Released after the start, to be removed once the shell had time to read it.
+    expect(promptFiles.calls).toEqual([`write ${file}`, `release ${file}`])
 
     // A recreated session and a restarted Claude window continue the conversation instead.
     const target = { themeId, itemId: repoId, taskId: task.id }
@@ -296,24 +320,37 @@ describe('Orchestrator: new-task options', () => {
     }
   })
 
-  it('keeps $(…) and quotes in the prompt literal for the shell', async () => {
-    const { execFileSync } = await import('node:child_process')
-    const prompt = `$(touch /tmp/mm-pwned) \`id\` 'single' "double" $HOME ; & | --flag`
-    const command = claudePromptCommand(['--model', 'opus'], prompt)
-    // printf stands in for claude: the shell must hand it the prompt back verbatim, as one argument.
-    const words = execFileSync('sh', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], { encoding: 'utf8' })
-    expect(words.split('\0').slice(0, -1)).toEqual(['--model', 'opus', '--', `${prompt} `])
+  it('keeps $(…), quotes and long text in the prompt file literal for the shell', () => {
+    // The shell must hand the file's text to claude verbatim, as one argument, never running or splitting it.
+    for (const prompt of [
+      `$(touch /tmp/mm-pwned) \`id\` 'single' "double" $HOME ; & | --flag * ~ \\n`,
+      `${'é'.repeat(10_000)} `,
+      "'".repeat(10_000),
+      'two\nlines\n\n ',
+    ]) {
+      const words = claudeWords((file) => claudePromptCommand(['--model', 'opus'], file), prompt)
+      expect(words).toEqual(['--model', 'opus', '--', prompt])
+    }
     expect(claudePromptCommand([], undefined)).toBe('claude')
   })
 
-  it('never hands Claude a one-word prompt it would read as a subcommand', async () => {
-    const { execFileSync } = await import('node:child_process')
+  it('removes the prompt file right away when tmux fails, and writes none without a prompt', async () => {
+    const { orch, tmux, promptFiles, themeId, repoId } = await setup()
+    tmux.failNewSession = true
+    await expect(orch.createTask(themeId, repoId, 'fix', { prompt: 'hi there' })).rejects.toThrow('tmux failed')
+    expect(promptFiles.calls).toEqual(['write /prompts/prompt-1.txt', 'release /prompts/prompt-1.txt now'])
+    tmux.failNewSession = false
+    promptFiles.calls = []
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(promptFiles.calls).toEqual([])
+  })
+
+  it('never hands Claude a one-word prompt it would read as a subcommand', () => {
     // `claude -- mcp` runs `claude mcp`, and a word close to a subcommand (`mcpx`) fails as an unknown command:
     // Claude only reads its lone positional argument as a prompt when it is more than one word.
     for (const prompt of ['mcp', 'purge', 'doctor', 'mcpx', 'hello']) {
-      const command = claudePromptCommand([], prompt)
-      const words = execFileSync('sh', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], { encoding: 'utf8' })
-      const [dashDash, arg, ...rest] = words.split('\0').slice(0, -1)
+      // The trailing space survives the shell's `$(…)`, which only drops trailing newlines.
+      const [dashDash, arg, ...rest] = claudeWords((file) => claudePromptCommand([], file), promptArgument(prompt))
       expect([dashDash, rest]).toEqual(['--', []])
       expect(arg).not.toBe(prompt)
       expect(arg).toMatch(/\s/)
@@ -1362,15 +1399,19 @@ describe('Orchestrator: update from base', () => {
   })
 
   it("restarts Claude with the request when its window was closed, and needs the task's session", async () => {
-    const { orch, tmux, target, session } = await withTask()
+    const { orch, tmux, promptFiles, target, session } = await withTask()
     await orch.newTab(target)
     await orch.closeTab(target, 0) // the claude window
     await orch.askClaudeToResolve(target, 'rebase', ['a.ts'])
-    const request = `'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts '`
+    const file = '/prompts/prompt-1.txt'
     expect(tmux.sessions.get(session)?.windows.at(-1)).toEqual({
       name: 'claude',
-      command: `claude --continue -- ${request} || claude -- ${request}`,
+      command: `claude --continue -- "$(cat -- ${file})" || claude -- "$(cat -- ${file})"`,
     })
+    expect(promptFiles.written.get(file)).toBe(
+      'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts ',
+    )
+    expect(promptFiles.calls).toEqual([`write ${file}`, `release ${file}`])
     expect(tmux.sent).toEqual([])
     tmux.sessions.clear()
     await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow('Open the task first')
