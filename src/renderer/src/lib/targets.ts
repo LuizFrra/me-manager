@@ -29,3 +29,13 @@ export function allTargets(state: AppState): TargetEntry[] {
     }
   return entries
 }
+
+/**
+ * The tasks and folders the sidebar shows, in order: what Mod+1..9 counts. Entries inside a collapsed theme
+ * or repo are hidden, so they are skipped.
+ */
+export function visibleTargets(state: AppState, collapsed: ReadonlySet<string>): Target[] {
+  return allTargets(state)
+    .filter((e) => !collapsed.has(e.target.themeId) && (e.kind === 'folder' || !collapsed.has(e.target.itemId)))
+    .map((e) => e.target)
+}

@@ -493,3 +493,123 @@ describe('App command palette', () => {
     expect(optionNames(dialog)).toEqual(['New theme', 'Show keyboard shortcuts'])
   })
 })
+
+describe('App keyboard shortcuts', () => {
+  const press = (key: string, over: Partial<KeyboardEventInit> = {}, target: Element | Window = window): void => {
+    fireEvent.keyDown(target, { key, ctrlKey: true, ...over })
+  }
+  const twoTabs: TabInfo[] = [
+    { index: 0, name: 'claude', active: true },
+    { index: 1, name: 'bash', active: false },
+  ]
+
+  it('selects the Nth visible task with Ctrl+1..9, skipping collapsed groups', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B') // task B is selected
+    press('1')
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+    press('2')
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+
+    openTarget.mockClear()
+    press('2') // already selected: nothing to do
+    press('3') // there is no third target
+    expect(openTarget).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: /📦 my-api$/ })) // collapse the repo
+    press('1')
+    expect(openTarget).not.toHaveBeenCalled()
+    expect(screen.getByText('my-api › task B')).toBeInTheDocument()
+  })
+
+  it('opens a new shell tab with Ctrl+Shift+T, but not with Ctrl+T', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const newTab = vi.spyOn(api, 'newTab')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    press('t')
+    expect(newTab).not.toHaveBeenCalled()
+    press('T', { shiftKey: true })
+    expect(newTab).toHaveBeenCalledTimes(1)
+    expect(newTab).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }))
+  })
+
+  it('switches tabs with Ctrl+Shift+[ / ] and closes the active one with Ctrl+Shift+W', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({ openTarget: async () => twoTabs, listTabs: async () => twoTabs })
+    const selectTab = vi.spyOn(api, 'selectTab')
+    const closeTab = vi.spyOn(api, 'closeTab')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('tab', { name: 'bash' })
+    press('}', { shiftKey: true, code: 'BracketRight' })
+    expect(selectTab).toHaveBeenLastCalledWith(expect.anything(), 1)
+    press('{', { shiftKey: true, code: 'BracketLeft' }) // wraps around from the first tab
+    expect(selectTab).toHaveBeenLastCalledWith(expect.anything(), 1)
+    press('W', { shiftKey: true })
+    expect(closeTab).toHaveBeenCalledWith(expect.anything(), 0)
+  })
+
+  it('shows the shortcut help with Ctrl+/ and closes it with Esc', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    press('/')
+    const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    for (const keys of ['Ctrl+K', 'Ctrl+/', 'Ctrl+Shift+E', 'Ctrl+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
+      expect(within(help).getByText(keys)).toBeInTheDocument()
+    expect(within(help).getByText('New shell tab')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+
+    press('/')
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    press('k') // the palette replaces the help
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
+    press('/')
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+  })
+
+  it('ignores task and tab shortcuts while typing in a text field or with an overlay open', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const newTab = vi.spyOn(api, 'newTab')
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    openTarget.mockClear()
+    await user.click(screen.getByRole('button', { name: 'Toggle files panel' }))
+    const filter = await screen.findByRole('textbox', { name: 'Filter files' })
+    press('T', { shiftKey: true }, filter)
+    press('1', {}, filter)
+    expect(newTab).not.toHaveBeenCalled()
+    expect(openTarget).not.toHaveBeenCalled()
+
+    press('k', {}, filter) // the palette works anywhere
+    const search = screen.getByRole('combobox', { name: 'Search tasks, files and actions' })
+    press('T', { shiftKey: true }, search)
+    press('E', { shiftKey: true }, search)
+    expect(newTab).not.toHaveBeenCalled()
+    expect(screen.getByRole('complementary', { name: 'Files panel' })).toBeInTheDocument()
+  })
+
+  it("acts on shortcuts typed in the terminal's own textarea", async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const newTab = vi.spyOn(api, 'newTab')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const xterm = document.createElement('div')
+    xterm.className = 'xterm'
+    const textarea = document.createElement('textarea')
+    xterm.append(textarea)
+    screen.getByTestId('terminal').append(xterm)
+    press('T', { shiftKey: true }, textarea)
+    expect(newTab).toHaveBeenCalledTimes(1)
+  })
+})

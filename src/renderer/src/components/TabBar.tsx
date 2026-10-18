@@ -1,5 +1,5 @@
 import type { TabInfo } from '../../../shared/types'
-import { PANEL_SHORTCUT_LABEL } from '../lib/shortcuts'
+import { PANEL_SHORTCUT_LABEL, shortcutLabel } from '../lib/shortcuts'
 
 export function TabBar(props: {
   tabs: TabInfo[]
@@ -23,7 +23,12 @@ export function TabBar(props: {
           </button>
         </div>
       ))}
-      <button className="tab-new" aria-label="New shell tab" onClick={props.onNew}>
+      <button
+        className="tab-new"
+        aria-label="New shell tab"
+        title={`New shell tab (${shortcutLabel('newTab')})`}
+        onClick={props.onNew}
+      >
         +
       </button>
       <span className="tabbar-spacer" />

@@ -1,10 +1,12 @@
-import { useState } from 'react'
 import type { AppState, LiveStatus, Target } from '../../../shared/types'
 
 export interface SidebarProps {
   state: AppState
   status: LiveStatus
   selected: Target | null
+  /** Ids of collapsed themes and repos. App owns this, since Mod+1..9 counts only visible entries. */
+  collapsed: ReadonlySet<string>
+  onToggleCollapsed: (id: string) => void
   onSelect: (target: Target) => void
   onAddTheme: () => void
   onRemoveTheme: (themeId: string) => void
@@ -16,14 +18,7 @@ export interface SidebarProps {
 }
 
 export function Sidebar(p: SidebarProps): React.JSX.Element {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const toggle = (id: string): void =>
-    setCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const { collapsed, onToggleCollapsed: toggle } = p
   const running = new Set(p.status.running)
   const missing = new Set(p.status.missing)
   const arrow = (id: string): string => (collapsed.has(id) ? '▶' : '▼')
