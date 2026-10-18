@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as exec from '../exec'
 import {
   FilesService,
+  isNoPcreError,
   MAX_COUNT_BYTES,
   MAX_IMAGE_BYTES,
   MAX_REPO_ENTRIES,
@@ -11,6 +12,7 @@ import {
   safePath,
 } from './filesService'
 import { MAX_SEARCH_MATCHES, MAX_SEARCH_PREVIEW, MAX_SEARCH_QUERY } from '../../shared/search'
+import type { SearchResult } from '../../shared/types'
 import { cleanupTempDirs, commitAll, git, makeRepo, makeTaskClone, makeTempDir, put } from './testRepos'
 
 const svc = new FilesService()
@@ -655,7 +657,7 @@ describe('searchFiles (repo)', () => {
     expect(grepCalls().at(-1)).not.toContain(' -i ')
   })
 
-  it('takes the query literally without regex, and as an extended regex with it', async () => {
+  it('takes the query literally without regex, and as a regex with it', async () => {
     const root = await makeRepo({ 'a.txt': 'a.c\nabc\nabbbc\n' })
     expect((await svc.searchFiles(root, true, 'a.c')).matches.map((m) => m.line)).toEqual([1])
     const r = await svc.searchFiles(root, true, 'ab+c', { regex: true })
@@ -663,7 +665,7 @@ describe('searchFiles (repo)', () => {
       [2, 'abc'],
       [3, 'abbbc'],
     ])
-    expect(grepCalls().at(-1)).toContain('-E -i')
+    expect(grepCalls().at(-1)).toContain('-P -i')
   })
 
   it('reads an option-like query as text, never as a git option', async () => {
@@ -700,11 +702,52 @@ describe('searchFiles (repo)', () => {
     expect(r.matches.at(-1)).toMatchObject({ path: 'a.txt', line: MAX_SEARCH_MATCHES })
   })
 
-  it("surfaces git's error for an invalid regular expression", async () => {
+  it('reports an invalid regular expression as a folder search does, without running git', async () => {
     const root = await repo()
     await expect(svc.searchFiles(root, true, 'foo(', { regex: true })).rejects.toThrow(
-      /^Invalid regular expression: Unmatched \( or \\\($/,
+      'Invalid regular expression: Unterminated group',
     )
+    expect(grepCalls()).toEqual([])
+  })
+
+  it('reads a regular expression like a folder search does (Perl-compatible), case-insensitively too', async () => {
+    const files = { 'a.txt': 'abc 123\nno digits\nx=42;\n', 'b.txt': 'foobar\nfoo bar\n' }
+    const root = await makeRepo(files)
+    const folderRoot = await makeTempDir()
+    for (const [rel, content] of Object.entries(files)) await put(folderRoot, rel, content)
+    const shown = (r: SearchResult): string[] =>
+      r.matches.map((m) => `${m.path}:${m.line}:${m.preview.slice(m.matchStart, m.matchStart + m.matchLength)}`)
+    for (const [query, expected] of [
+      ['\\d+', ['a.txt:1:123', 'a.txt:3:42']],
+      ['foo(?=bar)', ['b.txt:1:foo']],
+      ['\\bbar\\b', ['b.txt:2:bar']],
+    ] as const) {
+      for (const caseSensitive of [false, true]) {
+        const options = { regex: true, caseSensitive }
+        const inRepo = await svc.searchFiles(root, true, query, options)
+        const inFolder = await svc.searchFiles(folderRoot, false, query, options)
+        expect(shown(inRepo), `${query} ${caseSensitive}`).toEqual(expected)
+        expect(shown(inFolder), `${query} ${caseSensitive}`).toEqual(expected)
+        expect(inRepo.note).toBeUndefined()
+      }
+    }
+    expect(grepCalls().at(-1)).toContain(' -P ')
+  })
+
+  it('falls back to POSIX extended syntax, with a note, when git has no Perl-compatible regexes', async () => {
+    const root = await makeRepo({ 'a.txt': 'abc\nabbbc\n' })
+    const noPcre = new FilesService({ perlRegex: false })
+    const r = await noPcre.searchFiles(root, true, 'ab+c', { regex: true })
+    expect(r.matches.map((m) => m.line)).toEqual([1, 2])
+    expect(r.note).toMatch(/POSIX extended/)
+    expect(grepCalls().at(-1)).toContain(' -E ')
+    // A plain-text search needs neither, so it has no note.
+    await expect(noPcre.searchFiles(root, true, 'abc')).resolves.not.toHaveProperty('note')
+  })
+
+  it('recognizes the error of a git built without Perl-compatible regexes', () => {
+    expect(isNoPcreError('fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n')).toBe(true)
+    expect(isNoPcreError("fatal: -e option, 'foo(': missing closing parenthesis")).toBe(false)
   })
 
   it('counts columns in characters and cuts long lines around the match', async () => {

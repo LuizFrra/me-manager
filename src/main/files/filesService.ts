@@ -219,6 +219,26 @@ function grepError(err: unknown, query: string): Error {
   return new Error(`Invalid regular expression: ${detail.slice(option.length)}`)
 }
 
+type GrepDialect = '-F' | '-E' | '-P'
+interface GrepLine {
+  path: string
+  line: number
+  byteColumn: number
+  text: string
+}
+interface GrepOutput {
+  found: GrepLine[]
+  truncated: boolean
+}
+
+/** Whether git failed because it was built without PCRE, so `git grep -P` can't run. */
+export const isNoPcreError = (stderr: string): boolean =>
+  /Perl-compatible regexes|USE_LIBPCRE|not compiled with .*PCRE/i.test(stderr)
+
+/** SearchResult.note of a repo regex search that used POSIX extended syntax (see grepRepo). */
+export const NO_PCRE_NOTE =
+  'This git has no Perl-compatible regular expressions, so the search used POSIX extended syntax: \\d, \\w, \\b and lookarounds don’t work in it.'
+
 /** The diff git shows for a new symlink: one line holding its target, without a trailing newline. */
 function newSymlinkDiff(rel: string, target: string): string {
   const lines = target.split('\n')
@@ -304,14 +324,19 @@ export interface FilesServiceOptions {
   maxWalkEntries?: number
   /** How long a content search may take (default SEARCH_TIMEOUT_MS). */
   searchTimeoutMs?: number
+  /** Whether `git grep -P` works; looked up on the first regex search when not given (for tests). */
+  perlRegex?: boolean
 }
 
 export class FilesService implements FilesApi {
   private readonly maxRepoEntries: number
   private readonly maxWalkEntries: number
   private readonly searchTimeoutMs: number
+  /** Whether this git runs `grep -P`: undefined until a regex search finds out. */
+  private perlRegex: boolean | undefined
 
   constructor(opts: FilesServiceOptions = {}) {
+    this.perlRegex = opts.perlRegex
     this.maxRepoEntries = opts.maxRepoEntries ?? MAX_REPO_ENTRIES
     this.maxWalkEntries = opts.maxWalkEntries ?? MAX_WALK_ENTRIES
     this.searchTimeoutMs = opts.searchTimeoutMs ?? SEARCH_TIMEOUT_MS
@@ -394,8 +419,10 @@ export class FilesService implements FilesApi {
   }
 
   /**
-   * `git grep` over tracked and untracked, not ignored files, stopped once past the cap. git prints
-   * `path\0line\0column\0text\n` per matching line: split on NUL, the text ends at its first newline.
+   * `git grep` over tracked and untracked, not ignored files, stopped once past the cap. A regular expression is
+   * Perl-compatible (`-P`), the closest to the JavaScript a folder search uses, and must compile in JavaScript too,
+   * so both kinds of search read it alike and report the same errors. A git built without PCRE falls back to POSIX
+   * extended syntax (`-E`), noted in the result.
    */
   private async grepRepo(
     root: string,
@@ -403,6 +430,61 @@ export class FilesService implements FilesApi {
     opts: Required<SearchOptions>,
     deadline: number,
   ): Promise<SearchResult> {
+    // Throws "Invalid regular expression: …" before git runs; for a literal search it always compiles.
+    const pattern = searchPattern(query, opts)
+    let dialect: GrepDialect = !opts.regex ? '-F' : this.perlRegex === false ? '-E' : '-P'
+    let grep: GrepOutput
+    try {
+      try {
+        grep = await this.runGrep(root, query, opts, dialect, deadline)
+      } catch (err) {
+        if (dialect !== '-P' || !(err instanceof CommandError) || !isNoPcreError(err.stderr)) throw err
+        this.perlRegex = false // looked up once: this git has no PCRE
+        dialect = '-E'
+        grep = await this.runGrep(root, query, opts, dialect, deadline)
+      }
+    } catch (err) {
+      if (err instanceof CommandError && err.timedOut) throw new SearchTimeoutError(this.searchTimeoutMs)
+      throw grepError(err, query)
+    }
+    if (dialect === '-P') this.perlRegex = true
+    const { found, truncated } = grep
+    // git only reports where a line's match starts; find its length (and so the highlight) in JavaScript.
+    // A match JavaScript reads differently just isn't highlighted.
+    let hits: LineHit[][] = found.map(() => [])
+    if (found.length > 0) {
+      const matcher = new LineMatcher(pattern, deadline, this.searchTimeoutMs)
+      try {
+        hits = await matcher.match(
+          found.map((f) => f.text),
+          found.length,
+        )
+      } finally {
+        matcher.close()
+      }
+    }
+    const matches = found.map((f, i): SearchMatch => {
+      const start = Buffer.from(f.text, 'utf8')
+        .subarray(0, f.byteColumn - 1)
+        .toString('utf8').length
+      const hit = hits[i]?.[0]
+      const match = makeMatch(f.path, f.line, f.text, hit ? hit[1] : start, hit ? hit[2] : 0)
+      return { ...match, column: start + 1 }
+    })
+    return dialect === '-E' ? { matches, truncated, note: NO_PCRE_NOTE } : { matches, truncated }
+  }
+
+  /**
+   * Runs the grep and collects its matching lines. git prints `path\0line\0column\0text\n` per matching line:
+   * split on NUL, the text ends at its first newline. Rejects with git's CommandError.
+   */
+  private async runGrep(
+    root: string,
+    query: string,
+    opts: Required<SearchOptions>,
+    dialect: GrepDialect,
+    deadline: number,
+  ): Promise<GrepOutput> {
     const args = [
       'grep',
       '-n',
@@ -410,7 +492,7 @@ export class FilesService implements FilesApi {
       '-I',
       '--no-color',
       '-z',
-      opts.regex ? '-E' : '-F',
+      dialect,
       ...(opts.caseSensitive ? [] : ['-i']),
       '--untracked',
       '--exclude-standard',
@@ -420,7 +502,7 @@ export class FilesService implements FilesApi {
       query,
       '--',
     ]
-    const found: { path: string; line: number; byteColumn: number; text: string }[] = []
+    const found: GrepLine[] = []
     let truncated = false
     let field = 0
     let path = ''
@@ -456,45 +538,12 @@ export class FilesService implements FilesApi {
       field = 1
       return true
     }
-    try {
-      await streamNul('git', gitArgs(root, args), onItem, {
-        env: GIT_ENV,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        okExitCodes: [1], // no matches
-      })
-    } catch (err) {
-      if (err instanceof CommandError && err.timedOut) throw new SearchTimeoutError(this.searchTimeoutMs)
-      throw grepError(err, query)
-    }
-    // git only reports where a line's match starts; find its length (and so the highlight) in JavaScript.
-    // A POSIX pattern JavaScript reads differently just isn't highlighted.
-    let hits: LineHit[][] = found.map(() => [])
-    let pattern: RegExp | null = null
-    try {
-      pattern = searchPattern(query, opts)
-    } catch {
-      // valid for git, not for JavaScript
-    }
-    if (pattern && found.length > 0) {
-      const matcher = new LineMatcher(pattern, deadline, this.searchTimeoutMs)
-      try {
-        hits = await matcher.match(
-          found.map((f) => f.text),
-          found.length,
-        )
-      } finally {
-        matcher.close()
-      }
-    }
-    const matches = found.map((f, i): SearchMatch => {
-      const start = Buffer.from(f.text, 'utf8')
-        .subarray(0, f.byteColumn - 1)
-        .toString('utf8').length
-      const hit = hits[i]?.[0]
-      const match = makeMatch(f.path, f.line, f.text, hit ? hit[1] : start, hit ? hit[2] : 0)
-      return { ...match, column: start + 1 }
+    await streamNul('git', gitArgs(root, args), onItem, {
+      env: GIT_ENV,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      okExitCodes: [1], // no matches
     })
-    return { matches, truncated }
+    return { found, truncated }
   }
 
   /** The listFiles walk, binary files skipped, matched in a worker (see LineMatcher). */
