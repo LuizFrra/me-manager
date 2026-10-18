@@ -16,6 +16,7 @@ describe('settings form', () => {
         remoteControl: true,
         skipPermissions: true,
         updateStrategy: 'rebase',
+        showStatusBar: true,
       },
     )
   })
@@ -32,6 +33,7 @@ describe('settings form', () => {
           remoteControl: false,
           skipPermissions: false,
           updateStrategy: 'merge',
+          showStatusBar: false,
         }),
       ),
     ).toEqual({
@@ -44,6 +46,7 @@ describe('settings form', () => {
         remoteControl: false,
         skipPermissions: false,
         updateStrategy: 'merge',
+        showStatusBar: false,
       },
     })
     // toEqual skips the undefined cloneDirectory: the dialog never edits it.

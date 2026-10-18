@@ -55,6 +55,7 @@ import { CommandPalette, type PaletteCommand, type PaletteFiles } from './compon
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
 import { UsageView } from './components/UsageView'
+import { StatusBar } from './components/StatusBar'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -106,6 +107,7 @@ type AppAction =
         | 'push'
         | 'openPr'
         | 'update'
+        | 'toggleStatusBar'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -801,6 +803,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('Restart Claude', 'restartClaude')
       action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
       action('Reveal in file manager', 'fileManager')
+      action('Toggle status bar', 'toggleStatusBar')
     }
     if (selected?.taskId) {
       action('Rename current task', 'renameTask')
@@ -815,6 +818,19 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     action('Open settings', 'settings', shortcutLabel('settings'))
     action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
     return commands
+  }
+
+  /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
+  const toggleStatusBar = (): void => {
+    const showStatusBar = !settings.showStatusBar
+    setSettings((s) => ({ ...s, showStatusBar }))
+    api.updateSettings({ showStatusBar }).then(
+      (saved) => setSettings((s) => ({ ...s, showStatusBar: saved.showStatusBar })),
+      (err) => {
+        setSettings((s) => ({ ...s, showStatusBar: !showStatusBar }))
+        showError(err)
+      },
+    )
   }
 
   const saveSettings = async (next: Partial<Settings>): Promise<void> => {
@@ -853,6 +869,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
   }
 
+  /** The status bar's branch: the checked-out one it shows, copied like the header's "Branch" button. */
+  const copyBranch = (branch: string): void => {
+    const entry = copiesFor(selectedRef.current).find((e) => e.kind === 'branch')
+    if (entry) void copy({ ...entry, text: branch })
+  }
+
   const renameSelectedTask = (): void => {
     const target = selectedRef.current
     const task = target ? resolveTarget(state, target)?.task : undefined
@@ -875,6 +897,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'push') void push()
     else if (action.type === 'openPr') void openPullRequest()
     else if (action.type === 'update') void updateFromBase()
+    else if (action.type === 'toggleStatusBar') toggleStatusBar()
     else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
       if (entry) void copy(entry)
@@ -998,6 +1021,27 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 </>
               )}
             </div>
+            {settings.showStatusBar && item && (
+              <StatusBar
+                task={
+                  selectedTask
+                    ? {
+                        branch: selectedTask.branch,
+                        baseRef: selectedTask.baseRef,
+                        git: gitStatus[selectedTask.id],
+                      }
+                    : undefined
+                }
+                path={selectedTask?.worktreePath ?? item.path}
+                session={sessionState(status, targetKey(selected))}
+                tabs={tabs.length}
+                todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
+                skipPermissions={settings.skipPermissions}
+                onCopyBranch={copyBranch}
+                onOpenChanges={() => updatePanel({ open: true, tab: 'changes' })}
+                onOpenUsage={() => setUsageOpen(true)}
+              />
+            )}
           </>
         ) : (
           <div className="empty">Select a task or folder, or create one from the sidebar.</div>

@@ -995,6 +995,7 @@ describe('App settings', () => {
       remoteControl: true,
       skipPermissions: true,
       updateStrategy: 'rebase',
+      showStatusBar: true,
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()
@@ -2308,5 +2309,98 @@ describe('App clone repository', () => {
     expect(within(cloneDialog()).getByRole('button', { name: 'Clone' })).toBeEnabled()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('App status bar', () => {
+  const statusBar = (): HTMLElement => screen.getByRole('group', { name: 'Status bar' })
+  const openPalette = async (): Promise<HTMLElement> => {
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    return screen.findByRole('dialog', { name: 'Command palette' })
+  }
+
+  it("shows the selected task's git standing, Claude state, tabs and today's cost from the mock data", async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      getStatus: async () => {
+        const task = (await api.getState()).themes[0]?.items.flatMap((i) => (i.kind === 'repo' ? i.tasks : []))[0]
+        return { running: task ? [task.id] : [], missing: [], activity: task ? { [task.id]: 'waiting' } : {} }
+      },
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const bar = within(statusBar())
+    expect(bar.getByRole('button', { name: 'Branch claude/client-x/fix-login-bug: copy' })).toBeInTheDocument()
+    // demoGitStatus('fix login bug'): its numbers, as the header shows them too.
+    expect(await bar.findByText('Work on fix login bug')).toBeInTheDocument()
+    expect(bar.getByRole('button', { name: /uncommitted files?: show changes$/ })).toBeInTheDocument()
+    expect(await bar.findByText('Claude waiting')).toBeInTheDocument()
+    expect(bar.getByText('1 tab')).toBeInTheDocument()
+    expect(await bar.findByRole('button', { name: /^Today's cost \$\d+\.\d\d: show usage$/ })).toBeInTheDocument()
+    expect(bar.getByText('⚠ skip-perms')).toBeInTheDocument() // on by default
+  })
+
+  it('copies the branch, opens the Changes tab and the usage view from its segments', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+
+    await user.click(within(statusBar()).getByRole('button', { name: /^Branch / }))
+    expect(writeText).toHaveBeenLastCalledWith('claude/client-x/fix-login-bug')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied branch name')
+
+    await user.click(await within(statusBar()).findByRole('button', { name: /show changes$/ }))
+    const panel = await screen.findByRole('complementary', { name: 'Files panel' })
+    expect(await within(panel).findByRole('tab', { name: /^Changes/ })).toHaveAttribute('aria-selected', 'true')
+
+    await user.click(await within(statusBar()).findByRole('button', { name: /^Today's cost/ }))
+    expect(screen.getByRole('dialog', { name: 'Claude usage' })).toBeInTheDocument()
+  })
+
+  it("shows a folder's path and session state only", async () => {
+    const user = userEvent.setup()
+    render(<App api={createMockApi({ pickDirectory: async () => '/home/me/notes' })} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
+    const bar = within(statusBar())
+    expect(bar.getByText('/home/me/notes')).toBeInTheDocument()
+    expect(bar.getByText('No session')).toBeInTheDocument()
+    expect(bar.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('hides with the palette action and the setting, and remembers it', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const updateSettings = vi.spyOn(api, 'updateSettings')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    expect(statusBar()).toBeInTheDocument()
+
+    await user.type(within(await openPalette()).getByRole('combobox'), 'toggle status bar')
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('group', { name: 'Status bar' })).not.toBeInTheDocument()
+    expect(updateSettings).toHaveBeenLastCalledWith({ showStatusBar: false })
+    expect((await api.getSettings()).showStatusBar).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    const dialog = screen.getByRole('dialog', { name: 'Settings' })
+    const checkbox = within(dialog).getByRole('checkbox', { name: 'Status bar' })
+    expect(checkbox).not.toBeChecked()
+    await user.click(checkbox)
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('group', { name: 'Status bar' })).toBeInTheDocument()
+  })
+
+  it('puts the bar back when saving the toggle fails', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi({ updateSettings: async () => Promise.reject(new Error('disk full')) })} />)
+    await createRepoAndTask(user)
+    await user.type(within(await openPalette()).getByRole('combobox'), 'toggle status bar')
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('alert')).toHaveTextContent('disk full')
+    expect(statusBar()).toBeInTheDocument()
   })
 })
