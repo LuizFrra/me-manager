@@ -126,22 +126,26 @@ describe('SidePanel', () => {
     expect(await screen.findByText('Showing the first 1,234 files.')).toBeInTheDocument()
   })
 
-  it('shows binary, missing and truncated files', async () => {
+  it('shows binary, missing, folder-symlink and truncated files', async () => {
     const user = userEvent.setup()
     const api = createMockApi({
-      listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'icon.png'], truncated: false }),
+      listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'icon.png', 'linked'], truncated: false }),
       readFile: async (_t, path) =>
         path === 'icon.png'
           ? { kind: 'binary', size: 2048 }
           : path === 'big.log'
             ? { kind: 'text', content: 'start', size: 1_500_000, truncated: true }
-            : { kind: 'missing' },
+            : path === 'linked'
+              ? { kind: 'symlinkToFolder' }
+              : { kind: 'missing' },
     })
     render(<Harness api={api} />)
     await user.click(await screen.findByRole('button', { name: 'icon.png' }))
     expect(await screen.findByText('Binary file (2.0 KB)')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'gone.ts' }))
     expect(await screen.findByText('File no longer exists')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'linked' }))
+    expect(await screen.findByText('Symlink to a folder')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'big.log' }))
     expect(await screen.findByText(/Large file \(1\.4 MB\)/)).toBeInTheDocument()
     expect(codeText()).toBe('start')

@@ -129,6 +129,8 @@ export interface FileList {
 export type FileContent =
   | { kind: 'text'; content: string; size: number; truncated: boolean }
   | { kind: 'binary'; size: number }
+  /** A symlink inside the root that points to a folder (listed as an entry, but there is nothing to show). */
+  | { kind: 'symlinkToFolder' }
   | { kind: 'missing' }
 
 /** A added, M modified, D deleted, R renamed, U untracked. */

@@ -257,6 +257,13 @@ describe('readFile', () => {
     await expect(svc.readFile(root, 'nope.txt')).resolves.toEqual({ kind: 'missing' })
   })
 
+  it('reports a symlink to a folder instead of failing', async () => {
+    const root = await makeTempDir()
+    await put(root, 'dir/a.txt', 'a')
+    await symlink('dir', join(root, 'link'))
+    await expect(svc.readFile(root, 'link')).resolves.toEqual({ kind: 'symlinkToFolder' })
+  })
+
   it('throws for a directory and for escaping paths', async () => {
     const root = await makeTempDir()
     await mkdir(join(root, 'dir'))
@@ -529,6 +536,26 @@ describe('fileDiff', () => {
     const diff = await svc.fileDiff(clone, 'origin/main', 'blank.txt')
     expect(diff.split('\n')).toContain(' ')
     expect(diff.split('\n').slice(0, -1)).not.toContain('')
+  })
+
+  it('diffs a symlink to a folder as its target text, untracked or staged', async () => {
+    const { clone } = await makeTaskClone({ ...SEED, 'dir/a.txt': 'a\n' })
+    await symlink('dir', join(clone, 'link'))
+    const untracked = await svc.fileDiff(clone, 'origin/main', 'link')
+    expect(untracked).toContain('new file mode 120000')
+    expect(untracked).toContain('+++ b/link')
+    expect(untracked.split('\n')).toContain('+dir')
+    expect(untracked).toContain('\\ No newline at end of file')
+    await git(clone, 'add', 'link')
+    const staged = await svc.fileDiff(clone, 'origin/main', 'link')
+    expect(staged).toContain('new file mode 120000')
+    expect(staged.split('\n')).toContain('+dir')
+  })
+
+  it('still refuses a real directory', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await mkdir(join(clone, 'real-dir'))
+    await expect(svc.fileDiff(clone, 'origin/main', 'real-dir')).rejects.toThrow('Path is a directory')
   })
 
   it('returns an empty string for an unchanged file', async () => {

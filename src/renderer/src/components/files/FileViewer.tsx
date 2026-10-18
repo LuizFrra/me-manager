@@ -54,6 +54,8 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     body = <p className="panel-hint">Loading…</p>
   } else if (p.content.kind === 'missing') {
     body = <p className="viewer-message">File no longer exists</p>
+  } else if (p.content.kind === 'symlinkToFolder') {
+    body = <p className="viewer-message">Symlink to a folder</p>
   } else if (p.content.kind === 'binary') {
     body = <p className="viewer-message">Binary file ({formatSize(p.content.size)})</p>
   } else {
