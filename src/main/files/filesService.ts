@@ -22,6 +22,7 @@ import type {
 import type { FilesApi } from '../contracts'
 import { CommandError, run, streamNul } from '../exec'
 import { GIT_ENV } from '../git/gitEnv'
+import { resolveBaseRef } from '../git/refs'
 import { LineMatcher, SearchTimeoutError, type LineHit } from './lineMatcher'
 
 export { MAX_IMAGE_BYTES }
@@ -615,7 +616,14 @@ export class FilesService implements FilesApi {
   ): Promise<{ base: string; fallback?: 'uncommitted-only' }> {
     if (baseRef && !baseRef.startsWith('-')) {
       try {
-        const sha = (await git(worktree, ['merge-base', 'HEAD', baseRef])).trim()
+        // The full ref: a tag or local branch named like the base (`origin/main`) must not take its place.
+        const ref = await resolveBaseRef(baseRef, (full) =>
+          git(worktree, ['rev-parse', '--verify', '--quiet', `${full}^{commit}`]).then(
+            () => true,
+            () => false,
+          ),
+        )
+        const sha = (await git(worktree, ['merge-base', 'HEAD', ref])).trim()
         if (/^[0-9a-f]{40,64}$/.test(sha)) return { base: sha }
       } catch {
         // missing ref or no common history: fall through

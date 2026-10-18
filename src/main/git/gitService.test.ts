@@ -656,3 +656,67 @@ describe('updateFromBase', () => {
     expect(existsSync(join(gitDir, 'rebase-merge'))).toBe(true) // the user's own rebase is left alone
   })
 })
+
+/**
+ * A clone whose short base name `origin/main` is shadowed by `kind` (a tag, or a local branch named `origin/main`)
+ * on an unrelated commit: git's own lookup picks that over the remote-tracking branch.
+ */
+async function shadowedBase(kind: 'tag' | 'branch'): Promise<{ clone: string; mainSha: string }> {
+  const { clone } = await makeClonedRepo()
+  const mainSha = (await git(clone, 'rev-parse', 'refs/remotes/origin/main')).trim()
+  await git(clone, 'checkout', '-q', '--orphan', 'unrelated')
+  await commitFile(clone, 'other.txt', 'other\n', 'unrelated')
+  if (kind === 'tag') await git(clone, 'tag', 'origin/main')
+  else await git(clone, 'branch', 'origin/main')
+  await git(clone, 'checkout', '-q', 'main')
+  await git(clone, 'branch', '-D', 'unrelated')
+  // git itself now reads `origin/main` as the other commit.
+  expect((await git(clone, 'rev-parse', 'origin/main')).trim()).not.toBe(mainSha)
+  return { clone, mainSha }
+}
+
+describe.each(['tag', 'branch'] as const)('a base name shadowed by a %s', (kind) => {
+  it("verifies it and starts a task from origin's branch", async () => {
+    const { clone, mainSha } = await shadowedBase(kind)
+    await expect(svc.verifyRef(clone, 'origin/main')).resolves.toBe(true)
+    const wt = join(clone, '..', 'wt-shadow')
+    await svc.addWorktree(clone, wt, 'claude/t/shadow', 'origin/main')
+    expect((await git(wt, 'rev-parse', 'HEAD')).trim()).toBe(mainSha)
+  })
+
+  it("counts ahead/behind against origin's branch, and finds nothing to update", async () => {
+    const { clone } = await shadowedBase(kind)
+    const wt = join(clone, '..', 'wt-shadow')
+    await svc.addWorktree(clone, wt, 'claude/t/shadow', 'origin/main')
+    await expect(svc.taskStatus(wt, 'origin/main')).resolves.toMatchObject({ ahead: 0, behind: 0 })
+    await expect(svc.taskStatus(wt, 'origin/main')).resolves.not.toHaveProperty('baseMissing')
+    await expect(svc.updateFromBase(wt, 'origin/main', 'rebase')).resolves.toEqual({
+      kind: 'upToDate',
+      baseRef: 'origin/main',
+    })
+    await expect(svc.updateFromBase(wt, 'origin/main', 'merge')).resolves.toEqual({
+      kind: 'upToDate',
+      baseRef: 'origin/main',
+    })
+  })
+})
+
+describe('a local base name shadowed by a tag', () => {
+  it('reports unpushed commits against the branch, not the tag', async () => {
+    const { repo } = await makeLocalRepo()
+    const wt = join(repo, '..', 'wt-local')
+    await svc.addWorktree(repo, wt, 'claude/t/local', 'main')
+    await commitFile(wt, 'task.txt', 'x\n', 'task work')
+    await git(repo, 'tag', 'main', 'claude/t/local') // `main` now reads as the task's own commit
+    const work = await svc.getUnsavedWork(repo, wt, 'claude/t/local', 'main')
+    expect(work.unpushedCommits.map((c) => c.replace(/^\S+ /, ''))).toEqual(['task work'])
+    await expect(svc.taskStatus(wt, 'main')).resolves.toMatchObject({ ahead: 1, behind: 0 })
+  })
+
+  it('refuses a base name that is only a tag', async () => {
+    const { repo } = await makeLocalRepo()
+    await git(repo, 'tag', 'v1')
+    await expect(svc.verifyRef(repo, 'v1')).resolves.toBe(false)
+    await expect(svc.verifyRef(repo, 'main')).resolves.toBe(true)
+  })
+})

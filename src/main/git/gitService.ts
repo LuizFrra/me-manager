@@ -6,6 +6,7 @@ import type { CommitResult, TaskGitStatus, UnsavedWork, UpdateResult, UpdateStra
 import type { GitApi } from '../contracts'
 import { CommandError, run } from '../exec'
 import { GIT_ENV } from './gitEnv'
+import { baseRefCandidates, resolveBaseRef } from './refs'
 
 /** A GUI app has no terminal to answer credential prompts, so fail fast instead of hanging. */
 const FETCH_TIMEOUT_MS = 30_000
@@ -165,6 +166,21 @@ export class GitService implements GitApi {
     }
   }
 
+  /** Whether the full ref `ref` names a commit, read-only. */
+  private async commitExists(cwd: string, ref: string): Promise<boolean> {
+    try {
+      await this.inspect(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** The full ref of a task's base name (see refs.ts), for every git call that takes it. */
+  private fullRef(cwd: string, baseRef: string): Promise<string> {
+    return resolveBaseRef(baseRef, (ref) => this.commitExists(cwd, ref))
+  }
+
   /** False when the repo folder was moved/deleted or is no longer a git repository. */
   private async isRepo(repoPath: string): Promise<boolean> {
     if (!existsSync(repoPath)) return false
@@ -226,12 +242,9 @@ export class GitService implements GitApi {
   async verifyRef(repoPath: string, ref: string): Promise<boolean> {
     // A ref starting with '-' would be read as an option.
     if (!ref || ref.startsWith('-')) return false
-    try {
-      await this.inspect(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
-      return true
-    } catch {
-      return false
-    }
+    // A branch only: a tag (or anything else git would resolve the short name to) doesn't count.
+    for (const full of baseRefCandidates(ref)) if (await this.commitExists(repoPath, full)) return true
+    return false
   }
 
   async clone(url: string, dest: string): Promise<void> {
@@ -264,9 +277,10 @@ export class GitService implements GitApi {
         `Branch "${branch}" already exists (kept from an earlier task). Delete it or choose another task name.`,
       )
     }
+    const base = await this.fullRef(repoPath, baseRef)
     await mkdir(dirname(worktreePath), { recursive: true })
     // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
-    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, baseRef])
+    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, base])
   }
 
   async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
@@ -309,19 +323,21 @@ export class GitService implements GitApi {
     }
     // Exclude baseRef too: with origin but no fetched refs, --remotes alone would list the whole history.
     // baseRef may have been deleted/pruned since the task was created; then exclude what is still there.
-    const hasBase = await this.refExists(repoPath, baseRef)
+    const base = baseRef && !baseRef.startsWith('-') ? await this.fullRef(repoPath, baseRef) : ''
+    const hasBase = base !== '' && (await this.refExists(repoPath, base))
+    const head = `refs/heads/${branch}`
     const range = (await this.hasOrigin(repoPath))
-      ? [branch, '--not', '--remotes', ...(hasBase ? [baseRef] : [])]
+      ? [head, '--not', '--remotes', ...(hasBase ? [base] : [])]
       : hasBase
-        ? [`${baseRef}..${branch}`]
-        : [branch, '--not', `--exclude=${branch}`, '--branches']
+        ? [`${base}..${head}`]
+        : [head, '--not', `--exclude=${branch}`, '--branches']
     const log = await this.git(repoPath, ['log', '--format=%h %s', ...range, '--'])
     return withWarning({ uncommittedFiles, unpushedCommits: log.split('\n').filter(Boolean) })
   }
 
   async taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus> {
     // A ref starting with '-' would be read as an option; refuse it rather than pass it to git.
-    const usableBase = baseRef !== '' && !baseRef.startsWith('-')
+    const base = baseRef !== '' && !baseRef.startsWith('-') ? await this.fullRef(worktreePath, baseRef) : null
     const [porcelain, branch, last, counts] = await Promise.all([
       this.inspect(worktreePath, ['status', '--porcelain', '-z', '--untracked-files=normal']),
       this.inspect(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD']).then(
@@ -333,8 +349,8 @@ export class GitService implements GitApi {
         () => undefined,
       ),
       // `--` makes git read the range as revisions only, never as a path.
-      usableBase
-        ? this.inspect(worktreePath, ['rev-list', '--left-right', '--count', `${baseRef}...HEAD`, '--']).then(
+      base
+        ? this.inspect(worktreePath, ['rev-list', '--left-right', '--count', `${base}...HEAD`, '--']).then(
             parseLeftRightCount,
             () => null, // the base ref is gone (pruned, renamed) or was never fetched
           )
@@ -397,6 +413,7 @@ export class GitService implements GitApi {
     if (!(await this.verifyRef(worktreePath, baseRef))) {
       throw new Error(`The base branch ${baseRef} was not found (deleted, or never fetched)`)
     }
+    const base = await this.fullRef(worktreePath, baseRef)
     const running = await this.inProgress(worktreePath)
     if (running) throw new Error(`A ${running} is already in progress in this worktree; finish or abort it first`)
     // Untracked files don't stop a rebase or merge (git refuses by itself if one would be overwritten).
@@ -407,10 +424,10 @@ export class GitService implements GitApi {
       const n = changed.length
       throw new Error(`${UNCOMMITTED_REFUSAL}: ${n} uncommitted ${n === 1 ? 'file' : 'files'} in the task`)
     }
-    const behind = Number((await this.work(worktreePath, ['rev-list', '--count', `HEAD..${baseRef}`, '--'])).trim())
+    const behind = Number((await this.work(worktreePath, ['rev-list', '--count', `HEAD..${base}`, '--'])).trim())
     if (behind === 0) return { kind: 'upToDate', baseRef }
 
-    const args = strategy === 'merge' ? ['merge', '--no-edit', baseRef] : ['rebase', baseRef]
+    const args = strategy === 'merge' ? ['merge', '--no-edit', base] : ['rebase', base]
     try {
       // No editor ever opens (a GUI app has no terminal for it); identity as for "Commit all".
       await this.work(worktreePath, ['-c', 'user.useConfigOnly=true', ...args], {
