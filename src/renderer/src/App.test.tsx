@@ -2182,6 +2182,59 @@ describe('App removing themes, repos and folders', () => {
     expect(removeItem).not.toHaveBeenCalled()
   })
 
+  it('puts removals back in their places whatever order they are undone in', async () => {
+    const user = userEvent.setup()
+    const paths = ['/home/me/code/my-api', '/home/me/docs/notes', '/home/me/docs/specs']
+    const api = createMockApi({ pickDirectory: async () => paths.shift() ?? null })
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await screen.findByRole('button', { name: 'Remove specs' })
+    const names = ['Client X/my-api', 'Client X/notes', 'Client X/specs']
+    expect(await itemNames(api)).toEqual(names)
+    const undo = (message: string): HTMLElement =>
+      within(screen.getAllByRole('status').find((t) => t.textContent?.includes(message))!).getByRole('button', {
+        name: 'Undo',
+      })
+
+    // [A, B, C]: remove A, then B; undo A, then B.
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove my-api' })).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Remove notes' }))
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove notes' })).not.toBeInTheDocument())
+    expect(await itemNames(api)).toEqual(['Client X/specs'])
+    await user.click(undo('Removed repository “my-api”'))
+    await screen.findByRole('button', { name: 'Remove my-api' })
+    await user.click(undo('Removed folder “notes”'))
+    await screen.findByRole('button', { name: 'Remove notes' })
+    expect(await itemNames(api)).toEqual(names)
+
+    // The same with themes: [Client X, Personal, Work], remove Client X then Personal, undo oldest first.
+    for (const name of ['Personal', 'Work']) {
+      await user.click(screen.getByRole('button', { name: 'New theme' }))
+      await user.type(screen.getByRole('textbox', { name: 'Name' }), name)
+      await user.click(screen.getByRole('button', { name: 'Create' }))
+      await screen.findByRole('button', { name: `Remove theme ${name}` })
+    }
+    const themeNames = async (): Promise<string[]> => (await api.getState()).themes.map((t) => t.name)
+    for (const name of ['Client X', 'Personal']) {
+      await user.click(screen.getByRole('button', { name: `Remove theme ${name}` }))
+      await user.click(screen.getByRole('button', { name: 'Remove' }))
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: `Remove theme ${name}` })).not.toBeInTheDocument(),
+      )
+    }
+    await user.click(undo('Removed theme “Client X”'))
+    await screen.findByRole('button', { name: 'Remove theme Client X' })
+    await user.click(undo('Removed theme “Personal”'))
+    await screen.findByRole('button', { name: 'Remove theme Personal' })
+    expect(await themeNames()).toEqual(['Client X', 'Personal', 'Work'])
+  })
+
   it('shows why an undo failed', async () => {
     const user = userEvent.setup()
     await setupTheme(user, {
