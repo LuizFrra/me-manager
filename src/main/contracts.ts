@@ -141,9 +141,16 @@ export interface FilesApi {
   readImage(root: string, relPath: string): Promise<string | null>
   /**
    * Content search (see MeManagerApi.searchFiles). Repos: `git grep` over tracked and untracked-not-ignored files.
-   * Folders: the listFiles walk, matched in JavaScript. `query` and `options` are checked here.
+   * Folders: the listFiles walk, matched in JavaScript. `query` and `options` are checked here. When `signal`
+   * aborts, git is killed and the matching stopped, and the search rejects.
    */
-  searchFiles(root: string, isRepo: boolean, query: string, options?: SearchOptions): Promise<SearchResult>
+  searchFiles(
+    root: string,
+    isRepo: boolean,
+    query: string,
+    options?: SearchOptions,
+    signal?: AbortSignal,
+  ): Promise<SearchResult>
   listChanges(worktree: string, baseRef: string): Promise<ChangeList>
   /** `oldPath`: the rename source from the change list, so the rename doesn't have to be looked up again. */
   fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string>

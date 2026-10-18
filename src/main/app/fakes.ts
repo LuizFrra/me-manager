@@ -297,7 +297,16 @@ export class FakeFiles implements FilesApi {
     this.calls.push(`readImage ${root} ${relPath}`)
     return null
   }
-  async searchFiles(root: string, isRepo: boolean, query: string, options?: SearchOptions): Promise<SearchResult> {
+  /** The abort signal of each searchFiles call. */
+  searchSignals: (AbortSignal | undefined)[] = []
+  async searchFiles(
+    root: string,
+    isRepo: boolean,
+    query: string,
+    options?: SearchOptions,
+    signal?: AbortSignal,
+  ): Promise<SearchResult> {
+    this.searchSignals.push(signal)
     this.calls.push(`searchFiles ${root} ${isRepo} ${JSON.stringify(query)} ${JSON.stringify(options ?? {})}`)
     return { matches: [], truncated: false }
   }
