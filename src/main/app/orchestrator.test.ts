@@ -352,9 +352,11 @@ describe('Orchestrator: file viewer', () => {
     const { orch, files, taskTarget } = await withTaskAndFolder()
     await orch.listChanges(taskTarget)
     await orch.fileDiff(taskTarget, 'src/a.ts')
+    await orch.fileDiff(taskTarget, 'src/b.ts', 'src/old-b.ts')
     expect(files.calls).toEqual([
       'listChanges /wt/client-x/my-api/fix origin/main',
       'fileDiff /wt/client-x/my-api/fix origin/main src/a.ts',
+      'fileDiff /wt/client-x/my-api/fix origin/main src/b.ts (from src/old-b.ts)',
     ])
   })
 

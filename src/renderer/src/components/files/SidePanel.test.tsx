@@ -199,6 +199,20 @@ describe('SidePanel', () => {
     await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
   })
 
+  it("passes a rename's oldPath to fileDiff", async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({
+      listChanges: async () => ({
+        files: [{ path: 'src/new.ts', oldPath: 'src/old.ts', status: 'R', added: 1, removed: 0, binary: false }],
+      }),
+    })
+    const fileDiff = vi.spyOn(api, 'fileDiff')
+    render(<Harness api={api} />)
+    await user.click(await screen.findByRole('tab', { name: 'Changes 1' }))
+    await user.click(screen.getByRole('button', { name: /src\/new\.ts/ }))
+    expect(fileDiff).toHaveBeenCalledWith(TASK, 'src/new.ts', 'src/old.ts')
+  })
+
   it('shows the empty and fallback states of Changes', async () => {
     const user = userEvent.setup()
     render(<Harness api={createMockApi({ listChanges: async () => ({ files: [], fallback: 'uncommitted-only' }) })} />)
