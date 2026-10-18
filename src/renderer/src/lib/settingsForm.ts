@@ -13,6 +13,7 @@ export interface SettingsForm {
   remoteControl: boolean
   skipPermissions: boolean
   updateStrategy: UpdateStrategy
+  showStatusBar: boolean
 }
 
 /** What the Settings dialog edits: everything but what the app remembers by itself (the last clone folder). */
@@ -32,6 +33,7 @@ export function toForm(s: Settings): SettingsForm {
     remoteControl: s.remoteControl,
     skipPermissions: s.skipPermissions,
     updateStrategy: s.updateStrategy,
+    showStatusBar: s.showStatusBar,
   }
 }
 
@@ -73,6 +75,7 @@ export function parseForm(
       remoteControl: form.remoteControl,
       skipPermissions: form.skipPermissions,
       updateStrategy: form.updateStrategy,
+      showStatusBar: form.showStatusBar,
     },
   }
 }

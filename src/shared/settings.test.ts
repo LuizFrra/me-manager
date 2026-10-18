@@ -15,6 +15,7 @@ describe('normalizeSettings', () => {
       skipPermissions: true,
       updateStrategy: 'rebase',
       cloneDirectory: '',
+      showStatusBar: true,
     })
   })
 
@@ -29,6 +30,7 @@ describe('normalizeSettings', () => {
       skipPermissions: false,
       updateStrategy: 'merge',
       cloneDirectory: ' /home/me/code ',
+      showStatusBar: false,
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -42,6 +44,7 @@ describe('normalizeSettings', () => {
       skipPermissions: false,
       updateStrategy: 'merge',
       cloneDirectory: '/home/me/code',
+      showStatusBar: false,
     })
     expect(Object.keys(s).sort()).toEqual([
       'claudeArgs',
@@ -50,6 +53,7 @@ describe('normalizeSettings', () => {
       'notifications',
       'pollIntervalMs',
       'remoteControl',
+      'showStatusBar',
       'skipPermissions',
       'terminalFontSize',
       'updateStrategy',

@@ -166,6 +166,8 @@ export interface Settings {
   updateStrategy: UpdateStrategy
   /** The folder the last "Clone repository…" cloned into (an absolute path), its default next time; '' if none. */
   cloneDirectory: string
+  /** The thin status bar at the bottom of the main area, for the selected task or folder. */
+  showStatusBar: boolean
 }
 
 /** `rebase`: `git rebase <base>` (a linear history); `merge`: `git merge --no-edit <base>` (a merge commit). */

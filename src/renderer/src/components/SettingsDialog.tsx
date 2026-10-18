@@ -55,13 +55,19 @@ export function SettingsDialog(props: {
   const parsed = useMemo(() => parseForm(form), [form])
   const errors = parsed.errors ?? {}
   const notificationsHintId = useId()
+  const statusBarHintId = useId()
   const remoteHintId = useId()
   const skipHintId = useId()
   const strategyHintId = useId()
   useRestoreFocus()
 
   const set =
-    (field: Exclude<keyof SettingsForm, 'notifications' | 'remoteControl' | 'skipPermissions' | 'updateStrategy'>) =>
+    (
+      field: Exclude<
+        keyof SettingsForm,
+        'notifications' | 'remoteControl' | 'skipPermissions' | 'updateStrategy' | 'showStatusBar'
+      >,
+    ) =>
     (e: React.ChangeEvent<HTMLInputElement>): void =>
       setForm((f) => ({ ...f, [field]: e.target.value }))
 
@@ -254,6 +260,21 @@ export function SettingsDialog(props: {
             </label>
             <p id={notificationsHintId} className="settings-hint settings-checkbox-hint">
               When Claude finishes or needs your input in a task or folder you aren&apos;t looking at.
+            </p>
+          </div>
+          <div className="settings-field">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                aria-describedby={statusBarHintId}
+                checked={form.showStatusBar}
+                onChange={(e) => setForm((f) => ({ ...f, showStatusBar: e.target.checked }))}
+              />
+              Status bar
+            </label>
+            <p id={statusBarHintId} className="settings-hint settings-checkbox-hint">
+              A thin bar under the terminal: branch, commits ahead/behind, changes, Claude&apos;s state and today&apos;s
+              cost.
             </p>
           </div>
         </section>

@@ -23,6 +23,7 @@ const custom: Settings = {
   skipPermissions: true,
   updateStrategy: 'merge',
   cloneDirectory: '/home/me/code',
+  showStatusBar: false,
 }
 
 describe('SettingsStore', () => {
