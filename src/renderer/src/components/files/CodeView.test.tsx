@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { languageFor, MAX_HIGHLIGHT_BYTES } from '../../lib/highlight'
 import { CodeView } from './CodeView'
 
@@ -37,5 +37,34 @@ describe('CodeView', () => {
     expect(container.querySelector('.code-body span')).toBeNull()
     const plain = render(<CodeView path="notes.txt" content="if (x) return" />)
     expect(plain.container.querySelector('.code-body span')).toBeNull()
+  })
+})
+
+describe('CodeView highlightLine', () => {
+  it('marks the line and scrolls it into view, again only when the line or file changes', () => {
+    const scroll = vi.fn()
+    const original = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scroll
+    try {
+      const content = 'a\nb\nc\nd\n'
+      const { container, rerender } = render(<CodeView path="a.txt" content={content} highlightLine={3} />)
+      const mark = container.querySelector('.code-line-mark') as HTMLElement
+      expect(mark).toHaveAttribute('data-line', '3')
+      expect(mark.style.getPropertyValue('--mark-line')).toBe('2')
+      expect(scroll).toHaveBeenCalledTimes(1)
+      rerender(<CodeView path="a.txt" content={`${content}e\n`} highlightLine={3} />)
+      expect(scroll).toHaveBeenCalledTimes(1)
+      rerender(<CodeView path="a.txt" content={content} highlightLine={4} />)
+      expect(scroll).toHaveBeenCalledTimes(2)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original
+    }
+  })
+
+  it('marks nothing without a line, or for a line past the end', () => {
+    const { container, rerender } = render(<CodeView path="a.txt" content={'a\nb\n'} />)
+    expect(container.querySelector('.code-line-mark')).toBeNull()
+    rerender(<CodeView path="a.txt" content={'a\nb\n'} highlightLine={9} />)
+    expect(container.querySelector('.code-line-mark')).toBeNull()
   })
 })

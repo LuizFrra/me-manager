@@ -237,6 +237,12 @@ export interface MeManagerApi {
   readFile(target: Target, path: string): Promise<FileContent>
   /** data: URL for an image inside the target's folder, or null if too large / not an image / outside. */
   readImage(target: Target, path: string): Promise<string | null>
+  /**
+   * Searches the contents of the target's files, one match per line, up to MAX_SEARCH_MATCHES, giving up after
+   * 10 s. Repos: `git grep` over tracked and untracked, not ignored files. Folders: the files listFiles shows.
+   * Binary files are skipped. Rejects an empty or too long query, and an invalid regular expression.
+   */
+  searchFiles(target: Target, query: string, options?: SearchOptions): Promise<SearchResult>
   /** Repo tasks only; rejects for folders. `uncommitted`: only what a commit would take (vs HEAD). */
   listChanges(target: Target, scope?: ChangeScope): Promise<ChangeList>
   /**
@@ -309,6 +315,34 @@ export type FileContent =
   /** A symlink inside the root that points to a folder (listed as an entry, but there is nothing to show). */
   | { kind: 'symlinkToFolder' }
   | { kind: 'missing' }
+
+/** How searchFiles matches the query. Both are off by default: a case-insensitive search for the literal text. */
+export interface SearchOptions {
+  caseSensitive?: boolean
+  /** The query is a regular expression: POSIX extended (`git grep -E`) in repos, JavaScript in folders. */
+  regex?: boolean
+}
+
+/** A line matching a search: the first match on it. */
+export interface SearchMatch {
+  /** Root-relative POSIX path. */
+  path: string
+  /** 1-based line number. */
+  line: number
+  /** 1-based character column of the match in the line. */
+  column: number
+  /** The line, without its indentation, cut to MAX_SEARCH_PREVIEW characters around the match. */
+  preview: string
+  /** Where the match is in `preview` (characters), for highlighting; `matchLength` may be 0 if unknown. */
+  matchStart: number
+  matchLength: number
+}
+
+export interface SearchResult {
+  matches: SearchMatch[]
+  /** Set when the search stopped at MAX_SEARCH_MATCHES, or didn't reach every file (a huge folder). */
+  truncated: boolean
+}
 
 /** A added, M modified, D deleted, R renamed, U untracked. */
 export type ChangeStatus = 'A' | 'M' | 'D' | 'R' | 'U'

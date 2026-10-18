@@ -15,6 +15,8 @@ import type {
   PullRequestResult,
   PushResult,
   Repo,
+  SearchOptions,
+  SearchResult,
   Settings,
   TabInfo,
   Target,
@@ -681,6 +683,12 @@ export class Orchestrator implements AppService {
   async readImage(target: Target, path: string): Promise<string | null> {
     const { root } = this.resolveRoot(target)
     return this.deps.files.readImage(root, path)
+  }
+
+  /** The query and options are checked by the files service. */
+  async searchFiles(target: Target, query: string, options?: SearchOptions): Promise<SearchResult> {
+    const { root, isRepo } = this.resolveRoot(target)
+    return this.deps.files.searchFiles(root, isRepo, query, options)
   }
 
   async listChanges(target: Target, scope: ChangeScope = 'base'): Promise<ChangeList> {

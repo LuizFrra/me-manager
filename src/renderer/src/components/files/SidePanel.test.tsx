@@ -2,7 +2,7 @@ import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { MeManagerApi, Target } from '../../../../shared/types'
+import type { MeManagerApi, SearchMatch, Target } from '../../../../shared/types'
 import { createMockApi } from '../../api/mockApi'
 import { DEFAULT_PANEL, type PanelState } from '../../lib/panelState'
 import { PANEL_POLL_MS, SidePanel } from './SidePanel'
@@ -350,5 +350,111 @@ describe('SidePanel', () => {
     await screen.findByRole('button', { name: 'README.md' })
     await user.click(screen.getByRole('button', { name: 'Refresh' }))
     await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2))
+  })
+
+  describe('Search tab', () => {
+    const match = (
+      path: string,
+      line: number,
+      preview: string,
+      matchStart: number,
+      matchLength: number,
+    ): SearchMatch => ({
+      path,
+      line,
+      column: matchStart + 1,
+      preview,
+      matchStart,
+      matchLength,
+    })
+
+    it('is there for repos and folders', async () => {
+      render(<Harness api={createMockApi()} target={FOLDER} isRepo={false} />)
+      expect(await screen.findByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'false')
+    })
+
+    it('searches once typing pauses, then lists the results grouped by file with the match highlighted', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      const search = vi.spyOn(api, 'searchFiles')
+      render(<Harness api={api} />)
+      await user.click(await screen.findByRole('tab', { name: 'Search' }))
+      const input = screen.getByRole('textbox', { name: 'Search in files' })
+      expect(input).toHaveFocus()
+      await user.type(input, 'formatName')
+      expect(await screen.findByText('4 results in 3 files')).toBeInTheDocument()
+      expect(search).toHaveBeenCalledTimes(1)
+      expect(search).toHaveBeenCalledWith(TASK, 'formatName', { caseSensitive: false, regex: false })
+      const groups = [...document.querySelectorAll('.search-file')].map((b) => b.textContent)
+      expect(groups).toEqual(['▸notes.txt1', '▸app.tssrc2', '▸format.tssrc/util1'])
+      const hit = screen.getByRole('button', { name: /^notes\.txt, line 1:/ })
+      expect(hit.querySelector('mark')).toHaveTextContent(/^formatName$/)
+      // A file's results fold away.
+      await user.click(screen.getByRole('button', { name: /app\.ts/, expanded: true }))
+      expect(screen.queryByRole('button', { name: /^src\/app\.ts, line/ })).not.toBeInTheDocument()
+    })
+
+    it('searches at once on Enter, and again when a toggle changes', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      const search = vi.spyOn(api, 'searchFiles')
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      const input = await screen.findByRole('textbox', { name: 'Search in files' })
+      await user.type(input, 'greet{Enter}')
+      expect(search).toHaveBeenCalledTimes(1)
+      await act(() => new Promise((r) => setTimeout(r, 400)))
+      expect(search).toHaveBeenCalledTimes(1)
+      await user.click(screen.getByRole('button', { name: 'Match case' }))
+      await vi.waitFor(() =>
+        expect(search).toHaveBeenLastCalledWith(TASK, 'greet', { caseSensitive: true, regex: false }),
+      )
+      await user.click(screen.getByRole('button', { name: 'Use regular expression' }))
+      await vi.waitFor(() =>
+        expect(search).toHaveBeenLastCalledWith(TASK, 'greet', { caseSensitive: true, regex: true }),
+      )
+      expect(screen.getByRole('button', { name: 'Match case' })).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('shows an invalid pattern inline, and says when results were capped', async () => {
+      const user = userEvent.setup()
+      let fail = true
+      const api = createMockApi({
+        searchFiles: async () => {
+          if (fail)
+            throw new Error(
+              "Error invoking remote method 'api:searchFiles': Error: Invalid regular expression: Unterminated group",
+            )
+          return { matches: [match('a.ts', 1, 'x', 0, 1)], truncated: true }
+        },
+      })
+      const onError = vi.fn()
+      render(<Harness api={api} initial={{ tab: 'search' }} onError={onError} />)
+      await user.type(await screen.findByRole('textbox', { name: 'Search in files' }), '(x{Enter}')
+      expect(await screen.findByRole('alert')).toHaveTextContent(/^Invalid regular expression: Unterminated group$/)
+      expect(onError).not.toHaveBeenCalled()
+      fail = false
+      await user.type(screen.getByRole('textbox', { name: 'Search in files' }), '{Enter}')
+      expect(await screen.findByText('This folder is very large: not every file was searched.')).toBeInTheDocument()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('opens a result in Files at its line', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      render(
+        <Harness
+          api={api}
+          initial={{ tab: 'search', search: { query: 'greetAll', caseSensitive: false, regex: false } }}
+        />,
+      )
+      await user.click(await screen.findByRole('button', { name: /^src\/app\.ts, line 9:/ }))
+      expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+      await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+      expect(document.querySelector('.code-line-mark')).toHaveAttribute('data-line', '9')
+      expect(fileButton('app\\.ts')).toHaveAttribute('aria-current', 'true')
+      // Picking another file drops the mark.
+      await user.click(screen.getByRole('button', { name: 'README.md' }))
+      await vi.waitFor(() => expect(document.querySelector('.code-line-mark')).toBeNull())
+    })
   })
 })

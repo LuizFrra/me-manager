@@ -1,9 +1,21 @@
-export type PanelTab = 'files' | 'changes'
+export type PanelTab = 'files' | 'changes' | 'search'
+
+/** The Search tab's query and toggles. */
+export interface SearchState {
+  query: string
+  caseSensitive: boolean
+  regex: boolean
+}
+
+export const DEFAULT_SEARCH: SearchState = { query: '', caseSensitive: false, regex: false }
 
 /** What the side panel shows for one target. */
 export interface PanelState {
   tab: PanelTab
   selected?: string
+  /** A line of the selected file to scroll to and highlight (a search result); cleared when another file opens. */
+  line?: number
+  search: SearchState
   mdMode: 'view' | 'raw'
   /** Files visited before following Markdown links, most recent last. */
   history: string[]
@@ -13,7 +25,13 @@ export interface PanelEntry extends PanelState {
   open: boolean
 }
 
-export const DEFAULT_PANEL: PanelEntry = { open: false, tab: 'files', mdMode: 'view', history: [] }
+export const DEFAULT_PANEL: PanelEntry = {
+  open: false,
+  tab: 'files',
+  mdMode: 'view',
+  history: [],
+  search: DEFAULT_SEARCH,
+}
 
 /** Panel width as a fraction of the workspace; CSS clamps it to 280px … 70%. */
 export const DEFAULT_PANEL_FRACTION = 0.4

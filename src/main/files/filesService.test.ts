@@ -1,4 +1,4 @@
-import { mkdir, rm, symlink, unlink, utimes } from 'node:fs/promises'
+import { lstat, mkdir, rm, symlink, unlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as exec from '../exec'
@@ -10,6 +10,7 @@ import {
   MAX_TEXT_BYTES,
   safePath,
 } from './filesService'
+import { MAX_SEARCH_MATCHES, MAX_SEARCH_PREVIEW, MAX_SEARCH_QUERY } from '../../shared/search'
 import { cleanupTempDirs, commitAll, git, makeRepo, makeTaskClone, makeTempDir, put } from './testRepos'
 
 const svc = new FilesService()
@@ -20,9 +21,15 @@ const LINES = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') +
 // Wraps the real `run` in a spy, so tests can check which git commands a call makes.
 vi.mock('../exec', async (importOriginal) => {
   const real = await importOriginal<typeof import('../exec')>()
-  return { ...real, run: vi.fn(real.run) }
+  return { ...real, run: vi.fn(real.run), streamNul: vi.fn(real.streamNul) }
 })
 const runSpy = vi.mocked(exec.run)
+const streamSpy = vi.mocked(exec.streamNul)
+/** The `git grep` commands streamed since the last reset. */
+const grepCalls = (): string[] =>
+  streamSpy.mock.calls
+    .map(([, args]) => args.slice(args.indexOf('--literal-pathspecs') + 1).join(' '))
+    .filter((args) => args.startsWith('grep '))
 /** The git subcommands (and flags) run since the last reset, one string per call. */
 const gitCalls = (): string[] =>
   runSpy.mock.calls
@@ -31,6 +38,7 @@ const gitCalls = (): string[] =>
 
 beforeEach(() => {
   runSpy.mockClear()
+  streamSpy.mockClear()
 })
 afterEach(cleanupTempDirs)
 
@@ -585,5 +593,210 @@ describe('fileDiff', () => {
     await expect(svc.fileDiff(clone, 'origin/main', '../x')).rejects.toThrow('Path is outside the folder')
     await expect(svc.fileDiff(clone, 'origin/main', '/etc/passwd')).rejects.toThrow('Path is outside the folder')
     await expect(svc.fileDiff(clone, 'origin/main', 'host')).rejects.toThrow('Path is outside the folder')
+  })
+})
+
+describe('searchFiles (repo)', () => {
+  const paths = (r: { matches: { path: string }[] }): string[] => r.matches.map((m) => m.path)
+
+  async function repo(): Promise<string> {
+    const root = await makeRepo({
+      'a.txt': 'hello world\nfoo Hello\n',
+      'src/b.ts': '  const greeting = "HELLO"\n',
+      'bin.dat': Uint8Array.from([0x68, 0x65, 0x6c, 0x6c, 0x6f, 0, 1, 2]),
+      '.gitignore': 'ignored.txt\n',
+    })
+    await put(root, 'untracked.txt', 'hello from an untracked file\n')
+    await put(root, 'ignored.txt', 'hello from an ignored file\n')
+    return root
+  }
+
+  it('finds a fixed string, case-insensitively by default, in tracked and untracked files, not ignored or binary', async () => {
+    const root = await repo()
+    const r = await svc.searchFiles(root, true, 'hello')
+    expect(r.truncated).toBe(false)
+    expect(r.matches.map((m) => `${m.path}:${m.line}:${m.column}`)).toEqual([
+      'a.txt:1:1',
+      'a.txt:2:5',
+      'src/b.ts:1:21',
+      'untracked.txt:1:1',
+    ])
+    // The preview drops the indentation; the match is located in it for highlighting.
+    expect(r.matches[2]).toMatchObject({ preview: 'const greeting = "HELLO"', matchStart: 18, matchLength: 5 })
+    expect(grepCalls().at(-1)).toBe(
+      'grep -n --column -I --no-color -z -F -i --untracked --exclude-standard -e hello --',
+    )
+  })
+
+  it('matches case-sensitively with caseSensitive', async () => {
+    const root = await repo()
+    const r = await svc.searchFiles(root, true, 'Hello', { caseSensitive: true })
+    expect(r.matches.map((m) => `${m.path}:${m.line}`)).toEqual(['a.txt:2'])
+    expect(grepCalls().at(-1)).not.toContain(' -i ')
+  })
+
+  it('takes the query literally without regex, and as an extended regex with it', async () => {
+    const root = await makeRepo({ 'a.txt': 'a.c\nabc\nabbbc\n' })
+    expect((await svc.searchFiles(root, true, 'a.c')).matches.map((m) => m.line)).toEqual([1])
+    const r = await svc.searchFiles(root, true, 'ab+c', { regex: true })
+    expect(r.matches.map((m) => [m.line, m.preview.slice(m.matchStart, m.matchStart + m.matchLength)])).toEqual([
+      [2, 'abc'],
+      [3, 'abbbc'],
+    ])
+    expect(grepCalls().at(-1)).toContain('-E -i')
+  })
+
+  it('reads an option-like query as text, never as a git option', async () => {
+    const root = await makeRepo({ 'a.txt': 'run with --output=x here\n', 'b.txt': 'nothing\n' })
+    const r = await svc.searchFiles(root, true, '--output=x')
+    expect(paths(r)).toEqual(['a.txt'])
+    expect(r.matches[0].column).toBe(10)
+    await expect(svc.searchFiles(root, true, '-v')).resolves.toEqual({ matches: [], truncated: false })
+    await expect(lstat(join(root, 'x'))).rejects.toThrow()
+  })
+
+  it('reports no matches (git exits with 1) as an empty result', async () => {
+    const root = await repo()
+    await expect(svc.searchFiles(root, true, 'nowhere-to-be-found')).resolves.toEqual({
+      matches: [],
+      truncated: false,
+    })
+  })
+
+  it(`stops at ${MAX_SEARCH_MATCHES} matches and reports truncation`, async () => {
+    const many = Array.from({ length: MAX_SEARCH_MATCHES + 50 }, (_, i) => `hit ${i}`).join('\n') + '\n'
+    const root = await makeRepo({ 'a.txt': many, 'b.txt': 'hit\n' })
+    const r = await svc.searchFiles(root, true, 'hit')
+    expect(r.matches).toHaveLength(MAX_SEARCH_MATCHES)
+    expect(r.truncated).toBe(true)
+    expect(r.matches.at(-1)).toMatchObject({ path: 'a.txt', line: MAX_SEARCH_MATCHES })
+  })
+
+  it("surfaces git's error for an invalid regular expression", async () => {
+    const root = await repo()
+    await expect(svc.searchFiles(root, true, 'foo(', { regex: true })).rejects.toThrow(
+      /^Invalid regular expression: Unmatched \( or \\\($/,
+    )
+  })
+
+  it('counts columns in characters and cuts long lines around the match', async () => {
+    const long = `${'x'.repeat(300)}needle${'y'.repeat(300)}`
+    const root = await makeRepo({ 'u.txt': 'café hello\n', 'long.txt': `${long}\n` })
+    const [u] = (await svc.searchFiles(root, true, 'hello')).matches
+    expect(u).toMatchObject({ column: 6, preview: 'café hello', matchStart: 5, matchLength: 5 })
+    const [l] = (await svc.searchFiles(root, true, 'needle')).matches
+    expect(l.column).toBe(301)
+    expect(l.preview.length).toBeLessThanOrEqual(MAX_SEARCH_PREVIEW)
+    expect(l.preview.startsWith('…') && l.preview.endsWith('…')).toBe(true)
+    expect(l.preview.slice(l.matchStart, l.matchStart + l.matchLength)).toBe('needle')
+  })
+
+  it('does not follow a symlink out of the worktree', async () => {
+    const root = await repo()
+    const outside = await makeTempDir()
+    await put(outside, 'secret.txt', 'top secret\n')
+    await symlink(join(outside, 'secret.txt'), join(root, 'secret.txt'))
+    await expect(svc.searchFiles(root, true, 'secret')).resolves.toEqual({ matches: [], truncated: false })
+  })
+
+  it('rejects empty, blank, multi-line and too long queries without running git', async () => {
+    const root = await repo()
+    for (const q of ['', '   ', 'a\nb', 'x'.repeat(MAX_SEARCH_QUERY + 1)]) {
+      await expect(svc.searchFiles(root, true, q), JSON.stringify(q.slice(0, 10))).rejects.toThrow()
+    }
+    await expect(svc.searchFiles(root, true, '')).rejects.toThrow('Type something to search for')
+    await expect(svc.searchFiles(root, true, 'x'.repeat(MAX_SEARCH_QUERY + 1))).rejects.toThrow('limited to 500')
+    expect(grepCalls()).toEqual([])
+    await expect(svc.searchFiles(root, true, 'x'.repeat(MAX_SEARCH_QUERY))).resolves.toBeDefined()
+  })
+})
+
+describe('searchFiles (folder)', () => {
+  async function folder(): Promise<string> {
+    const root = await makeTempDir()
+    await put(root, 'notes.md', '# Notes\nHello there\n')
+    await put(root, 'sub/a.txt', 'say hello\r\nbye\r\n')
+    await put(root, 'bin.dat', Uint8Array.from([0x68, 0x65, 0x6c, 0x6c, 0x6f, 0, 1]))
+    await put(root, 'node_modules/x/index.js', 'hello\n')
+    await put(root, '.git/config', 'hello\n')
+    return root
+  }
+
+  it('walks the folder like listFiles, skipping binary files, case-insensitively by default', async () => {
+    const root = await folder()
+    const r = await svc.searchFiles(root, false, 'hello')
+    expect(r).toEqual({
+      matches: [
+        { path: 'notes.md', line: 2, column: 1, preview: 'Hello there', matchStart: 0, matchLength: 5 },
+        { path: 'sub/a.txt', line: 1, column: 5, preview: 'say hello', matchStart: 4, matchLength: 5 },
+      ],
+      truncated: false,
+    })
+    expect(grepCalls()).toEqual([])
+  })
+
+  it('honours caseSensitive and regex', async () => {
+    const root = await folder()
+    expect((await svc.searchFiles(root, false, 'hello', { caseSensitive: true })).matches.map((m) => m.path)).toEqual([
+      'sub/a.txt',
+    ])
+    expect((await svc.searchFiles(root, false, 'h.llo')).matches).toEqual([])
+    const r = await svc.searchFiles(root, false, '^#\\s+\\w+$', { regex: true })
+    expect(r.matches.map((m) => `${m.path}:${m.line}`)).toEqual(['notes.md:1'])
+  })
+
+  it('reads an option-like query as text', async () => {
+    const root = await makeTempDir()
+    await put(root, 'a.txt', 'use --output=x\n')
+    expect((await svc.searchFiles(root, false, '--output=x')).matches).toMatchObject([{ path: 'a.txt', column: 5 }])
+  })
+
+  it('reports an invalid regular expression clearly', async () => {
+    const root = await folder()
+    await expect(svc.searchFiles(root, false, 'foo(', { regex: true })).rejects.toThrow(
+      'Invalid regular expression: Unterminated group',
+    )
+  })
+
+  it(`stops at ${MAX_SEARCH_MATCHES} matches and reports truncation`, async () => {
+    const root = await makeTempDir()
+    await put(root, 'a.txt', Array.from({ length: 300 }, () => 'hit').join('\n'))
+    await put(root, 'b.txt', Array.from({ length: 300 }, () => 'hit').join('\n'))
+    const r = await svc.searchFiles(root, false, 'hit')
+    expect(r.matches).toHaveLength(MAX_SEARCH_MATCHES)
+    expect(r.truncated).toBe(true)
+    expect(r.matches.at(-1)).toMatchObject({ path: 'b.txt', line: 200 })
+  })
+
+  it('searches symlinks inside the folder but never one leading outside', async () => {
+    const root = await makeTempDir()
+    const outside = await makeTempDir()
+    await put(outside, 'secret.txt', 'top secret\n')
+    await put(root, 'real.txt', 'not so secret\n')
+    await symlink(join(outside, 'secret.txt'), join(root, 'out.txt'))
+    await symlink(join(outside), join(root, 'outdir'))
+    await symlink('real.txt', join(root, 'alias.txt'))
+    const r = await svc.searchFiles(root, false, 'secret')
+    expect(r.matches.map((m) => m.path)).toEqual(['alias.txt', 'real.txt'])
+  })
+
+  it('gives up after its timeout, even inside a runaway regular expression', async () => {
+    const root = await makeTempDir()
+    await put(root, 'a.txt', `${'a'.repeat(40)}b\n`)
+    const slow = new FilesService({ searchTimeoutMs: 300 })
+    const started = Date.now()
+    await expect(slow.searchFiles(root, false, '(a+)+$', { regex: true })).rejects.toThrow(
+      'The search timed out after 0.3 s',
+    )
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('reports a walk stopped at its cap as truncated', async () => {
+    const root = await makeTempDir()
+    for (const name of ['a', 'b', 'c']) await put(root, `${name}.txt`, 'hit\n')
+    const capped = new FilesService({ maxWalkEntries: 2 })
+    const r = await capped.searchFiles(root, false, 'hit')
+    expect(r.truncated).toBe(true)
+    expect(r.matches).toHaveLength(2)
   })
 })

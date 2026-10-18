@@ -20,6 +20,8 @@ export interface FileViewerProps {
   /** Changes tab: the selected change. */
   change?: ChangedFile
   mdMode: PanelState['mdMode']
+  /** Files tab: a line to scroll to and highlight (a search result). */
+  highlightLine?: number
   canGoBack: boolean
   onBack: () => void
   onMdMode: (mode: PanelState['mdMode']) => void
@@ -76,7 +78,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
             />
           </div>
         ) : (
-          <CodeView path={path} content={text.content} />
+          <CodeView path={path} content={text.content} highlightLine={p.highlightLine} />
         )}
       </>
     )

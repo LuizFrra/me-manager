@@ -4,6 +4,7 @@ import {
   MAX_TASK_PROMPT,
   type AppState,
   type MeManagerApi,
+  type SearchMatch,
   type Settings,
   type TabInfo,
   type Target,
@@ -13,6 +14,13 @@ import {
 } from '../../../shared/types'
 import { branchName, slugify, targetKey } from '../../../shared/naming'
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../../shared/settings'
+import {
+  checkSearchQuery,
+  makeMatch,
+  MAX_SEARCH_MATCHES,
+  normalizeSearchOptions,
+  searchPattern,
+} from '../../../shared/search'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from './demoFiles'
 
@@ -178,6 +186,21 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       path.endsWith('.svg') && DEMO_FILES[path] !== undefined
         ? `data:image/svg+xml;base64,${btoa(DEMO_FILES[path])}`
         : null,
+    // The demo files, matched like main matches a folder (JavaScript patterns).
+    searchFiles: async (_target, query, options) => {
+      const pattern = searchPattern(checkSearchQuery(query), normalizeSearchOptions(options))
+      const matches: SearchMatch[] = []
+      for (const path of DEMO_PATHS) {
+        const lines = DEMO_FILES[path]?.split('\n') ?? []
+        for (let i = 0; i < lines.length; i++) {
+          const m = pattern.exec(lines[i])
+          if (!m) continue
+          if (matches.length >= MAX_SEARCH_MATCHES) return { matches, truncated: true }
+          matches.push(makeMatch(path, i + 1, lines[i], m.index, m[0].length))
+        }
+      }
+      return { matches, truncated: false }
+    },
     listChanges: async (target, scope = 'base') => {
       if (!target.taskId) throw new Error('Changes are only available for repository tasks')
       const changes = clone(DEMO_CHANGES)

@@ -1,10 +1,27 @@
 import type { Stats } from 'node:fs'
 import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { ChangedFile, ChangeList, ChangeStatus, FileContent, FileList } from '../../shared/types'
+import {
+  checkSearchQuery,
+  makeMatch,
+  MAX_SEARCH_MATCHES,
+  normalizeSearchOptions,
+  searchPattern,
+} from '../../shared/search'
+import type {
+  ChangedFile,
+  ChangeList,
+  ChangeStatus,
+  FileContent,
+  FileList,
+  SearchMatch,
+  SearchOptions,
+  SearchResult,
+} from '../../shared/types'
 import type { FilesApi } from '../contracts'
-import { run, streamNul } from '../exec'
+import { CommandError, run, streamNul } from '../exec'
 import { GIT_ENV } from '../git/gitEnv'
+import { LineMatcher, SearchTimeoutError, type LineHit } from './lineMatcher'
 
 export const MAX_TEXT_BYTES = 1_000_000
 export const BINARY_SNIFF_BYTES = 8_192
@@ -14,6 +31,10 @@ export const MAX_WALK_ENTRIES = 20_000
 export const MAX_REPO_ENTRIES = 50_000
 /** Untracked files up to this size get a line count in the change list; larger ones report `added: 0`. */
 export const MAX_COUNT_BYTES = 256 * 1024
+/** A content search gives up after this long. */
+export const SEARCH_TIMEOUT_MS = 10_000
+/** Folder files read (and matched) at a time by a content search. */
+const SEARCH_BATCH = 32
 /** Untracked-file stats remembered between polls. */
 const UNTRACKED_CACHE_MAX = 5_000
 
@@ -167,6 +188,46 @@ async function walk(root: string, max: number): Promise<FileList> {
   return { paths: out.sort(), truncated }
 }
 
+/**
+ * A folder file's text for a content search (its first MAX_TEXT_BYTES, like the viewer shows), or null when it
+ * is binary, not a regular file, unreadable, or a symlink leading outside the root.
+ */
+async function searchableText(root: string, rel: string): Promise<string | null> {
+  try {
+    let abs = join(root, rel)
+    let s = await lstat(abs)
+    if (s.isSymbolicLink()) {
+      const p = await safePath(root, rel) // throws when it leads outside the root
+      if (p.missing) return null
+      abs = p.abs
+      s = await stat(abs)
+    }
+    if (!s.isFile()) return null
+    const truncated = s.size > MAX_TEXT_BYTES
+    const head = await readHead(abs, Math.min(s.size, MAX_TEXT_BYTES))
+    if (looksBinary(head)) return null
+    return new TextDecoder('utf-8').decode(head, { stream: truncated })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * git grep's failure as the user should read it: git's own words, without the command line. git reports a pattern
+ * it can't compile as `fatal: -e option, '<query>': <reason>`.
+ */
+function grepError(err: unknown, query: string): Error {
+  const stderr = err instanceof CommandError ? err.stderr.trim() : ''
+  if (!stderr) return err instanceof Error ? err : new Error(String(err))
+  const detail = (stderr.split('\n').find((l) => l.startsWith('fatal: ')) ?? stderr.split('\n')[0]).replace(
+    /^fatal: /,
+    '',
+  )
+  const option = `-e option, '${query}': `
+  if (!detail.startsWith(option)) return new Error(`The search failed: ${detail}`)
+  return new Error(`Invalid regular expression: ${detail.slice(option.length)}`)
+}
+
 /** The diff git shows for a new symlink: one line holding its target, without a trailing newline. */
 function newSymlinkDiff(rel: string, target: string): string {
   const lines = target.split('\n')
@@ -250,15 +311,19 @@ export interface FilesServiceOptions {
   maxRepoEntries?: number
   /** Cap on listed folder files (default MAX_WALK_ENTRIES). */
   maxWalkEntries?: number
+  /** How long a content search may take (default SEARCH_TIMEOUT_MS). */
+  searchTimeoutMs?: number
 }
 
 export class FilesService implements FilesApi {
   private readonly maxRepoEntries: number
   private readonly maxWalkEntries: number
+  private readonly searchTimeoutMs: number
 
   constructor(opts: FilesServiceOptions = {}) {
     this.maxRepoEntries = opts.maxRepoEntries ?? MAX_REPO_ENTRIES
     this.maxWalkEntries = opts.maxWalkEntries ?? MAX_WALK_ENTRIES
+    this.searchTimeoutMs = opts.searchTimeoutMs ?? SEARCH_TIMEOUT_MS
   }
 
   /** Untracked-file stats by `worktree\0path`, so polls don't re-read unchanged files. Insertion order = LRU order. */
@@ -328,6 +393,156 @@ export class FilesService implements FilesApi {
     } catch {
       return null
     }
+  }
+
+  async searchFiles(root: string, isRepo: boolean, query: string, options?: SearchOptions): Promise<SearchResult> {
+    const q = checkSearchQuery(query)
+    const opts = normalizeSearchOptions(options)
+    const deadline = Date.now() + this.searchTimeoutMs
+    return isRepo ? this.grepRepo(root, q, opts, deadline) : this.searchFolder(root, q, opts, deadline)
+  }
+
+  /**
+   * `git grep` over tracked and untracked, not ignored files, stopped once past the cap. git prints
+   * `path\0line\0column\0text\n` per matching line: split on NUL, the text ends at its first newline.
+   */
+  private async grepRepo(
+    root: string,
+    query: string,
+    opts: Required<SearchOptions>,
+    deadline: number,
+  ): Promise<SearchResult> {
+    const args = [
+      'grep',
+      '-n',
+      '--column',
+      '-I',
+      '--no-color',
+      '-z',
+      opts.regex ? '-E' : '-F',
+      ...(opts.caseSensitive ? [] : ['-i']),
+      '--untracked',
+      '--exclude-standard',
+      '-e',
+      query,
+      '--',
+    ]
+    const found: { path: string; line: number; byteColumn: number; text: string }[] = []
+    let truncated = false
+    let field = 0
+    let path = ''
+    let line = 0
+    let byteColumn = 0
+    const onItem = (item: string): boolean => {
+      switch (field) {
+        case 0:
+          path = item
+          field = 1
+          return true
+        case 1:
+          line = Number(item)
+          field = 2
+          return true
+        case 2:
+          byteColumn = Number(item)
+          field = 3
+          return true
+      }
+      const nl = item.indexOf('\n')
+      const text = nl === -1 ? item : item.slice(0, nl)
+      if (!Number.isInteger(line) || line < 1 || !Number.isInteger(byteColumn) || byteColumn < 1) {
+        truncated = true // a line git couldn't print cleanly (a NUL in it): stop rather than misread the rest
+        return false
+      }
+      if (found.length >= MAX_SEARCH_MATCHES) {
+        truncated = true
+        return false
+      }
+      found.push({ path, line, byteColumn, text })
+      path = nl === -1 ? '' : item.slice(nl + 1)
+      field = 1
+      return true
+    }
+    try {
+      await streamNul('git', gitArgs(root, args), onItem, {
+        env: GIT_ENV,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        okExitCodes: [1], // no matches
+      })
+    } catch (err) {
+      if (err instanceof CommandError && err.timedOut) throw new SearchTimeoutError(this.searchTimeoutMs)
+      throw grepError(err, query)
+    }
+    // git only reports where a line's match starts; find its length (and so the highlight) in JavaScript.
+    // A POSIX pattern JavaScript reads differently just isn't highlighted.
+    let hits: LineHit[][] = found.map(() => [])
+    let pattern: RegExp | null = null
+    try {
+      pattern = searchPattern(query, opts)
+    } catch {
+      // valid for git, not for JavaScript
+    }
+    if (pattern && found.length > 0) {
+      const matcher = new LineMatcher(pattern, deadline, this.searchTimeoutMs)
+      try {
+        hits = await matcher.match(
+          found.map((f) => f.text),
+          found.length,
+        )
+      } finally {
+        matcher.close()
+      }
+    }
+    const matches = found.map((f, i): SearchMatch => {
+      const start = Buffer.from(f.text, 'utf8')
+        .subarray(0, f.byteColumn - 1)
+        .toString('utf8').length
+      const hit = hits[i]?.[0]
+      const match = makeMatch(f.path, f.line, f.text, hit ? hit[1] : start, hit ? hit[2] : 0)
+      return { ...match, column: start + 1 }
+    })
+    return { matches, truncated }
+  }
+
+  /** The listFiles walk, binary files skipped, matched in a worker (see LineMatcher). */
+  private async searchFolder(
+    root: string,
+    query: string,
+    opts: Required<SearchOptions>,
+    deadline: number,
+  ): Promise<SearchResult> {
+    const pattern = searchPattern(query, opts) // throws for an invalid regular expression
+    const { paths, truncated: walkTruncated } = await walk(root, this.maxWalkEntries)
+    const matches: SearchMatch[] = []
+    let truncated = false
+    const matcher = new LineMatcher(pattern, deadline, this.searchTimeoutMs)
+    try {
+      for (let i = 0; i < paths.length && !truncated; i += SEARCH_BATCH) {
+        if (Date.now() >= deadline) throw new SearchTimeoutError(this.searchTimeoutMs)
+        const batch = paths.slice(i, i + SEARCH_BATCH)
+        const texts = await Promise.all(batch.map((rel) => searchableText(root, rel)))
+        const present = batch.flatMap((rel, j) => (texts[j] === null ? [] : [{ rel, text: texts[j] as string }]))
+        // One more than still fits, to know whether the cap cut anything off.
+        const hits = await matcher.match(
+          present.map((p) => p.text),
+          MAX_SEARCH_MATCHES - matches.length + 1,
+        )
+        present.forEach(({ rel, text }, j) => {
+          if (hits[j].length === 0 || truncated) return
+          const lines = text.split('\n')
+          for (const [line, start, length] of hits[j]) {
+            if (matches.length >= MAX_SEARCH_MATCHES) {
+              truncated = true
+              return
+            }
+            matches.push(makeMatch(rel, line, lines[line - 1] ?? '', start, length))
+          }
+        })
+      }
+    } finally {
+      matcher.close()
+    }
+    return { matches, truncated: truncated || walkTruncated }
   }
 
   async listChanges(worktree: string, baseRef: string): Promise<ChangeList> {
