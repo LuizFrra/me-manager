@@ -29,3 +29,17 @@ describe('SettingsDialog: Remote Control and permissions', () => {
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ remoteControl: false, skipPermissions: false }))
   })
 })
+
+describe('SettingsDialog: update strategy', () => {
+  it('shows rebase by default and saves merge', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={DEFAULT_SETTINGS} onSave={onSave} onCancel={vi.fn()} />)
+    const group = screen.getByRole('group', { name: 'Update from base' })
+    expect(screen.getByRole('radio', { name: /^Rebase/ })).toBeChecked()
+    expect(group).toHaveAccessibleDescription(/a conflict is undone and reported/)
+    await user.click(screen.getByRole('radio', { name: /^Merge/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ updateStrategy: 'merge' }))
+  })
+})

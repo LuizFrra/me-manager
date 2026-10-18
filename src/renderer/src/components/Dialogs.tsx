@@ -7,6 +7,7 @@ import {
   type ChangeList,
   type NewTaskOptions,
   type UnsavedWork,
+  type UpdateStrategy,
 } from '../../../shared/types'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
@@ -499,6 +500,85 @@ export function CommitDialog(props: {
           </button>
         </div>
       </form>
+    </div>
+  )
+}
+
+/**
+ * An update from the base stopped on conflicts and was undone. Lists the files and offers to have the task's
+ * Claude do the rebase (or merge) and resolve them.
+ */
+export function ConflictDialog(props: {
+  branch: string
+  baseRef: string
+  strategy: UpdateStrategy
+  files: string[]
+  onAskClaude: () => Promise<void>
+  onClose: () => void
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const ask = async (): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onAskClaude()
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  const rebase = props.strategy === 'rebase'
+  return (
+    <div className="overlay">
+      <div
+        className="dialog conflict-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Update stopped on conflicts"
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          props.onClose()
+        }}
+      >
+        <h2>Update stopped on conflicts</h2>
+        <p className="conflict-summary">
+          {rebase ? (
+            <>
+              Rebasing <code>{props.branch}</code> onto <code>{props.baseRef}</code>
+            </>
+          ) : (
+            <>
+              Merging <code>{props.baseRef}</code> into <code>{props.branch}</code>
+            </>
+          )}{' '}
+          conflicts in {plural(props.files.length, 'file')}. It was undone (<code>git {props.strategy} --abort</code>
+          ), so the branch and its files are as they were.
+        </p>
+        <ul className="commit-files" aria-label="Conflicting files">
+          {props.files.map((f) => (
+            <li key={f}>
+              <span className="badge badge-D" aria-hidden="true">
+                !
+              </span>
+              <span className="commit-file-path">{f}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="dialog-field-hint">
+          Claude can redo the {props.strategy} in its window and resolve the conflicts; you can follow along there.
+        </p>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onClose} disabled={busy}>
+            Close
+          </button>
+          <button type="button" className="primary" autoFocus onClick={() => void ask()} disabled={busy}>
+            {busy ? 'Asking…' : 'Ask Claude to resolve'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

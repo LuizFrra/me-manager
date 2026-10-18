@@ -489,3 +489,110 @@ describe('git error summaries', () => {
     expect(commandFailure('git x', noStderr).message).toBe('git x failed: exit code 1')
   })
 })
+
+describe('updateFromBase', () => {
+  withGlobalConfig(`[user]\n\tname = Test\n\temail = test@example.com\n${NO_SIGNING}`)
+
+  /** A task with one commit of its own, and `main` on origin moved on by another clone (then fetched). */
+  async function behindBase(theirs: { file: string; content: string }): Promise<{ wt: string; clone: string }> {
+    const { root, clone, wt } = await withTask()
+    await commitFile(wt, 'mine.txt', 'mine\n', 'mine')
+    const other = join(root, 'other')
+    await run('git', ['clone', join(root, 'origin.git'), other])
+    await commitFile(other, theirs.file, theirs.content, 'theirs')
+    await git(other, 'push', 'origin', 'main')
+    await svc.fetch(clone)
+    return { wt, clone }
+  }
+
+  const log = async (wt: string): Promise<string[]> =>
+    (await git(wt, 'log', '--format=%s', 'HEAD')).split('\n').filter(Boolean)
+
+  it('is up to date when the base has nothing new', async () => {
+    const { wt } = await withTask()
+    await expect(svc.updateFromBase(wt, 'origin/main', 'rebase')).resolves.toEqual({
+      kind: 'upToDate',
+      baseRef: 'origin/main',
+    })
+  })
+
+  it("rebases the task's commits onto the base", async () => {
+    const { wt } = await behindBase({ file: 'theirs.txt', content: 'theirs\n' })
+    await expect(svc.updateFromBase(wt, 'origin/main', 'rebase')).resolves.toEqual({
+      kind: 'updated',
+      strategy: 'rebase',
+      baseRef: 'origin/main',
+      commits: 1,
+    })
+    expect(await log(wt)).toEqual(['mine', 'theirs', 'init'])
+    expect(await git(wt, 'status', '--porcelain')).toBe('')
+  })
+
+  it('merges the base with a merge commit', async () => {
+    const { wt } = await behindBase({ file: 'theirs.txt', content: 'theirs\n' })
+    await expect(svc.updateFromBase(wt, 'origin/main', 'merge')).resolves.toMatchObject({
+      kind: 'updated',
+      strategy: 'merge',
+      commits: 1,
+    })
+    expect((await git(wt, 'log', '-1', '--format=%P')).trim().split(' ')).toHaveLength(2)
+    expect(existsSync(join(wt, 'theirs.txt'))).toBe(true)
+  })
+
+  for (const strategy of ['rebase', 'merge'] as const) {
+    it(`reports conflicts and aborts the ${strategy}, leaving a clean tree on the old commit`, async () => {
+      const { root, clone, wt } = await withTask()
+      await commitFile(wt, 'README.md', 'mine\n', 'mine')
+      await commitFile(wt, 'other.md', 'mine\n', 'other')
+      const head = await git(wt, 'rev-parse', 'HEAD')
+      const other = join(root, 'other')
+      await run('git', ['clone', join(root, 'origin.git'), other])
+      await writeFile(join(other, 'other.md'), 'theirs\n')
+      await commitFile(other, 'README.md', 'theirs\n', 'theirs')
+      await git(other, 'push', 'origin', 'main')
+      await svc.fetch(clone)
+
+      const result = await svc.updateFromBase(wt, 'origin/main', strategy)
+      expect(result).toMatchObject({ kind: 'conflict', strategy, baseRef: 'origin/main' })
+      expect(result.kind === 'conflict' && result.files.sort()).toEqual(
+        strategy === 'merge' ? ['README.md', 'other.md'] : ['README.md'], // a rebase stops at the first commit
+      )
+      expect(await git(wt, 'rev-parse', 'HEAD')).toBe(head)
+      expect(await git(wt, 'status', '--porcelain')).toBe('')
+      expect((await git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('claude/client-x/fix')
+      const gitDir = (await git(wt, 'rev-parse', '--git-dir')).trim()
+      expect(existsSync(join(gitDir, 'rebase-merge'))).toBe(false)
+      expect(existsSync(join(gitDir, 'MERGE_HEAD'))).toBe(false)
+    })
+  }
+
+  it('refuses when tracked files have uncommitted changes, before touching anything', async () => {
+    const { wt } = await behindBase({ file: 'theirs.txt', content: 'theirs\n' })
+    await writeFile(join(wt, 'README.md'), 'edited\n')
+    await writeFile(join(wt, 'scratch.txt'), 'untracked\n')
+    const head = await git(wt, 'rev-parse', 'HEAD')
+    await expect(svc.updateFromBase(wt, 'origin/main', 'rebase')).rejects.toThrow(
+      'Commit or stash your changes first: 1 uncommitted file in the task',
+    )
+    expect(await git(wt, 'rev-parse', 'HEAD')).toBe(head)
+    expect(await git(wt, 'status', '--porcelain')).toBe(' M README.md\n?? scratch.txt\n')
+  })
+
+  it('updates with only untracked files around', async () => {
+    const { wt } = await behindBase({ file: 'theirs.txt', content: 'theirs\n' })
+    await writeFile(join(wt, 'scratch.txt'), 'untracked\n')
+    await expect(svc.updateFromBase(wt, 'origin/main', 'rebase')).resolves.toMatchObject({ kind: 'updated' })
+  })
+
+  it('refuses a missing or option-like base, and a rebase already in progress', async () => {
+    const { wt } = await withTask()
+    await expect(svc.updateFromBase(wt, 'origin/gone', 'rebase')).rejects.toThrow(/origin\/gone was not found/)
+    await expect(svc.updateFromBase(wt, '--root', 'rebase')).rejects.toThrow(/--root was not found/)
+    const gitDir = (await git(wt, 'rev-parse', '--git-dir')).trim()
+    await mkdir(join(gitDir, 'rebase-merge'))
+    await expect(svc.updateFromBase(wt, 'origin/main', 'merge')).rejects.toThrow(
+      'A rebase is already in progress in this worktree; finish or abort it first',
+    )
+    expect(existsSync(join(gitDir, 'rebase-merge'))).toBe(true) // the user's own rebase is left alone
+  })
+})

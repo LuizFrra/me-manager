@@ -957,6 +957,7 @@ describe('App settings', () => {
       notifications: false,
       remoteControl: true,
       skipPermissions: true,
+      updateStrategy: 'rebase',
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()
@@ -1754,11 +1755,12 @@ describe('App git actions', () => {
     fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
     const palette = within(await screen.findByRole('dialog', { name: 'Command palette' }))
     await user.type(palette.getByRole('combobox'), 'git:')
-    expect(palette.getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
-      'Git: Commit all…',
-      'Git: Push branch',
-      'Git: Open pull request',
-    ])
+    expect(
+      palette
+        .getAllByRole('option')
+        .map((o) => o.getAttribute('aria-label'))
+        .sort(),
+    ).toEqual(['Git: Commit all…', 'Git: Open pull request', 'Git: Push branch', 'Git: Update from base'])
     await user.type(palette.getByRole('combobox'), ' push')
     await user.keyboard('{Enter}')
     expect(pushTask).toHaveBeenCalledTimes(1)
@@ -1779,5 +1781,125 @@ describe('App git actions', () => {
     await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
     await screen.findByRole('group', { name: 'Open' })
     expect(screen.queryByRole('group', { name: 'Git' })).not.toBeInTheDocument()
+  })
+})
+
+describe('App update from base', () => {
+  const git = (): ReturnType<typeof within> => within(screen.getByRole('group', { name: 'Git' }))
+  const selectedTarget = async (api: MeManagerApi): Promise<Target> => {
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    return { themeId: state.themes[0].id, itemId: repo.id, taskId: repo.kind === 'repo' ? repo.tasks[0].id : '' }
+  }
+
+  it('rebases by default, then says when it is up to date, refreshing git status', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const updateFromBase = vi.spyOn(api, 'updateFromBase')
+    const getGitStatus = vi.spyOn(api, 'getGitStatus')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const update = git().getByRole('button', { name: 'Update from base' })
+    expect(update).toHaveAttribute(
+      'title',
+      'Fetch, then rebase claude/client-x/fix-login-bug onto origin/main (git rebase)',
+    )
+    getGitStatus.mockClear()
+    await user.click(update)
+    expect(updateFromBase).toHaveBeenCalledWith(await selectedTarget(api))
+    expect(await screen.findByRole('status')).toHaveTextContent('Rebased onto origin/main (2 new commits)')
+    expect(getGitStatus).toHaveBeenCalled()
+    await user.click(update)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Already up to date with origin/main'))
+  })
+
+  it('merges when Settings say so', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.updateSettings({ updateStrategy: 'merge' })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const update = git().getByRole('button', { name: 'Update from base' })
+    await waitFor(() => expect(update).toHaveAttribute('title', expect.stringContaining('git merge --no-edit')))
+    await user.click(update)
+    expect(await screen.findByRole('status')).toHaveTextContent('Merged origin/main (2 new commits)')
+  })
+
+  it('shows why it refused, with the button busy meanwhile', async () => {
+    const user = userEvent.setup()
+    let fail = (): void => {}
+    const api = repoApi({
+      updateFromBase: () =>
+        new Promise((_, reject) => {
+          fail = () => reject(new Error('Commit or stash your changes first: 2 uncommitted files in the task'))
+        }),
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(git().getByRole('button', { name: 'Update from base' }))
+    expect(git().getByRole('button', { name: 'Update from base' })).toHaveTextContent('Updating…')
+    expect(git().getByRole('button', { name: 'Update from base' })).toBeDisabled()
+    act(() => fail())
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Commit or stash your changes first: 2 uncommitted files in the task',
+    )
+    expect(git().getByRole('button', { name: 'Update from base' })).toBeEnabled()
+  })
+
+  it('reports conflicts and asks Claude to resolve them', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const askClaudeToResolve = vi.spyOn(api, 'askClaudeToResolve')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'conflict demo')
+    await user.click(git().getByRole('button', { name: 'Update from base' }))
+    const dialog = within(await screen.findByRole('alertdialog', { name: 'Update stopped on conflicts' }))
+    expect(dialog.getByText(/conflicts in 2 files\. It was undone/)).toHaveTextContent(
+      'Rebasing claude/client-x/conflict-demo onto origin/main conflicts in 2 files. It was undone (git rebase --abort), so the branch and its files are as they were.',
+    )
+    expect(
+      within(dialog.getByRole('list', { name: 'Conflicting files' }))
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['!src/app.ts', '!src/util/format.ts'])
+    const ask = dialog.getByRole('button', { name: 'Ask Claude to resolve' })
+    expect(ask).toHaveFocus()
+    await user.click(ask)
+    expect(askClaudeToResolve).toHaveBeenCalledWith(await selectedTarget(api), 'rebase', [
+      'src/app.ts',
+      'src/util/format.ts',
+    ])
+    expect(await screen.findByRole('status')).toHaveTextContent('Asked Claude to resolve the conflicts')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('keeps the conflict dialog when asking Claude fails, and closes with Esc', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      askClaudeToResolve: async () => Promise.reject(new Error('Open the task first: its session is not running')),
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'conflict demo')
+    await user.click(git().getByRole('button', { name: 'Update from base' }))
+    const dialog = within(await screen.findByRole('alertdialog', { name: 'Update stopped on conflicts' }))
+    await user.click(dialog.getByRole('button', { name: 'Ask Claude to resolve' }))
+    expect(await screen.findByText('Open the task first: its session is not running')).toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('updates from the palette', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const updateFromBase = vi.spyOn(api, 'updateFromBase')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = within(await screen.findByRole('dialog', { name: 'Command palette' }))
+    await user.type(palette.getByRole('combobox'), 'update from base')
+    expect(palette.getAllByRole('option')[0]).toHaveAttribute('aria-label', 'Git: Update from base')
+    await user.keyboard('{Enter}')
+    expect(updateFromBase).toHaveBeenCalledTimes(1)
   })
 })

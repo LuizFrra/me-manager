@@ -32,10 +32,20 @@ export function parseWindowActivity(out: string, windowName: string): Record<str
   return result
 }
 
+/** sendText waits this long between the text and Enter, so the app reads Enter as a key press, not pasted text. */
+export const SEND_ENTER_DELAY_MS = 150
+
+/**
+ * tmux splits a command where an argument ends with an unescaped ';' (even one passed as its own argv entry), so
+ * a trailing ';' is escaped: tmux turns `\;` back into a literal ';'.
+ */
+export const escapeTrailingSemicolon = (arg: string): string => (arg.endsWith(';') ? `${arg.slice(0, -1)}\\;` : arg)
+
 export class TmuxService implements TmuxApi {
   constructor(
     private readonly socket: string,
     private readonly configFile: string,
+    private readonly enterDelayMs = SEND_ENTER_DELAY_MS,
   ) {}
 
   async ensureConfig(): Promise<void> {
@@ -90,6 +100,14 @@ export class TmuxService implements TmuxApi {
       if (err instanceof CommandError) return null
       throw err
     }
+  }
+
+  async sendText(session: string, windowName: string, text: string): Promise<void> {
+    // `=` on both parts: exact names. -l: literal text, no key names; `--`: text starting with '-' isn't a flag.
+    const target = `=${session}:=${windowName}`
+    await this.tmux(['send-keys', '-t', target, '-l', '--', escapeTrailingSemicolon(text)])
+    await new Promise((r) => setTimeout(r, this.enterDelayMs))
+    await this.tmux(['send-keys', '-t', target, 'Enter'])
   }
 
   async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {

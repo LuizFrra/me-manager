@@ -162,7 +162,21 @@ export interface Settings {
   skipPermissions: boolean
   /** Desktop notifications when Claude finishes or waits for input in a task or folder the user isn't looking at. */
   notifications: boolean
+  /** How "Update from base" brings the base's new commits into a task branch. */
+  updateStrategy: UpdateStrategy
 }
+
+/** `rebase`: `git rebase <base>` (a linear history); `merge`: `git merge --no-edit <base>` (a merge commit). */
+export type UpdateStrategy = 'rebase' | 'merge'
+
+export const UPDATE_STRATEGIES: readonly UpdateStrategy[] = ['rebase', 'merge']
+
+/** What "Update from base" did. A conflict was undone (`--abort`), leaving the branch and the worktree as they were. */
+export type UpdateResult =
+  | { kind: 'upToDate'; baseRef: string }
+  /** `commits`: how many of the base's commits the branch didn't have. */
+  | { kind: 'updated'; strategy: UpdateStrategy; baseRef: string; commits: number }
+  | { kind: 'conflict'; strategy: UpdateStrategy; baseRef: string; files: string[] }
 
 export function hasUnsavedWork(work: UnsavedWork): boolean {
   return work.uncommittedFiles.length > 0 || work.unpushedCommits.length > 0 || Boolean(work.warning)
@@ -254,6 +268,17 @@ export interface MeManagerApi {
    * exists, and returns its URL (the renderer opens it with openExternal). Rejects when gh is not installed.
    */
   createPullRequest(target: Target): Promise<PullRequestResult>
+  /**
+   * Fetches origin (with the usual timeout), then rebases the task branch onto its base ref, or merges the base
+   * into it (Settings.updateStrategy). Refuses when the worktree has uncommitted changes. On conflicts the rebase
+   * or merge is aborted and the conflicting files are reported.
+   */
+  updateFromBase(target: Target): Promise<UpdateResult>
+  /**
+   * Types a request to rebase (or merge) and resolve the conflicts in `files` into the task's Claude window,
+   * then Enter, and selects that window. Starts Claude (continuing its conversation) when its window was closed.
+   */
+  askClaudeToResolve(target: Target, strategy: UpdateStrategy, files: string[]): Promise<TabInfo[]>
 
   /**
    * Claude usage of one task or folder, from Claude Code's transcripts (`~/.claude/projects`). A message counts

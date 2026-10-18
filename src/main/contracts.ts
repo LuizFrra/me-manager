@@ -10,6 +10,8 @@ import type {
   TabInfo,
   TaskGitStatus,
   UnsavedWork,
+  UpdateResult,
+  UpdateStrategy,
   UsageSummary,
 } from '../shared/types'
 
@@ -50,6 +52,12 @@ export interface GitApi {
   commitAll(worktreePath: string, message: string): Promise<CommitResult>
   /** `git push -u origin <branch>`, non-interactive, giving up after a timeout. */
   push(worktreePath: string, branch: string): Promise<void>
+  /**
+   * `git rebase <baseRef>` or `git merge --no-edit <baseRef>` in the worktree (no fetch). Refuses when tracked
+   * files have uncommitted changes or a rebase/merge is already in progress. On conflicts, collects the unmerged
+   * files, aborts (leaving the branch and worktree as they were) and resolves with them.
+   */
+  updateFromBase(worktreePath: string, baseRef: string, strategy: UpdateStrategy): Promise<UpdateResult>
 }
 
 /** The GitHub CLI. Never through a shell. */
@@ -84,6 +92,8 @@ export interface TmuxApi {
   windowActivity(windowName: string): Promise<Record<string, number>>
   /** The visible text of a window's active pane (`capture-pane -p`), or null when there is no such window. */
   capturePane(session: string, windowName: string): Promise<string | null>
+  /** Types `text` literally into a window's active pane (`send-keys -l`), then presses Enter. */
+  sendText(session: string, windowName: string, text: string): Promise<void>
 }
 
 export interface PtyApi {

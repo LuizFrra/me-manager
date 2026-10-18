@@ -8,6 +8,8 @@ import type {
   TabInfo,
   TaskGitStatus,
   UnsavedWork,
+  UpdateResult,
+  UpdateStrategy,
   UsageSummary,
 } from '../../shared/types'
 import type {
@@ -120,6 +122,20 @@ export class FakeGit implements GitApi {
     if (this.actionGate) await this.actionGate
     if (this.failAction) throw new Error(this.failAction)
   }
+  /** What updateFromBase resolves with (its baseRef and strategy filled in from the call). */
+  update: { kind: 'upToDate' } | { kind: 'updated'; commits: number } | { kind: 'conflict'; files: string[] } = {
+    kind: 'updated',
+    commits: 2,
+  }
+  async updateFromBase(worktreePath: string, baseRef: string, strategy: UpdateStrategy): Promise<UpdateResult> {
+    this.calls.push(`updateFromBase ${worktreePath} ${baseRef} ${strategy}`)
+    if (this.actionGate) await this.actionGate
+    if (this.failAction) throw new Error(this.failAction)
+    const u = this.update
+    if (u.kind === 'upToDate') return { kind: 'upToDate', baseRef }
+    if (u.kind === 'updated') return { kind: 'updated', strategy, baseRef, commits: u.commits }
+    return { kind: 'conflict', strategy, baseRef, files: [...u.files] }
+  }
   async taskStatus(worktreePath: string, baseRef: string): Promise<TaskGitStatus> {
     this.statusCalls.push(`${worktreePath} ${baseRef}`)
     this.peakInFlightStatus = Math.max(this.peakInFlightStatus, ++this.inFlightStatus)
@@ -203,6 +219,11 @@ export class FakeTmux implements TmuxApi {
       if (this.sessions.get(session)?.windows.some((w) => w.name === windowName)) out[session] = at
     }
     return out
+  }
+  sent: string[] = []
+  async sendText(session: string, windowName: string, text: string): Promise<void> {
+    if (!this.sessions.get(session)?.windows.some((w) => w.name === windowName)) throw new Error("can't find window")
+    this.sent.push(`${session}:${windowName} ${text}`)
   }
   async capturePane(session: string, windowName: string): Promise<string | null> {
     this.captureCalls.push(`${session}:${windowName}`)

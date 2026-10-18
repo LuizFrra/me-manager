@@ -15,6 +15,7 @@ describe('settings form', () => {
         notifications: true,
         remoteControl: true,
         skipPermissions: true,
+        updateStrategy: 'rebase',
       },
     )
   })
@@ -30,6 +31,7 @@ describe('settings form', () => {
           notifications: false,
           remoteControl: false,
           skipPermissions: false,
+          updateStrategy: 'merge',
         }),
       ),
     ).toEqual({
@@ -41,6 +43,7 @@ describe('settings form', () => {
         notifications: false,
         remoteControl: false,
         skipPermissions: false,
+        updateStrategy: 'merge',
       },
     })
     expect(parseForm(form())).toEqual({ settings: DEFAULT_SETTINGS })

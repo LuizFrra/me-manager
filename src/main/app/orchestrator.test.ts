@@ -9,7 +9,9 @@ import {
   claudeCommand,
   claudeContinueCommand,
   claudePromptCommand,
+  MAX_RESOLVE_FILES,
   normalizeTaskOptions,
+  resolvePrompt,
 } from './orchestrator'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import {
@@ -1100,5 +1102,113 @@ describe('Orchestrator: git actions', () => {
       'listChanges /wt/client-x/my-api/fix HEAD',
       'listChanges /wt/client-x/my-api/fix origin/main',
     ])
+  })
+})
+
+describe('Orchestrator: update from base', () => {
+  async function withTask(): Promise<Ctx & { target: Target; task: Task; session: string }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    ctx.git.calls = []
+    ctx.tmux.calls = []
+    const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
+    return { ...ctx, target, task, session: 'mmt_client-x_my-api_fix' }
+  }
+
+  it('fetches, then rebases onto the base by default', async () => {
+    const { orch, git, target } = await withTask()
+    await expect(orch.updateFromBase(target)).resolves.toEqual({
+      kind: 'updated',
+      strategy: 'rebase',
+      baseRef: 'origin/main',
+      commits: 2,
+    })
+    expect(git.calls).toEqual(['fetch /code/my-api', 'updateFromBase /wt/client-x/my-api/fix origin/main rebase'])
+  })
+
+  it('merges when Settings say so, and still updates when the fetch fails', async () => {
+    const { orch, git, target } = await withTask()
+    await orch.updateSettings({ updateStrategy: 'merge' })
+    git.failFetch = true
+    await expect(orch.updateFromBase(target)).resolves.toMatchObject({ kind: 'updated', strategy: 'merge' })
+    expect(git.calls.at(-1)).toBe('updateFromBase /wt/client-x/my-api/fix origin/main merge')
+  })
+
+  it('reports conflicts and passes on refusals', async () => {
+    const { orch, git, target } = await withTask()
+    git.update = { kind: 'conflict', files: ['src/a.ts'] }
+    await expect(orch.updateFromBase(target)).resolves.toEqual({
+      kind: 'conflict',
+      strategy: 'rebase',
+      baseRef: 'origin/main',
+      files: ['src/a.ts'],
+    })
+    git.failAction = 'Commit or stash your changes first: 2 uncommitted files in the task'
+    await expect(orch.updateFromBase(target)).rejects.toThrow('Commit or stash your changes first')
+  })
+
+  it("runs on the task's queue, after its other git actions", async () => {
+    const { orch, git, target } = await withTask()
+    let release = (): void => {}
+    git.actionGate = new Promise<void>((r) => (release = r))
+    const push = orch.pushTask(target)
+    const update = orch.updateFromBase(target)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.calls).toEqual(['push /wt/client-x/my-api/fix claude/client-x/fix'])
+    release()
+    await Promise.all([push, update])
+    expect(git.calls.slice(1)).toEqual([
+      'fetch /code/my-api',
+      'updateFromBase /wt/client-x/my-api/fix origin/main rebase',
+    ])
+  })
+
+  it("asks Claude in the task's claude window to resolve the conflicts, then shows that window", async () => {
+    const { orch, tmux, target, session } = await withTask()
+    await orch.newTab(target) // the shell tab is now active
+    const tabs = await orch.askClaudeToResolve(target, 'rebase', ['src/a.ts', 'b c.ts'])
+    expect(tmux.sent).toEqual([
+      `${session}:claude Please rebase this branch onto origin/main and resolve the conflicts in: src/a.ts, b c.ts`,
+    ])
+    expect(tabs.find((t) => t.active)?.name).toBe('claude')
+    await orch.askClaudeToResolve(target, 'merge', ['x'])
+    expect(tmux.sent.at(-1)).toBe(
+      `${session}:claude Please merge origin/main into this branch and resolve the conflicts in: x`,
+    )
+  })
+
+  it("restarts Claude with the request when its window was closed, and needs the task's session", async () => {
+    const { orch, tmux, target, session } = await withTask()
+    await orch.newTab(target)
+    await orch.closeTab(target, 0) // the claude window
+    await orch.askClaudeToResolve(target, 'rebase', ['a.ts'])
+    const request = `'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts'`
+    expect(tmux.sessions.get(session)?.windows.at(-1)).toEqual({
+      name: 'claude',
+      command: `claude --continue -- ${request} || claude -- ${request}`,
+    })
+    expect(tmux.sent).toEqual([])
+    tmux.sessions.clear()
+    await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow('Open the task first')
+  })
+
+  it('builds the request from untrusted file names', () => {
+    expect(resolvePrompt('rebase', 'origin/main', ['a\nb.ts', 7, '', 'c\u0007.ts'])).toBe(
+      'Please rebase this branch onto origin/main and resolve the conflicts in: a?b.ts, c?.ts',
+    )
+    const many = Array.from({ length: MAX_RESOLVE_FILES + 5 }, (_, i) => `f${i}`)
+    expect(resolvePrompt('merge', 'main', many)).toMatch(/f99 and 5 more$/)
+    expect(() => resolvePrompt('rebase', 'main', [])).toThrow('No conflicting files to resolve')
+    expect(() => resolvePrompt('rebase', 'main', 'a.ts')).toThrow('No conflicting files to resolve')
+    expect(() => resolvePrompt('squash' as 'rebase', 'main', ['a'])).toThrow('Invalid update strategy')
+  })
+
+  it('refuses folders', async () => {
+    const { orch, themeId } = await withTask()
+    const folderId = (await orch.addFolder(themeId, '/docs')).themes[0].items[1].id
+    await expect(orch.updateFromBase({ themeId, itemId: folderId })).rejects.toThrow(/only available for repository/)
+    await expect(orch.askClaudeToResolve({ themeId, itemId: folderId }, 'rebase', ['a'])).rejects.toThrow(
+      /only available for repository/,
+    )
   })
 })
