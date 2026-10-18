@@ -45,9 +45,9 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 18 | Search file contents in the side panel (`git grep` or a folder walk), with clickable results | feature | done (3b50f29) |
 | 19 | Image preview in the file viewer (png, jpg, gif, webp, svg) | feature | done (d2b1d6e) |
 | 20 | Remember the last selected task and the sidebar's collapsed state across restarts | ux | done (3019c1e) |
-| 21 | Confirm dialogs for removing a theme, repo or folder, and an undo-friendly flow | ux | todo |
-| 22 | Clone a repository from a URL into a chosen directory and add it to a theme | feature | todo |
-| 23 | Side-by-side diff toggle for wide panels | ux | todo |
+| 21 | Confirm dialogs for removing a theme, repo or folder, and an undo-friendly flow | ux | done (ea786eb) |
+| 22 | Clone a repository from a URL into a chosen directory and add it to a theme | feature | done (a0cfdbd) |
+| 23 | Side-by-side diff toggle for wide panels | ux | done (6a96c5a) |
 | 24 | Status bar: branch, ahead/behind, last commit subject and session state for the selected task | ux | todo |
 | 25 | Theme colors and emoji icons in the sidebar | ux | todo |
 | 26 | Virtualize the file tree and changes list for large repos, and cap the repo file listing | perf | todo |
