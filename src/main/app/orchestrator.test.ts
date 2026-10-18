@@ -332,6 +332,32 @@ describe('Orchestrator: new-task options', () => {
   })
 })
 
+describe('Orchestrator: theme style', () => {
+  it('sets a theme colour and icon and saves, touching neither git nor tmux', async () => {
+    const { orch, store, git, tmux, themeId } = await setup()
+    git.calls = []
+    tmux.calls = []
+    const s = await orch.customizeTheme(themeId, { color: 'teal', icon: '🧪' })
+    expect(s.themes[0]).toMatchObject({ name: 'Client X', slug: 'client-x', color: 'teal', icon: '🧪' })
+    expect(store.saved.at(-1)).toEqual(s)
+    expect(await orch.getState()).toBe(s)
+    expect(git.calls).toEqual([])
+    expect(tmux.calls).toEqual([])
+    const cleared = await orch.customizeTheme(themeId, {})
+    expect(cleared.themes[0]).not.toHaveProperty('color')
+    expect(cleared.themes[0]).not.toHaveProperty('icon')
+  })
+
+  it('rejects an invalid style without saving', async () => {
+    const { orch, store, themeId } = await setup()
+    const saves = store.saved.length
+    await expect(orch.customizeTheme(themeId, { color: 'url(x)' as never })).rejects.toThrow(/Unknown theme colour/)
+    await expect(orch.customizeTheme(themeId, { icon: 'abc' })).rejects.toThrow('Use a single emoji')
+    expect(store.saved.length).toBe(saves)
+    expect((await orch.getState()).themes[0]).not.toHaveProperty('color')
+  })
+})
+
 describe('Orchestrator: rename', () => {
   it('renames a theme and saves, keeping slugs, branches and paths', async () => {
     const { orch, store, themeId, repoId } = await setup()

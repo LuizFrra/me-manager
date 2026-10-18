@@ -13,6 +13,7 @@ export const INVOKE_METHODS = [
   'updateSettings',
   'createTheme',
   'renameTheme',
+  'customizeTheme',
   'removeTheme',
   'restoreTheme',
   'pickDirectory',

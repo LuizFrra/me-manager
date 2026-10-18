@@ -24,6 +24,7 @@ import {
 } from '../../../shared/search'
 import { emptyUiState, normalizeUiState } from '../../../shared/uiState'
 import { checkCloneName, checkCloneUrl } from '../../../shared/clone'
+import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -119,6 +120,14 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     renameTheme: (themeId, name) =>
       edit(themeId, (t) => {
         t.name = checkName(name, 'Theme', state.themes, themeId)
+      }),
+    // Checked like main: a known colour name and a single emoji; what is left out is removed.
+    customizeTheme: (themeId, raw) =>
+      edit(themeId, (t) => {
+        const style = normalizeThemeStyle(raw)
+        delete t.color
+        delete t.icon
+        Object.assign(t, style)
       }),
     removeTheme: async (themeId) => {
       const theme = state.themes.find((t) => t.id === themeId)
