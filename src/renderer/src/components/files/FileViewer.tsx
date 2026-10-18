@@ -4,6 +4,7 @@ import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../..
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { isImagePath, isSvgPath } from '../../../../shared/images'
 import { formatSize, isMarkdown } from '../../lib/files'
+import type { DiffLayout } from '../../lib/diff/layout'
 import { CodeView } from './CodeView'
 import { DiffView } from './DiffView'
 import { ImageView } from './ImageView'
@@ -22,6 +23,10 @@ export interface FileViewerProps {
   /** Changes tab: the selected change. */
   change?: ChangedFile
   mdMode: PanelState['mdMode']
+  /** Changes tab: how the diff is laid out; unified by default. */
+  diffLayout?: DiffLayout
+  /** Changes tab: the user picked a layout with the header's Unified / Split toggle. */
+  onDiffLayout?: (layout: DiffLayout) => void
   /** Files tab: a line to scroll to and highlight (a search result). */
   highlightLine?: number
   canGoBack: boolean
@@ -56,7 +61,8 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
 
   let body: React.ReactNode
   if (p.tab === 'changes') {
-    const diff = p.diff === undefined ? <p className="panel-hint">Loading…</p> : <DiffView diff={p.diff} />
+    const diff =
+      p.diff === undefined ? <p className="panel-hint">Loading…</p> : <DiffView diff={p.diff} layout={p.diffLayout} />
     // A changed image: its new version, when there is one, above the diff ("Binary file changed").
     const current = p.change && (p.change.status !== 'D' || p.change.existsOnDisk)
     body =
@@ -121,6 +127,20 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
             <button aria-pressed={p.mdMode === 'raw'} onClick={() => p.onMdMode('raw')}>
               {md ? 'Raw' : 'Source'}
             </button>
+          </div>
+        )}
+        {p.tab === 'changes' && p.onDiffLayout && (
+          <div className="segmented" role="group" aria-label="Diff layout">
+            {(['unified', 'split'] as const).map((layout) => (
+              <button
+                key={layout}
+                aria-pressed={(p.diffLayout ?? 'unified') === layout}
+                title={layout === 'split' ? 'Old and new side by side' : 'Old and new in one column'}
+                onClick={() => p.onDiffLayout?.(layout)}
+              >
+                {layout === 'split' ? 'Split' : 'Unified'}
+              </button>
+            ))}
           </div>
         )}
         {p.tab === 'changes' && (
