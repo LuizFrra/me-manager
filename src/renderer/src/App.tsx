@@ -11,6 +11,7 @@ import type {
   Target,
   Task,
   TaskGitStatus,
+  ThemeStyle,
   UiState,
   UnsavedWork,
   UpdateResult,
@@ -56,6 +57,7 @@ import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
 import { UsageView } from './components/UsageView'
 import { StatusBar } from './components/StatusBar'
+import { ThemeStyleDialog } from './components/ThemeStyleDialog'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -78,6 +80,7 @@ type Dialog =
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | { kind: 'settings' }
   | { kind: 'clone'; themeId: string; themeName: string }
+  | { kind: 'themeStyle'; themeId: string; themeName: string; style: ThemeStyle }
   | {
       kind: 'confirmRemove'
       what: RemovalKind
@@ -108,6 +111,7 @@ type AppAction =
         | 'openPr'
         | 'update'
         | 'toggleStatusBar'
+        | 'customizeTheme'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -469,6 +473,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const renameTask = (themeId: string, repoId: string, taskId: string, current: string): void =>
     askRename('task', current, (name) => api.renameTask(themeId, repoId, taskId, name))
 
+  const customizeTheme = (themeId: string): void => {
+    const theme = state.themes.find((t) => t.id === themeId)
+    if (!theme) return
+    const style: ThemeStyle = {
+      ...(theme.color ? { color: theme.color } : {}),
+      ...(theme.icon ? { icon: theme.icon } : {}),
+    }
+    setDialog({ kind: 'themeStyle', themeId, themeName: theme.name, style })
+  }
+
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
     const next = await attempt(fn)
     if (next) setState(next)
@@ -790,6 +804,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       id: `target:${targetKey(entry.target)}`,
       kind: entry.kind,
       label: entry.label,
+      icon: entry.icon,
       action: { type: 'open', target: entry.target },
     }))
     const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
@@ -804,6 +819,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
       action('Reveal in file manager', 'fileManager')
       action('Toggle status bar', 'toggleStatusBar')
+      action('Customize theme…', 'customizeTheme')
     }
     if (selected?.taskId) {
       action('Rename current task', 'renameTask')
@@ -898,7 +914,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'openPr') void openPullRequest()
     else if (action.type === 'update') void updateFromBase()
     else if (action.type === 'toggleStatusBar') toggleStatusBar()
-    else if (action.type === 'copy') {
+    else if (action.type === 'customizeTheme') {
+      if (selectedRef.current) customizeTheme(selectedRef.current.themeId)
+    } else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
       if (entry) void copy(entry)
     } else setHelpOpen(true)
@@ -928,6 +946,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
         onRenameTheme={renameTheme}
+        onCustomizeTheme={customizeTheme}
         onRemoveTheme={removeTheme}
         onAddRepo={(themeId) => void addPath(themeId, api.addRepo)}
         onCloneRepo={cloneRepo}
@@ -1080,6 +1099,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           initialParent={settings.cloneDirectory}
           pickDirectory={() => api.pickDirectory()}
           onClone={(url, parentDir, name) => doClone(dialog.themeId, url, parentDir, name)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'themeStyle' && (
+        <ThemeStyleDialog
+          themeName={dialog.themeName}
+          initial={dialog.style}
+          onSave={async (style) => {
+            if (await update(() => api.customizeTheme(dialog.themeId, style))) setDialog(null)
+          }}
           onCancel={() => setDialog(null)}
         />
       )}

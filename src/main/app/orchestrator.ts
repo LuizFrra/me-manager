@@ -26,6 +26,7 @@ import type {
   Task,
   TaskGitStatus,
   Theme,
+  ThemeStyle,
   UnsavedWork,
   UpdateResult,
   UiState,
@@ -378,6 +379,11 @@ export class Orchestrator implements AppService {
 
   async renameTheme(themeId: string, name: string): Promise<AppState> {
     return this.exclusive(async () => this.commit(m.renameTheme(this.state, themeId, name)))
+  }
+
+  /** The style comes from the renderer: customizeTheme checks it. */
+  async customizeTheme(themeId: string, style: ThemeStyle): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.customizeTheme(this.state, themeId, style)))
   }
 
   async removeTheme(themeId: string): Promise<AppState> {

@@ -2404,3 +2404,83 @@ describe('App status bar', () => {
     expect(statusBar()).toBeInTheDocument()
   })
 })
+
+describe('App theme colours and icons', () => {
+  const customizeDialog = (): HTMLElement => screen.getByRole('dialog', { name: 'Customize theme' })
+
+  it('customizes a theme from its row: colour swatch, emoji grid, free-text emoji', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const customize = vi.spyOn(api, 'customizeTheme')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Customize theme Client X' }))
+    const dialog = within(customizeDialog())
+    expect(dialog.getByRole('radio', { name: 'No colour' })).toBeChecked()
+    expect(dialog.getAllByRole('radio')).toHaveLength(9)
+    expect(within(dialog.getByRole('group', { name: 'Common emoji' })).getAllByRole('button')).toHaveLength(24)
+
+    await user.click(dialog.getByRole('radio', { name: 'Teal' }))
+    await user.click(dialog.getByRole('button', { name: 'Icon 🧪' }))
+    expect(dialog.getByRole('textbox', { name: 'Emoji' })).toHaveValue('🧪')
+    expect(dialog.getByRole('button', { name: 'Icon 🧪' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(dialog.getByRole('button', { name: 'Save' }))
+
+    expect(customize).toHaveBeenLastCalledWith(expect.any(String), { color: 'teal', icon: '🧪' })
+    expect(screen.queryByRole('dialog', { name: 'Customize theme' })).not.toBeInTheDocument()
+    const label = screen.getByRole('button', { name: '▼ Client X' })
+    expect(label).toHaveTextContent('🧪')
+    expect(label.closest('.theme-row')).toHaveClass('has-color')
+
+    // Reopened, it shows what was saved; a typed emoji replaces the icon, and text is refused before saving.
+    await user.click(screen.getByRole('button', { name: 'Customize theme Client X' }))
+    const again = within(customizeDialog())
+    expect(again.getByRole('radio', { name: 'Teal' })).toBeChecked()
+    const field = again.getByRole('textbox', { name: 'Emoji' })
+    await user.clear(field)
+    await user.type(field, 'hi')
+    expect(again.getByText('Use a single emoji')).toBeInTheDocument()
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(again.getByRole('button', { name: 'Save' })).toBeDisabled()
+    await user.clear(field)
+    await user.type(field, '🦄')
+    await user.click(again.getByRole('radio', { name: 'No colour' }))
+    await user.click(again.getByRole('button', { name: 'Save' }))
+    expect(customize).toHaveBeenLastCalledWith(expect.any(String), { icon: '🦄' })
+    expect(screen.getByRole('button', { name: '▼ Client X' }).closest('.theme-row')).not.toHaveClass('has-color')
+  })
+
+  it('opens from the palette for the selected task, and lists tasks with their theme icon', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    await user.type(await screen.findByRole('combobox'), 'customize theme')
+    await user.keyboard('{Enter}')
+    const dialog = within(customizeDialog())
+    expect(dialog.getByRole('heading')).toHaveTextContent('Customize theme Client X')
+    await user.click(dialog.getByRole('button', { name: 'Icon 🚀' }))
+    await user.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Customize theme' })).not.toBeInTheDocument())
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const option = within(await screen.findByRole('dialog', { name: 'Command palette' })).getByRole('option', {
+      name: 'Client X › my-api › fix login bug',
+    })
+    expect(option.querySelector('.palette-icon')).toHaveTextContent('🚀')
+  })
+
+  it('cancels with Esc without saving', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const customize = vi.spyOn(api, 'customizeTheme')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Customize theme Client X' }))
+    await user.click(within(customizeDialog()).getByRole('radio', { name: 'Red' }))
+    fireEvent.keyDown(customizeDialog(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Customize theme' })).not.toBeInTheDocument()
+    expect(customize).not.toHaveBeenCalled()
+  })
+})

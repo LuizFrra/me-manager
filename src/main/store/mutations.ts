@@ -10,6 +10,7 @@ import {
   type Theme,
 } from '../../shared/types'
 import { slugify } from '../../shared/naming'
+import { isThemeColor, normalizeThemeStyle, themeIconError } from '../../shared/themeStyle'
 
 export function emptyState(): AppState {
   return { version: 1, themes: [] }
@@ -94,6 +95,22 @@ export function renameTheme(state: AppState, themeId: string, name: string): App
   assertThemeNameFree(state, trimmed, themeId)
   const next = clone(state)
   getTheme(next, themeId).name = trimmed
+  return next
+}
+
+/**
+ * Sets a theme's colour and icon from an untrusted style (see normalizeThemeStyle): a field left out removes it.
+ * Throws on an unknown colour or an icon that is not a single emoji.
+ */
+export function customizeTheme(state: AppState, themeId: string, raw: unknown): AppState {
+  getTheme(state, themeId)
+  const style = normalizeThemeStyle(raw)
+  const next = clone(state)
+  const theme = getTheme(next, themeId)
+  delete theme.color
+  delete theme.icon
+  if (style.color) theme.color = style.color
+  if (style.icon) theme.icon = style.icon
   return next
 }
 
@@ -201,7 +218,7 @@ export function restoreItem(state: AppState, themeId: string, raw: unknown, inde
 }
 
 /**
- * Undoes removeTheme: puts the theme back with its items, ids, names, slugs and paths, at `index` if given.
+ * Undoes removeTheme: puts the theme back with its items, ids, names, slugs, paths and style, at `index` if given.
  * Rejects it when an id is in use, its slug or name is taken by another theme meanwhile, or its items clash.
  */
 export function restoreTheme(state: AppState, raw: unknown, index?: number): AppState {
@@ -221,8 +238,12 @@ export function restoreTheme(state: AppState, raw: unknown, index?: number): App
   if (new Set(items.map((i) => i.path)).size < items.length || new Set(items.map((i) => i.slug)).size < items.length) {
     throw new Error(`Invalid theme to restore: "${name}" lists an item twice`)
   }
+  // The style comes back too; one that doesn't check out (a hand-edited state) is dropped, not refused.
+  const theme: Theme = { id, name, slug, items }
+  if (isThemeColor(raw.color)) theme.color = raw.color
+  if (typeof raw.icon === 'string' && raw.icon.trim() && themeIconError(raw.icon) === null) theme.icon = raw.icon.trim()
   const next = clone(state)
-  insertAt(next.themes, { id, name, slug, items }, index)
+  insertAt(next.themes, theme, index)
   return next
 }
 

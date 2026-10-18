@@ -3,6 +3,7 @@ import { gitBadges } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
 import { shortcutLabel } from '../lib/shortcuts'
+import { themeColorCss } from '../../../shared/themeStyle'
 
 export interface SidebarProps {
   state: AppState
@@ -20,6 +21,8 @@ export interface SidebarProps {
   onSelect: (target: Target) => void
   onAddTheme: () => void
   onRenameTheme: (themeId: string, currentName: string) => void
+  /** Opens "Customize theme…" (colour and icon). */
+  onCustomizeTheme: (themeId: string) => void
   onRemoveTheme: (themeId: string) => void
   onAddRepo: (themeId: string) => void
   onCloneRepo: (themeId: string) => void
@@ -45,6 +48,12 @@ function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string
       ))}
     </span>
   )
+}
+
+/** The theme row's colour stripe, as a CSS variable; none for no colour or one not in the palette. */
+function themeStripe(color: unknown): React.CSSProperties | undefined {
+  const css = themeColorCss(color)
+  return css ? ({ '--theme-color': css } as React.CSSProperties) : undefined
 }
 
 export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
@@ -103,9 +112,18 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           .filter((theme) => shown('themes', theme.id))
           .map((theme) => (
             <div key={theme.id} className="theme">
-              <div className="row theme-row">
+              <div
+                className={`row theme-row${themeColorCss(theme.color) ? ' has-color' : ''}`}
+                style={themeStripe(theme.color)}
+              >
                 <button className="row-label" onClick={() => toggle(theme.id)}>
-                  {arrow(theme.id)} {theme.name}
+                  {arrow(theme.id)}{' '}
+                  {theme.icon && (
+                    <span className="theme-icon" aria-hidden="true">
+                      {theme.icon}
+                    </span>
+                  )}
+                  {theme.name}
                 </button>
                 <span className="row-actions">
                   <button
@@ -128,6 +146,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                     onClick={() => p.onAddFolder(theme.id)}
                   >
                     📁+
+                  </button>
+                  <button
+                    aria-label={`Customize theme ${theme.name}`}
+                    title="Customize theme…"
+                    onClick={() => p.onCustomizeTheme(theme.id)}
+                  >
+                    🎨
                   </button>
                   <button
                     aria-label={`Rename theme ${theme.name}`}

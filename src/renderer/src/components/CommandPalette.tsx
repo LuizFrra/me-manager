@@ -10,6 +10,8 @@ export interface PaletteCommand {
   label: string
   /** A keyboard shortcut shown next to an action. */
   shortcut?: string
+  /** An emoji shown in place of the kind's icon: a task's or folder's theme icon. */
+  icon?: string
 }
 
 /** One of the selected target's files; `label` is its path. */
@@ -18,6 +20,7 @@ interface FileEntry {
   kind: 'file'
   label: string
   shortcut?: undefined
+  icon?: undefined
 }
 
 const isFile = (entry: PaletteCommand | FileEntry): entry is FileEntry => entry.kind === 'file'
@@ -161,8 +164,11 @@ export function CommandPalette<C extends PaletteCommand>(props: {
               onMouseDown={(e) => e.preventDefault()} // keep focus in the input
               onClick={() => run(item)}
             >
-              <span className={`palette-icon palette-icon-${item.kind}`} aria-hidden="true">
-                {KIND_ICON[item.kind]}
+              <span
+                className={`palette-icon palette-icon-${item.kind}${item.icon ? ' palette-icon-theme' : ''}`}
+                aria-hidden="true"
+              >
+                {item.icon ?? KIND_ICON[item.kind]}
               </span>
               <span className="palette-label">
                 <Highlighted text={item.label} positions={positions} />

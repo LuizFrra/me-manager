@@ -45,6 +45,46 @@ describe('themes', () => {
   })
 })
 
+describe('theme style', () => {
+  it('sets and replaces a colour and an icon, without touching the input', () => {
+    const { s, themeId } = setup()
+    const styled = m.customizeTheme(s, themeId, { color: 'purple', icon: ' 🚀 ' })
+    expect(styled.themes[0]).toMatchObject({ name: 'Client X', slug: 'client-x', color: 'purple', icon: '🚀' })
+    expect(s.themes[0].color).toBeUndefined()
+    const recoloured = m.customizeTheme(styled, themeId, { color: 'green' })
+    expect(recoloured.themes[0].color).toBe('green')
+    expect(recoloured.themes[0]).not.toHaveProperty('icon') // left out: removed
+    expect(m.customizeTheme(recoloured, themeId, { color: '', icon: '' }).themes[0]).not.toHaveProperty('color')
+  })
+
+  it('rejects unknown colours, raw CSS, text and several emoji as an icon, and unknown themes', () => {
+    const { s, themeId } = setup()
+    for (const [style, error] of [
+      [{ color: 'chartreuse' }, /Unknown theme colour/],
+      [{ color: '#ff0000' }, /Unknown theme colour/],
+      [{ color: 'red; background: url(x)' }, /Unknown theme colour/],
+      [{ icon: 'X' }, 'Use an emoji, not a letter or symbol'],
+      [{ icon: '🚀🔥' }, 'Use a single emoji'],
+      [{ icon: '👨‍👩‍👧‍👦' }, 'Use a single emoji'],
+      [{ icon: 5 }, 'The icon must be an emoji'],
+      ['blue', 'Invalid theme style'],
+    ] as const)
+      expect(() => m.customizeTheme(s, themeId, style)).toThrow(error)
+    expect(() => m.customizeTheme(s, 'nope', { color: 'blue' })).toThrow(/Theme not found/)
+  })
+
+  it('keeps the style when a removed theme is restored, dropping a style that does not check out', () => {
+    const { s, themeId } = setup()
+    const styled = m.customizeTheme(s, themeId, { color: 'red', icon: '🔥' })
+    const theme = styled.themes[0]
+    const removed = m.removeTheme(styled, themeId)
+    expect(m.restoreTheme(removed, theme).themes[0]).toEqual(theme)
+    const bad = m.restoreTheme(removed, { ...theme, color: '#f00', icon: 'not an emoji' }).themes[0]
+    expect(bad).not.toHaveProperty('color')
+    expect(bad).not.toHaveProperty('icon')
+  })
+})
+
 describe('items', () => {
   it('adds a repo named after the folder', () => {
     const { s } = setup()

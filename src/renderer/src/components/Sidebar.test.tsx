@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { LiveStatus, TaskGitStatus } from '../../../shared/types'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
@@ -20,6 +21,7 @@ function renderSidebar(patch: Partial<SidebarProps> = {}): void {
       onSelect={vi.fn()}
       onAddTheme={vi.fn()}
       onRenameTheme={vi.fn()}
+      onCustomizeTheme={vi.fn()}
       onRemoveTheme={vi.fn()}
       onAddRepo={vi.fn()}
       onCloneRepo={vi.fn()}
@@ -105,5 +107,33 @@ describe('Sidebar status dot', () => {
     expect(dotOf('docs').className).toBe('dot missing')
     expect(dotOf('docs')).toHaveTextContent('⚠')
     expect(dotOf('notes')).toHaveAttribute('title', 'Path missing')
+  })
+})
+
+describe('Sidebar theme style', () => {
+  it("shows the theme's icon before its name and a colour stripe, keeping the row's name", () => {
+    renderSidebar({ state: appState({ ...theme('Client', []), color: 'purple', icon: '🚀' }, theme('Plain', [])) })
+    const label = screen.getByRole('button', { name: '▼ Client' })
+    expect(label).toHaveTextContent('▼ 🚀Client')
+    const row = label.closest('.theme-row') as HTMLElement
+    expect(row).toHaveClass('has-color')
+    expect(row.style.getPropertyValue('--theme-color')).toBe('#a371f7')
+    const plain = screen.getByRole('button', { name: '▼ Plain' }).closest('.theme-row') as HTMLElement
+    expect(plain).not.toHaveClass('has-color')
+    expect(plain.style.getPropertyValue('--theme-color')).toBe('')
+  })
+
+  it('ignores a colour that is not in the palette', () => {
+    const odd = { ...theme('Odd', []), color: 'url(x)' as never }
+    renderSidebar({ state: appState(odd) })
+    const row = screen.getByRole('button', { name: '▼ Odd' }).closest('.theme-row') as HTMLElement
+    expect(row.getAttribute('style')).toBeNull()
+  })
+
+  it('opens Customize theme from the row', async () => {
+    const onCustomizeTheme = vi.fn()
+    renderSidebar({ onCustomizeTheme })
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Customize theme Client' }))
+    expect(onCustomizeTheme).toHaveBeenCalledWith('Client')
   })
 })

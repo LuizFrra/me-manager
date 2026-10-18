@@ -80,7 +80,17 @@ export interface Folder {
 
 export type Item = Repo | Folder
 
-export interface Theme {
+/** A theme's colour, by name (see shared/themeStyle.ts for the palette); never raw CSS. */
+export type ThemeColor = 'blue' | 'teal' | 'green' | 'yellow' | 'orange' | 'red' | 'pink' | 'purple'
+
+/** How a theme looks in the sidebar and the palette. Both optional. */
+export interface ThemeStyle {
+  color?: ThemeColor
+  /** A single emoji (one grapheme, at most MAX_THEME_ICON UTF-16 code units). */
+  icon?: string
+}
+
+export interface Theme extends ThemeStyle {
   id: string
   name: string
   slug: string
@@ -240,10 +250,15 @@ export interface MeManagerApi {
   createTheme(name: string): Promise<AppState>
   /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */
   renameTheme(themeId: string, name: string): Promise<AppState>
+  /**
+   * Sets the theme's colour and icon (see normalizeThemeStyle): a field left out, null or '' removes it. Rejects
+   * an unknown colour or an icon that is not a single emoji.
+   */
+  customizeTheme(themeId: string, style: ThemeStyle): Promise<AppState>
   /** Removes the theme from the app only (nothing on disk); refused while it has tasks. Kills its folder sessions. */
   removeTheme(themeId: string): Promise<AppState>
   /**
-   * Undoes removeTheme: re-adds the theme as it was (same id, name, slug, items), at `index` (its old position)
+   * Undoes removeTheme: re-adds the theme as it was (same id, name, slug, style, items), at `index` (its old position)
    * when given. Rejects it when its id, slug or name, or one of its items, is in use meanwhile.
    */
   restoreTheme(theme: Theme, index?: number): Promise<AppState>
