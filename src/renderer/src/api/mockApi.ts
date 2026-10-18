@@ -34,6 +34,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     getState: async () => state,
     getStatus: async () => ({ running: [], missing: [] }),
     checkPrereqs: async () => ({ ok: true, missing: [] }),
+    getTmuxSocket: async () => 'me-manager',
     createTheme: async (name) => {
       state = { ...state, themes: [...state.themes, { id: id(), name, slug: slugify(name), items: [] }] }
       return state

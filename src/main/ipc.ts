@@ -9,6 +9,7 @@ import {
   type InvokeMethod,
 } from '../shared/ipc'
 import type { AppService, PtyApi } from './contracts'
+import { TMUX_SOCKET } from './paths'
 import { checkPrereqs } from './prereqs'
 import { isHttpUrl } from './urls'
 
@@ -19,6 +20,7 @@ export function registerIpc(opts: { app: AppService; pty: PtyApi; getWindow: () 
 
   const special: Partial<Record<InvokeMethod, Handler>> = {
     checkPrereqs: () => checkPrereqs(),
+    getTmuxSocket: () => TMUX_SOCKET,
     pickDirectory: async () => {
       const win = getWindow()
       const options = { properties: ['openDirectory' as const] }

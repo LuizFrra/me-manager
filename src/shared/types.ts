@@ -83,6 +83,8 @@ export interface MeManagerApi {
   getState(): Promise<AppState>
   getStatus(): Promise<LiveStatus>
   checkPrereqs(): Promise<PrereqResult>
+  /** The `tmux -L` socket name the app's sessions live on, for "copy attach command". */
+  getTmuxSocket(): Promise<string>
 
   createTheme(name: string): Promise<AppState>
   /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */

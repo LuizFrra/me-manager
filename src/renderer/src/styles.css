@@ -159,6 +159,32 @@ button:disabled {
   align-items: center;
   gap: 4px;
 }
+.copy-group {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.copy-group-label {
+  padding: 2px 8px;
+  color: var(--muted);
+  background: #ffffff08;
+  border-right: 1px solid var(--border);
+}
+.copy-group button {
+  border: none;
+  border-radius: 0;
+  padding: 2px 9px;
+  color: var(--muted);
+}
+.copy-group button + button {
+  border-left: 1px solid var(--border);
+}
+.copy-group button:hover {
+  color: var(--text);
+}
 .header-btn {
   font-size: 12px;
   color: var(--muted);
@@ -387,6 +413,21 @@ button:disabled {
   border: 1px solid var(--danger);
   border-radius: 6px;
   padding: 8px 10px;
+}
+.toast-info {
+  align-items: center;
+  align-self: flex-end;
+  background: var(--panel);
+  border-color: var(--border);
+  box-shadow: 0 6px 20px #00000066;
+}
+.toast-info::before {
+  content: '✓';
+  color: var(--ok);
+  font-weight: 700;
+}
+.toast-info button {
+  color: var(--muted);
 }
 .prereq {
   max-width: 560px;
