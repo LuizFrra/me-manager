@@ -1,12 +1,17 @@
 /**
  * Checks for "Clone repository…", shared by the dialog (to explain a problem as it is typed) and main (which never
- * trusts the renderer). git gets the URL after `--` and with the ext/fd transports off as well; these checks are
- * what keep an option (`-u…`, `--upload-pack=…`) or a command-running transport (`ext::sh -c …`) from ever
- * reaching it.
+ * trusts the renderer). They refuse what looks like an option (`-u…`, `--upload-pack=…`) or names a
+ * command-running transport (`ext::sh -c …`); main also passes the URL after `--` and turns the ext and fd
+ * transports off, so no single check is the only lock. They only judge the URL's form: they don't make the
+ * server, or what the user's own git and ssh config do with it, trustworthy.
  */
 
 export const MAX_CLONE_URL = 2048
-/** Longest folder name a clone gets (most filesystems allow 255 bytes). */
+/**
+ * Longest folder name a clone gets, in characters (UTF-16 code units). Most filesystems allow 255 bytes, which
+ * 200 characters of ASCII stay under; a long name in other scripts can still be too long for the disk, and then
+ * the clone fails with the filesystem's error.
+ */
 export const MAX_CLONE_NAME = 200
 
 /** Schemes accepted in `<scheme>://` URLs. Anything else (`ext::`, `fd::`, `http://`, `git://`) is refused. */
@@ -85,7 +90,10 @@ export function cloneNameFromUrl(raw: string): string {
   return cloneNameError(name) ? '' : name
 }
 
-/** Why `name` can't be the clone's folder name, or null. Whether it already exists is checked by main. */
+/**
+ * Why `name` (trimmed) can't be the clone's folder name, or null. Whether it already exists is checked by main;
+ * names a filesystem refuses for other reasons (too many bytes, reserved names) fail when the clone runs.
+ */
 export function cloneNameError(raw: string): string | null {
   if (typeof raw !== 'string') return 'Enter a folder name'
   const name = raw.trim()
@@ -93,6 +101,10 @@ export function cloneNameError(raw: string): string | null {
   if (name.length > MAX_CLONE_NAME) return `The folder name is limited to ${MAX_CLONE_NAME} characters`
   if (name.includes('/') || name.includes('\\')) return 'The folder name can’t contain “/”'
   if (name === '.' || name === '..') return 'Choose another folder name'
+  // A folder named .git would pass for the parent folder's own git repository.
+  if (name.toLowerCase() === '.git') return 'The folder name can’t be “.git”'
+  // Windows (and so an SMB or NTFS drive) drops trailing dots and spaces, so the name would change.
+  if (/[. ]$/.test(name)) return 'The folder name can’t end with “.” or a space'
   // eslint-disable-next-line no-control-regex -- control characters are exactly what is refused
   if (/[\u0000-\u001f\u007f]/.test(name)) return 'The folder name can’t contain control characters'
   return null
