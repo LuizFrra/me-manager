@@ -15,6 +15,8 @@ export interface SidePanelProps {
   isRepo: boolean
   missing: boolean
   state: PanelState
+  /** How often to refresh the changes, file list and open file; PANEL_POLL_MS by default. */
+  pollMs?: number
   onState: (s: PanelState) => void
   onError: (e: unknown) => void
   onClose: () => void
@@ -40,7 +42,7 @@ function changed(cache: Map<string, string>, slot: string, value: unknown): bool
 }
 
 export function SidePanel(p: SidePanelProps): React.JSX.Element {
-  const { api, target, isRepo, missing, state, onState, onError } = p
+  const { api, target, isRepo, missing, state, onState, onError, pollMs = PANEL_POLL_MS } = p
   const tab: PanelTab = isRepo ? state.tab : 'files'
 
   const [fileList, setFileList] = useState<FileList | null>(null)
@@ -144,13 +146,13 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
           () => alive && setStale(false),
           () => alive && setStale(true),
         ),
-      PANEL_POLL_MS,
+      pollMs,
     )
     return () => {
       alive = false
       stop()
     }
-  }, [missing, fetchChanges, fetchFiles, fetchView])
+  }, [missing, fetchChanges, fetchFiles, fetchView, pollMs])
 
   const badges = useMemo(
     () => new Map<string, ChangeStatus>((changes?.files ?? []).map((f) => [f.path, f.status])),

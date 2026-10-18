@@ -1,4 +1,13 @@
-import type { AppState, ChangeList, FileContent, FileList, MeManagerApi, TabInfo, UnsavedWork } from '../shared/types'
+import type {
+  AppState,
+  ChangeList,
+  FileContent,
+  FileList,
+  MeManagerApi,
+  Settings,
+  TabInfo,
+  UnsavedWork,
+} from '../shared/types'
 
 export interface StoreApi {
   load(): Promise<AppState>
@@ -60,6 +69,13 @@ export interface FilesApi {
   fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string>
 }
 
+export interface SettingsApi {
+  /** The current settings (loaded at startup). */
+  get(): Settings
+  /** Normalizes the merged settings, saves them and returns them. */
+  update(patch: Partial<Settings>): Promise<Settings>
+}
+
 /** What the orchestrator implements: everything except renderer/pty-only calls. */
 export type AppService = Omit<
   MeManagerApi,
@@ -79,6 +95,7 @@ export interface OrchestratorDeps {
   tmux: TmuxApi
   pty: PtyApi
   files: FilesApi
+  settings: SettingsApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
 }

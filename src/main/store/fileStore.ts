@@ -1,50 +1,27 @@
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import type { AppState } from '../../shared/types'
 import type { StoreApi } from '../contracts'
+import { JsonFile } from './jsonFile'
 import { emptyState } from './mutations'
 
-const isNotFound = (err: unknown): boolean => (err as NodeJS.ErrnoException)?.code === 'ENOENT'
-
-function parseState(raw: string): AppState {
-  const data = JSON.parse(raw)
-  if (data?.version !== 1 || !Array.isArray(data.themes)) throw new Error('unrecognized state format')
-  return data as AppState
+function parseState(data: unknown): AppState {
+  const state = data as AppState | null
+  if (state?.version !== 1 || !Array.isArray(state.themes)) throw new Error('unrecognized state format')
+  return state
 }
 
+/** state.json. A corrupt file falls back to its .bak; if that is unreadable too, load() throws. */
 export class FileStore implements StoreApi {
-  /** Set when load() fell back to .bak: the main file is corrupt and must not replace the good backup. */
-  private skipNextBackup = false
+  private readonly json: JsonFile<AppState>
 
-  constructor(private readonly file: string) {}
-
-  async load(): Promise<AppState> {
-    try {
-      return parseState(await readFile(this.file, 'utf8'))
-    } catch (err) {
-      if (isNotFound(err)) return emptyState()
-      try {
-        const state = parseState(await readFile(this.file + '.bak', 'utf8'))
-        this.skipNextBackup = true
-        return state
-      } catch {
-        throw new Error(`Could not read ${this.file}: ${(err as Error).message}`)
-      }
-    }
+  constructor(file: string) {
+    this.json = new JsonFile(file, parseState, emptyState)
   }
 
-  async save(state: AppState): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true })
-    if (!this.skipNextBackup) {
-      try {
-        await copyFile(this.file, this.file + '.bak')
-      } catch (err) {
-        if (!isNotFound(err)) throw err
-      }
-    }
-    const tmp = `${this.file}.${process.pid}.tmp`
-    await writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8')
-    await rename(tmp, this.file)
-    this.skipNextBackup = false
+  load(): Promise<AppState> {
+    return this.json.load()
+  }
+
+  save(state: AppState): Promise<void> {
+    return this.json.save(state)
   }
 }

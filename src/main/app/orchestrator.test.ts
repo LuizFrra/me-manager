@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Orchestrator, CLAUDE_CMD, CLAUDE_CONTINUE_CMD, FETCH_TIMEOUT_MS } from './orchestrator'
+import {
+  Orchestrator,
+  CLAUDE_CMD,
+  CLAUDE_CONTINUE_CMD,
+  FETCH_TIMEOUT_MS,
+  claudeCommand,
+  claudeContinueCommand,
+} from './orchestrator'
 import type { AppState, Target, Task } from '../../shared/types'
 import { makeDeps } from './fakes'
 
@@ -302,6 +309,61 @@ describe('Orchestrator: sessions and tabs', () => {
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
     expect(status).toEqual({ running: [], missing: [ctx.task.id] })
+  })
+})
+
+describe('Orchestrator: settings and claude arguments', () => {
+  it('builds the claude commands, shell-quoting every argument', () => {
+    expect(CLAUDE_CMD).toBe('claude')
+    expect(CLAUDE_CONTINUE_CMD).toBe('claude --continue || claude')
+    expect(claudeCommand(['--model', 'opus'])).toBe('claude --model opus')
+    expect(claudeContinueCommand(['--model', 'opus'])).toBe('claude --model opus --continue || claude --model opus')
+    expect(claudeCommand(['--append-system-prompt', "be brief; don't $(rm -rf ~)"])).toBe(
+      `claude --append-system-prompt 'be brief; don'\\''t $(rm -rf ~)'`,
+    )
+  })
+
+  it('reads and updates settings through the settings service', async () => {
+    const { orch, settings } = await setup()
+    expect(await orch.getSettings()).toMatchObject({ claudeArgs: [], pollIntervalMs: 3000 })
+    const next = await orch.updateSettings({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 99 })
+    expect(next).toMatchObject({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 1000 })
+    expect(settings.get()).toEqual(next)
+    expect(await orch.getSettings()).toEqual(next)
+  })
+
+  it('passes the arguments to new tasks, recreated sessions and restarted Claude windows', async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await orch.updateSettings({ claudeArgs: ['--model', 'opus', 'two words'] })
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    expect(tmux.calls).toContain(`newSession mmt_client-x_my-api_fix claude --model opus 'two words'`)
+
+    const target = { themeId, itemId: repoId, taskId: task.id }
+    tmux.sessions.clear()
+    await orch.openTarget(target)
+    expect(tmux.calls.at(-1)).toBe(
+      `newSession mmt_client-x_my-api_fix claude --model opus 'two words' --continue || claude --model opus 'two words'`,
+    )
+
+    await orch.newTab(target)
+    await orch.closeTab(target, 0)
+    await orch.restartClaude(target)
+    const windows = tmux.sessions.get('mmt_client-x_my-api_fix')?.windows
+    expect(windows?.at(-1)).toEqual({
+      name: 'claude',
+      command: `claude --model opus 'two words' --continue || claude --model opus 'two words'`,
+    })
+  })
+
+  it('uses arguments saved after a session started only for the next one', async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await orch.createTask(themeId, repoId, 'a')
+    await orch.updateSettings({ claudeArgs: ['-v'] })
+    await orch.createTask(themeId, repoId, 'b')
+    expect(tmux.calls.filter((c) => c.startsWith('newSession'))).toEqual([
+      'newSession mmt_client-x_my-api_a claude',
+      'newSession mmt_client-x_my-api_b claude -v',
+    ])
   })
 })
 

@@ -5,19 +5,29 @@ import type {
   FileContent,
   FileList,
   LiveStatus,
+  Settings,
   TabInfo,
   Target,
   Task,
   UnsavedWork,
 } from '../../shared/types'
 import { branchName, sessionName } from '../../shared/naming'
+import { shellQuote } from '../../shared/shell'
 import type { AppService, OrchestratorDeps } from '../contracts'
 import { taskWorktreePath } from '../paths'
 import * as m from '../store/mutations'
 
-export const CLAUDE_CMD = 'claude'
+/**
+ * The shell string tmux runs to start Claude with the user's extra arguments (Settings.claudeArgs). tmux hands
+ * it to a shell, so every argument is shell-quoted: `$(…)`, `;` or spaces in an argument stay literal.
+ */
+export const claudeCommand = (args: readonly string[] = []): string => ['claude', ...args].map(shellQuote).join(' ')
 /** `--continue` fails when there is no previous conversation; fall back to a fresh one. */
-export const CLAUDE_CONTINUE_CMD = 'claude --continue || claude'
+export const claudeContinueCommand = (args: readonly string[] = []): string =>
+  `${claudeCommand([...args, '--continue'])} || ${claudeCommand(args)}`
+
+export const CLAUDE_CMD = claudeCommand()
+export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
 const CLAUDE_WINDOW = 'claude'
 /** How long createTask waits for `git fetch` before branching from the last fetched refs. */
 export const FETCH_TIMEOUT_MS = 20_000
@@ -91,6 +101,11 @@ export class Orchestrator implements AppService {
     return { session: sessionName(theme.slug, item.slug, task.slug), cwd: task.worktreePath }
   }
 
+  /** The user's extra `claude` arguments, read at each start so a change applies to the next session. */
+  private claudeArgs(): string[] {
+    return this.deps.settings.get().claudeArgs
+  }
+
   private detachIf(pred: (t: Target) => boolean): void {
     if (this.current && pred(this.current)) {
       this.deps.pty.detach()
@@ -100,6 +115,15 @@ export class Orchestrator implements AppService {
 
   async getState(): Promise<AppState> {
     return this.state
+  }
+
+  async getSettings(): Promise<Settings> {
+    return this.deps.settings.get()
+  }
+
+  /** Settings have their own file and queue, so this doesn't wait for state mutations. */
+  async updateSettings(patch: Partial<Settings>): Promise<Settings> {
+    return this.deps.settings.update(patch)
   }
 
   async getStatus(): Promise<LiveStatus> {
@@ -181,7 +205,7 @@ export class Orchestrator implements AppService {
       const baseRef = await git.resolveBaseRef(repo.path)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
-        await tmux.newSession(session, worktreePath, CLAUDE_WINDOW, CLAUDE_CMD)
+        await tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudeCommand(this.claudeArgs()))
         const task: Task = {
           id: randomUUID(),
           name: name.trim(),
@@ -238,7 +262,7 @@ export class Orchestrator implements AppService {
     const { session, cwd } = this.resolve(target)
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     if (!(await this.deps.tmux.hasSession(session))) {
-      await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, CLAUDE_CONTINUE_CMD)
+      await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs()))
     }
     // Latest wins: if the user opened something else meanwhile, attaching here would send
     // their keystrokes to a session the UI is not showing.
@@ -280,7 +304,7 @@ export class Orchestrator implements AppService {
     if (!(await this.deps.tmux.hasSession(session))) return this.openTarget(target)
     const existing = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
-    else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, CLAUDE_CONTINUE_CMD)
+    else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs()))
     return this.deps.tmux.listWindows(session)
   }
 

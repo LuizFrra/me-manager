@@ -74,6 +74,19 @@ export interface PrereqResult {
   missing: { tool: string; hint: string }[]
 }
 
+/** App preferences, kept in settings.json next to state.json. See normalizeSettings for the rules. */
+export interface Settings {
+  /** Extra arguments for every `claude` the app starts, e.g. ['--model', 'opus']. */
+  claudeArgs: string[]
+  /** The editor to open tasks in, as a command line (the path is appended); '' auto-detects one. */
+  editorCommand: string
+  /** How often the sidebar status and the side panel refresh, in ms. */
+  pollIntervalMs: number
+  terminalFontSize: number
+  /** Desktop notifications (used by a later feature). */
+  notifications: boolean
+}
+
 export function hasUnsavedWork(work: UnsavedWork): boolean {
   return work.uncommittedFiles.length > 0 || work.unpushedCommits.length > 0 || Boolean(work.warning)
 }
@@ -85,6 +98,10 @@ export interface MeManagerApi {
   checkPrereqs(): Promise<PrereqResult>
   /** The `tmux -L` socket name the app's sessions live on, for "copy attach command". */
   getTmuxSocket(): Promise<string>
+
+  getSettings(): Promise<Settings>
+  /** Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result. */
+  updateSettings(patch: Partial<Settings>): Promise<Settings>
 
   createTheme(name: string): Promise<AppState>
   /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */

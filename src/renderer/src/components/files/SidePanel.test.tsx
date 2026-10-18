@@ -37,6 +37,7 @@ interface HarnessProps {
   isRepo?: boolean
   missing?: boolean
   initial?: Partial<PanelState>
+  pollMs?: number
   onError?: (e: unknown) => void
 }
 
@@ -46,6 +47,7 @@ function Harness({
   isRepo = true,
   missing = false,
   initial,
+  pollMs,
   onError,
 }: HarnessProps): React.JSX.Element {
   const [state, setState] = useState<PanelState>({ ...DEFAULT_PANEL, ...initial })
@@ -56,6 +58,7 @@ function Harness({
       isRepo={isRepo}
       missing={missing}
       state={state}
+      pollMs={pollMs}
       onState={setState}
       onError={onError ?? (() => {})}
       onClose={() => {}}
@@ -320,6 +323,23 @@ describe('SidePanel', () => {
     unmount()
     await flush(PANEL_POLL_MS * 3)
     expect(listChanges).toHaveBeenCalledTimes(4)
+  })
+
+  it('polls at the interval it is given', async () => {
+    vi.useFakeTimers()
+    const api = createMockApi()
+    const listChanges = vi.spyOn(api, 'listChanges')
+    render(<Harness api={api} pollMs={10_000} />)
+    const flush = (ms = 0): Promise<void> =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    await flush()
+    expect(listChanges).toHaveBeenCalledTimes(1)
+    await flush(PANEL_POLL_MS * 3)
+    expect(listChanges).toHaveBeenCalledTimes(1)
+    await flush(1_000)
+    expect(listChanges).toHaveBeenCalledTimes(2)
   })
 
   it('re-reads everything on ⟳', async () => {
