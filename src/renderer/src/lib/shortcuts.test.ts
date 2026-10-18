@@ -42,18 +42,26 @@ describe('matchShortcut', () => {
   const mod = (mac: boolean, over: Partial<Parameters<typeof isPanelShortcut>[0]>): ReturnType<typeof key> =>
     key({ shiftKey: false, ...(mac ? { metaKey: true } : { ctrlKey: true }), ...over })
 
-  it('is Ctrl+K on Linux and Cmd+K on macOS for the palette', () => {
-    expect(matchShortcut(mod(false, { key: 'k' }), false)).toEqual({ id: 'palette' })
+  it('is Ctrl+Shift+P on Linux, and Cmd+Shift+P or Cmd+K on macOS, for the palette', () => {
+    expect(matchShortcut(mod(false, { key: 'P', shiftKey: true }), false)).toEqual({ id: 'palette' })
+    expect(matchShortcut(mod(true, { key: 'p', shiftKey: true }), true)).toEqual({ id: 'palette' })
     expect(matchShortcut(mod(true, { key: 'k' }), true)).toEqual({ id: 'palette' })
     expect(matchShortcut(mod(true, { key: 'k' }), false)).toBeNull()
-    expect(matchShortcut(mod(false, { key: 'k' }), true)).toBeNull()
+    expect(matchShortcut(mod(false, { key: 'P', shiftKey: true }), true)).toBeNull()
+  })
+
+  it('leaves Ctrl+K and Ctrl+/ to the terminal on Linux (kill line, undo)', () => {
+    expect(matchShortcut(mod(false, { key: 'k' }), false)).toBeNull()
+    expect(matchShortcut(mod(false, { key: '/' }), false)).toBeNull()
+    expect(matchShortcut(mod(false, { key: 'p' }), false)).toBeNull()
   })
 
   it('needs exactly the modifier: no Alt, no extra Shift, no plain key', () => {
-    expect(matchShortcut(mod(false, { key: 'k', altKey: true }), false)).toBeNull()
-    expect(matchShortcut(mod(false, { key: 'K', shiftKey: true }), false)).toBeNull()
-    expect(matchShortcut(key({ key: 'k', shiftKey: false }), false)).toBeNull()
-    expect(matchShortcut(mod(false, { key: 'k', ctrlKey: true, metaKey: true }), false)).toBeNull()
+    expect(matchShortcut(mod(true, { key: 'k', altKey: true }), true)).toBeNull()
+    expect(matchShortcut(mod(true, { key: 'K', shiftKey: true }), true)).toBeNull()
+    expect(matchShortcut(mod(false, { key: 'P', shiftKey: true, altKey: true }), false)).toBeNull()
+    expect(matchShortcut(key({ key: 'P', shiftKey: true }), false)).toBeNull()
+    expect(matchShortcut(mod(false, { key: 'P', shiftKey: true, metaKey: true }), false)).toBeNull()
   })
 
   it('matches the panel toggle too', () => {
@@ -63,34 +71,36 @@ describe('matchShortcut', () => {
 
 describe('shortcut labels', () => {
   it('uses Ctrl on Linux and ⌘ on macOS', () => {
-    expect(shortcutLabel('palette', false)).toBe('Ctrl+K')
+    expect(shortcutLabel('palette', false)).toBe('Ctrl+Shift+P')
     expect(shortcutLabel('palette', true)).toBe('⌘K')
+    expect(shortcutLabel('help', false)).toBe('Ctrl+Shift+/')
+    expect(shortcutLabel('help', true)).toBe('⌘/')
     expect(shortcutLabel('panel', false)).toBe('Ctrl+Shift+E')
     expect(shortcutLabel('panel', true)).toBe('⌘⇧E')
   })
 
   it('lists every shortcut for the help overlay', () => {
     expect(shortcutHelp(false)).toEqual([
-      { keys: 'Ctrl+K', description: 'Command palette' },
-      { keys: 'Ctrl+/', description: 'Keyboard shortcuts' },
-      { keys: 'Ctrl+Shift+E', description: 'Toggle files panel' },
-      { keys: 'Ctrl+Shift+F', description: 'Filter the sidebar' },
-      { keys: 'Ctrl+1…9', description: 'Go to the 1st…9th task or folder in the sidebar' },
-      { keys: 'Ctrl+Shift+T', description: 'New shell tab' },
-      { keys: 'Ctrl+Shift+W', description: 'Close the active tab' },
-      { keys: 'Ctrl+Shift+[', description: 'Previous tab' },
-      { keys: 'Ctrl+Shift+]', description: 'Next tab' },
+      { keys: ['Ctrl+Shift+P'], description: 'Command palette' },
+      { keys: ['Ctrl+Shift+/'], description: 'Keyboard shortcuts' },
+      { keys: ['Ctrl+Shift+E'], description: 'Toggle files panel' },
+      { keys: ['Ctrl+Shift+F'], description: 'Filter the sidebar' },
+      { keys: ['Ctrl+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
+      { keys: ['Ctrl+Shift+T'], description: 'New shell tab' },
+      { keys: ['Ctrl+Shift+W'], description: 'Close the active tab' },
+      { keys: ['Ctrl+Shift+['], description: 'Previous tab' },
+      { keys: ['Ctrl+Shift+]'], description: 'Next tab' },
     ])
     expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
-      '⌘K',
-      '⌘/',
-      '⌘⇧E',
-      '⌘⇧F',
-      '⌘1…9',
-      '⌘⇧T',
-      '⌘⇧W',
-      '⌘⇧[',
-      '⌘⇧]',
+      ['⌘K', '⌘⇧P'],
+      ['⌘/', '⌘⇧/'],
+      ['⌘⇧E'],
+      ['⌘⇧F'],
+      ['⌘1…9'],
+      ['⌘⇧T'],
+      ['⌘⇧W'],
+      ['⌘⇧['],
+      ['⌘⇧]'],
     ])
   })
 })
@@ -136,25 +146,33 @@ describe.each([
     expect(press('[', { code: 'BracketLeft' })).toBeNull()
   })
 
-  it('toggles help with Mod+/, also where / needs Shift', () => {
-    expect(press('/')).toEqual({ id: 'help' })
-    expect(shifted('/', { code: 'Digit7' })).toEqual({ id: 'help' })
+  it('toggles help with Mod+Shift+/, whether the layout reports "?" or "/"', () => {
     expect(shifted('?')).toEqual({ id: 'help' })
+    expect(shifted('/', { code: 'Digit7' })).toEqual({ id: 'help' })
   })
 
-  it('opens the palette, toggles the panel and focuses the sidebar filter', () => {
-    expect(press('k')).toEqual({ id: 'palette' })
+  it('opens the palette with Mod+Shift+P, toggles the panel and focuses the sidebar filter', () => {
+    expect(shifted('P')).toEqual({ id: 'palette' })
     expect(shifted('E')).toEqual({ id: 'panel' })
     expect(shifted('F')).toEqual({ id: 'filterSidebar' })
     expect(press('f')).toBeNull()
   })
 
+  it('adds Mod+K and Mod+/ only on macOS', () => {
+    expect(press('k')).toEqual(mac ? { id: 'palette' } : null)
+    expect(press('/')).toEqual(mac ? { id: 'help' } : null)
+  })
+
   it("ignores the other platform's modifier, Alt, both modifiers and keyups", () => {
-    for (const k of ['1', 'k', '/']) {
-      expect(matchShortcut(key({ key: k, shiftKey: false, ...wrongMod }), mac)).toBeNull()
-      expect(press(k, { altKey: true })).toBeNull()
-      expect(press(k, { ctrlKey: true, metaKey: true })).toBeNull()
-      expect(press(k, { type: 'keyup' })).toBeNull()
+    for (const [k, shiftKey] of [
+      ['1', false],
+      ['P', true],
+      ['?', true],
+    ] as const) {
+      expect(matchShortcut(key({ key: k, shiftKey, ...wrongMod }), mac)).toBeNull()
+      expect(press(k, { shiftKey, altKey: true })).toBeNull()
+      expect(press(k, { shiftKey, ctrlKey: true, metaKey: true })).toBeNull()
+      expect(press(k, { shiftKey, type: 'keyup' })).toBeNull()
     }
     expect(matchShortcut(key({ key: 'T', ...wrongMod }), mac)).toBeNull()
   })

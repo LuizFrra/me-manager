@@ -225,7 +225,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
-  // - the palette or help overlay is open: only their toggles (Mod+K, Mod+/), which also switch between them;
+  // - the palette or help overlay is open: only their toggles (Mod+Shift+P, Mod+Shift+/), which also switch between them;
   // - a text field has focus: only the palette, help and panel toggles (see worksWhileTyping), so inputs keep
   //   their keys. The terminal's hidden textarea doesn't count as a text field.
   const onShortcutKey = useLatestCallback((e: KeyboardEvent): void => {
