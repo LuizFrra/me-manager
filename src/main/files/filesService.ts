@@ -479,7 +479,8 @@ export class FilesService implements FilesApi {
 
   /**
    * Runs the grep and collects its matching lines. git prints `path\0line\0column\0text\n` per matching line:
-   * split on NUL, the text ends at its first newline. Rejects with git's CommandError.
+   * only the first three NULs of a record separate fields, and the text runs to its first newline (it may hold NUL
+   * bytes itself: git's binary check only looks at a file's start). Rejects with git's CommandError.
    */
   private async runGrep(
     root: string,
@@ -511,6 +512,8 @@ export class FilesService implements FilesApi {
     let path = ''
     let line = 0
     let byteColumn = 0
+    /** The text read so far, up to a NUL inside it. */
+    let text = ''
     const onItem = (item: string): boolean => {
       switch (field) {
         case 0:
@@ -527,9 +530,14 @@ export class FilesService implements FilesApi {
           return true
       }
       const nl = item.indexOf('\n')
-      const text = nl === -1 ? item : item.slice(0, nl)
+      if (nl === -1) {
+        // A NUL inside the line (git ends every line with a newline, even the last): the text goes on.
+        text += `${item}\0`
+        return true
+      }
+      text += item.slice(0, nl)
       if (!Number.isInteger(line) || line < 1 || !Number.isInteger(byteColumn) || byteColumn < 1) {
-        truncated = true // a line git couldn't print cleanly (a NUL in it): stop rather than misread the rest
+        truncated = true // not a line number and column: stop rather than misread the rest
         return false
       }
       if (found.length >= MAX_SEARCH_MATCHES) {
@@ -537,7 +545,8 @@ export class FilesService implements FilesApi {
         return false
       }
       found.push({ path, line, byteColumn, text })
-      path = nl === -1 ? '' : item.slice(nl + 1)
+      text = ''
+      path = item.slice(nl + 1)
       field = 1
       return true
     }

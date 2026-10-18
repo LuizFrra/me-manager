@@ -758,6 +758,22 @@ describe('searchFiles (repo)', () => {
     ])
   })
 
+  it('reads on past a NUL in a matching line beyond where git looks for binary content', async () => {
+    // git -I only checks a file's start for NUL bytes, so this file counts as text and its line is printed as is.
+    const filler = `${'x'.repeat(99)}\n`.repeat(100)
+    const root = await makeRepo({
+      'a.txt': `${filler}needle\0after\0two NULs\nneedle again\n`,
+      'b.txt': 'needle in b\n',
+    })
+    const r = await svc.searchFiles(root, true, 'needle')
+    expect(r.truncated).toBe(false)
+    expect(r.matches.map((m) => [m.path, m.line, m.preview])).toEqual([
+      ['a.txt', 101, 'needle\0after\0two NULs'],
+      ['a.txt', 102, 'needle again'],
+      ['b.txt', 1, 'needle in b'],
+    ])
+  })
+
   it('recognizes the error of a git built without Perl-compatible regexes', () => {
     expect(isNoPcreError('fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n')).toBe(true)
     expect(isNoPcreError("fatal: -e option, 'foo(': missing closing parenthesis")).toBe(false)
