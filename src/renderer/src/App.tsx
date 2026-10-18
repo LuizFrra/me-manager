@@ -143,6 +143,55 @@ export const USAGE_POLL_MS = 10_000
 
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
 
+/** What "copy …" offers for `target`: its branch, path, attach command. */
+function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | null): CopyEntry[] {
+  const found = target && resolveTarget(state, target)
+  return found ? copyEntries(found, tmuxSocket) : []
+}
+
+/** The palette's entries: every task and folder, then the actions that apply to the selection. */
+function buildPaletteCommands(
+  state: AppState,
+  selected: Target | null,
+  ghAvailable: boolean,
+  tmuxSocket: string | null,
+): AppCommand[] {
+  const commands: AppCommand[] = allTargets(state).map((entry) => ({
+    id: `target:${targetKey(entry.target)}`,
+    kind: entry.kind,
+    label: entry.label,
+    icon: entry.icon,
+    action: { type: 'open', target: entry.target },
+  }))
+  const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
+    commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
+  }
+  action('New theme', 'newTheme')
+  if (selected) {
+    action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
+    action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
+    action('New shell tab', 'newTab', shortcutLabel('newTab'))
+    action('Restart Claude', 'restartClaude')
+    action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
+    action('Reveal in file manager', 'fileManager')
+    action('Toggle status bar', 'toggleStatusBar')
+    action('Customize theme…', 'customizeTheme')
+  }
+  if (selected?.taskId) {
+    action('Rename current task', 'renameTask')
+    action('Git: Commit all…', 'commit')
+    action('Git: Push branch', 'push')
+    action(ghAvailable ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
+    action('Git: Update from base', 'update')
+  }
+  for (const { kind, label } of copiesOf(state, selected, tmuxSocket))
+    commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
+  action('Show usage', 'usage', shortcutLabel('usage'))
+  action('Open settings', 'settings', shortcutLabel('settings'))
+  action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
+  return commands
+}
+
 export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
@@ -941,42 +990,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [api, selected],
   )
 
-  const paletteCommands = (): AppCommand[] => {
-    const commands: AppCommand[] = allTargets(state).map((entry) => ({
-      id: `target:${targetKey(entry.target)}`,
-      kind: entry.kind,
-      label: entry.label,
-      icon: entry.icon,
-      action: { type: 'open', target: entry.target },
-    }))
-    const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
-      commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
-    }
-    action('New theme', 'newTheme')
-    if (selected) {
-      action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
-      action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
-      action('New shell tab', 'newTab', shortcutLabel('newTab'))
-      action('Restart Claude', 'restartClaude')
-      action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
-      action('Reveal in file manager', 'fileManager')
-      action('Toggle status bar', 'toggleStatusBar')
-      action('Customize theme…', 'customizeTheme')
-    }
-    if (selected?.taskId) {
-      action('Rename current task', 'renameTask')
-      action('Git: Commit all…', 'commit')
-      action('Git: Push branch', 'push')
-      action(gitTools.gh ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
-      action('Git: Update from base', 'update')
-    }
-    for (const { kind, label } of copiesFor(selected))
-      commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
-    action('Show usage', 'usage', shortcutLabel('usage'))
-    action('Open settings', 'settings', shortcutLabel('settings'))
-    action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
-    return commands
-  }
+  // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
+  // to 50k files) whenever its commands change.
+  const paletteCommands = useMemo(
+    () => (paletteOpen ? buildPaletteCommands(state, selected, gitTools.gh, tmuxSocket) : []),
+    [paletteOpen, state, selected, gitTools.gh, tmuxSocket],
+  )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
   const toggleStatusBar = (): void => {
@@ -1013,10 +1032,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     })
   }
 
-  const copiesFor = (target: Target | null): CopyEntry[] => {
-    const found = target && resolveTarget(state, target)
-    return found ? copyEntries(found, tmuxSocket) : []
-  }
+  const copiesFor = (target: Target | null): CopyEntry[] => copiesOf(state, target, tmuxSocket)
 
   const copy = async (entry: CopyEntry): Promise<void> => {
     try {
@@ -1335,7 +1351,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       )}
       {paletteOpen && (
         <CommandPalette
-          commands={paletteCommands()}
+          commands={paletteCommands}
           onRun={runCommand}
           loadFiles={loadPaletteFiles}
           onOpenFile={openFileInPanel}
