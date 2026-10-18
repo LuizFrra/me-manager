@@ -31,6 +31,12 @@ describe('run', () => {
     expect(err).toBeInstanceOf(CommandError)
     expect(err.code).toBe(2)
   })
+  it('says when the command was killed for running past its timeout', async () => {
+    const err = await run(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { timeoutMs: 100 }).catch((e) => e)
+    expect(err).toBeInstanceOf(CommandError)
+    expect(err.timedOut).toBe(true)
+    expect(err.message).toMatch(/timed out after 0\.1 s$/)
+  })
   it('explains a missing binary', async () => {
     const err = await run('definitely-not-a-real-binary-xyz', []).catch((e) => e)
     expect(err).toBeInstanceOf(CommandError)
@@ -85,5 +91,6 @@ describe('streamNul', () => {
     const err = await streamNul(slow, slowArgs, () => {}, { timeoutMs: 100 }).catch((e) => e)
     expect(err).toBeInstanceOf(CommandError)
     expect(err.message).toContain('timed out')
+    expect(err.timedOut).toBe(true)
   })
 })

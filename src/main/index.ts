@@ -6,6 +6,7 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { Orchestrator } from './app/orchestrator'
 import { FilesService } from './files/filesService'
+import { GhService } from './git/gh'
 import { GitService } from './git/gitService'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
@@ -103,6 +104,7 @@ async function bootstrap(): Promise<void> {
   const orchestrator = new Orchestrator({
     store: new FileStore(stateFile()),
     git: new GitService(),
+    gh: new GhService(), // looks gh up on PATH once, on first use (after loadLoginShellPath)
     tmux,
     pty: ptyService,
     files: new FilesService(),

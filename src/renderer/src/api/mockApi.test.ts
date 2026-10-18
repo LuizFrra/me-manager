@@ -25,6 +25,22 @@ describe('createMockApi', () => {
     expect(s.themes[0].items[0]).toMatchObject({ tasks: [{ baseRef: 'origin/develop' }] })
     await expect(api.createTask(themeId, repoId, 'b', { baseRef: 'origin/nope' })).rejects.toThrow(/Unknown/)
   })
+  it('commits, pushes and opens a demo pull request', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('T')
+    const themeId = s.themes[0].id
+    s = await api.addRepo(themeId, '/code/r')
+    const itemId = s.themes[0].items[0].id
+    s = await api.createTask(themeId, itemId, 'fix')
+    const repo = s.themes[0].items[0]
+    const target = { themeId, itemId, taskId: repo.kind === 'repo' ? repo.tasks[0].id : '' }
+    await expect(api.getGitTools()).resolves.toEqual({ gh: true })
+    await expect(api.commitAll(target, ' ')).rejects.toThrow(/commit message/)
+    await expect(api.commitAll(target, 'msg')).resolves.toMatchObject({ files: 3 })
+    await expect(api.pushTask(target)).resolves.toEqual({ branch: 'claude/t/fix' })
+    await expect(api.createPullRequest(target)).resolves.toMatchObject({ created: true })
+    await expect(api.createPullRequest(target)).resolves.toMatchObject({ created: false })
+  })
   it('renames themes and tasks, rejecting empty and duplicate names', async () => {
     const api = createMockApi()
     let s = await api.createTheme('Client X')

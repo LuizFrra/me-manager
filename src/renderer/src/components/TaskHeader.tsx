@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { TaskGitStatus, UsageSummary } from '../../../shared/types'
+import { GH_INSTALL_HINT } from '../../../shared/git'
 import type { CopyEntry } from '../lib/copy'
+import { GIT_ACTION_BUSY, type GitActionKind } from '../lib/gitActions'
 import { baseSummary, plural } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
@@ -50,6 +52,61 @@ function GitLine({ git, baseRef }: { git: TaskGitStatus; baseRef: string }): Rea
   )
 }
 
+export interface GitActionsProps {
+  /** The task's branch, for the tooltips. */
+  branch: string
+  /** The action running on this task; the buttons are off meanwhile. */
+  busy?: GitActionKind
+  /** Whether the GitHub CLI is installed; without it "PR" explains how to get it. */
+  ghAvailable: boolean
+  onCommit: () => void
+  onPush: () => void
+  onOpenPr: () => void
+}
+
+/** Commit all, push and open a pull request, as one button group. */
+function GitActions(props: GitActionsProps): React.JSX.Element {
+  const label = (kind: GitActionKind, idle: string): string => (props.busy === kind ? GIT_ACTION_BUSY[kind] : idle)
+  const busy = props.busy !== undefined
+  return (
+    <div className="copy-group git-actions" role="group" aria-label="Git" aria-busy={busy}>
+      <span className="copy-group-label" aria-hidden="true">
+        Git
+      </span>
+      <button
+        aria-label="Commit all…"
+        title="Commit all changes in the worktree (git add -A, then git commit)"
+        disabled={busy}
+        onClick={props.onCommit}
+      >
+        {label('commit', 'Commit…')}
+      </button>
+      <button
+        aria-label="Push branch"
+        title={`Push ${props.branch} to origin and track it (git push -u)`}
+        disabled={busy}
+        onClick={props.onPush}
+      >
+        {label('push', 'Push')}
+      </button>
+      <button
+        aria-label="Open pull request"
+        className={props.ghAvailable ? undefined : 'unavailable'}
+        aria-disabled={!props.ghAvailable || undefined}
+        title={
+          props.ghAvailable
+            ? `Open the pull request for ${props.branch}, creating it from its commits if needed (gh pr create --fill)`
+            : GH_INSTALL_HINT
+        }
+        disabled={busy}
+        onClick={props.onOpenPr}
+      >
+        {label('pr', 'PR')}
+      </button>
+    </div>
+  )
+}
+
 /**
  * The selected task's or folder's header: title, path line, and the task's notes, collapsed to one line until
  * clicked. Notes are plain text (a React text node), never HTML.
@@ -76,6 +133,8 @@ export function TaskHeader(props: {
   baseRef?: string
   /** The session's state: whether Claude is working, waiting for the user or idle. */
   session?: SessionState
+  /** Set for tasks: the Git button group. */
+  gitActions?: GitActionsProps
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -114,47 +173,54 @@ export function TaskHeader(props: {
           {props.git && props.baseRef !== undefined && <GitLine git={props.git} baseRef={props.baseRef} />}
         </div>
         <div className="task-header-actions">
-          {props.usage && props.onOpenUsage && <UsageBadge usage={props.usage} onOpen={props.onOpenUsage} />}
-          <div className="copy-group" role="group" aria-label="Open">
-            <span className="copy-group-label" aria-hidden="true">
-              Open
-            </span>
-            <button
-              aria-label="Open in editor"
-              title={`Open in editor (${shortcutLabel('openEditor')})`}
-              onClick={props.onOpenInEditor}
-            >
-              Editor
-            </button>
-            <button
-              aria-label="Reveal in file manager"
-              title="Reveal in file manager"
-              onClick={props.onRevealInFileManager}
-            >
-              File manager
-            </button>
-          </div>
-          {props.copies.length > 0 && (
-            <div className="copy-group" role="group" aria-label="Copy">
+          <div className="task-header-actions-row">
+            {props.usage && props.onOpenUsage && <UsageBadge usage={props.usage} onOpen={props.onOpenUsage} />}
+            <div className="copy-group" role="group" aria-label="Open">
               <span className="copy-group-label" aria-hidden="true">
-                Copy
+                Open
               </span>
-              {props.copies.map((entry) => (
-                <button
-                  key={entry.kind}
-                  aria-label={entry.label}
-                  title={`${entry.label}: ${entry.text}`}
-                  onClick={() => props.onCopy(entry)}
-                >
-                  {entry.short}
-                </button>
-              ))}
+              <button
+                aria-label="Open in editor"
+                title={`Open in editor (${shortcutLabel('openEditor')})`}
+                onClick={props.onOpenInEditor}
+              >
+                Editor
+              </button>
+              <button
+                aria-label="Reveal in file manager"
+                title="Reveal in file manager"
+                onClick={props.onRevealInFileManager}
+              >
+                File manager
+              </button>
             </div>
-          )}
-          {props.onEditNotes && (
-            <button className="header-btn" title="Edit the task's notes" onClick={props.onEditNotes}>
-              <span aria-hidden="true">✎</span> Edit notes
-            </button>
+            {props.copies.length > 0 && (
+              <div className="copy-group" role="group" aria-label="Copy">
+                <span className="copy-group-label" aria-hidden="true">
+                  Copy
+                </span>
+                {props.copies.map((entry) => (
+                  <button
+                    key={entry.kind}
+                    aria-label={entry.label}
+                    title={`${entry.label}: ${entry.text}`}
+                    onClick={() => props.onCopy(entry)}
+                  >
+                    {entry.short}
+                  </button>
+                ))}
+              </div>
+            )}
+            {props.onEditNotes && (
+              <button className="header-btn" title="Edit the task's notes" onClick={props.onEditNotes}>
+                <span aria-hidden="true">✎</span> Edit notes
+              </button>
+            )}
+          </div>
+          {props.gitActions && (
+            <div className="task-header-actions-row">
+              <GitActions {...props.gitActions} />
+            </div>
           )}
         </div>
       </div>

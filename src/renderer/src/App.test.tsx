@@ -1615,3 +1615,169 @@ describe('App new task options', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
+
+describe('App git actions', () => {
+  const git = (): ReturnType<typeof within> => within(screen.getByRole('group', { name: 'Git' }))
+  const selectedTarget = async (api: MeManagerApi): Promise<Target> => {
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    return { themeId: state.themes[0].id, itemId: repo.id, taskId: repo.kind === 'repo' ? repo.tasks[0].id : '' }
+  }
+
+  it('commits all: lists the uncommitted files, needs a message, confirms and refreshes git status', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const listChanges = vi.spyOn(api, 'listChanges')
+    const commitAll = vi.spyOn(api, 'commitAll')
+    const getGitStatus = vi.spyOn(api, 'getGitStatus')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(git().getByRole('button', { name: 'Commit all…' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Commit all in fix login bug' }))
+    expect(dialog.getByText('on claude/client-x/fix-login-bug')).toBeInTheDocument()
+    expect(await dialog.findByText('3 files will be committed')).toBeInTheDocument()
+    const files = within(dialog.getByRole('list', { name: 'Files to commit' }))
+    expect(files.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Unotes.txt',
+      'Msrc/app.ts',
+      'Dsrc/legacy.ts',
+    ])
+    const target = await selectedTarget(api)
+    expect(listChanges).toHaveBeenCalledWith(target, 'uncommitted')
+    const commit = dialog.getByRole('button', { name: 'Commit' })
+    expect(commit).toBeDisabled()
+    const message = dialog.getByRole('textbox', { name: 'Commit message' })
+    expect(message).toHaveFocus()
+    expect(message).toHaveAttribute('maxLength', '5000')
+    await user.type(message, '  Fix the login redirect  ')
+    getGitStatus.mockClear()
+    await user.click(commit)
+    expect(commitAll).toHaveBeenCalledWith(target, 'Fix the login redirect')
+    expect(await screen.findByRole('status')).toHaveTextContent('Committed 3 files')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(getGitStatus).toHaveBeenCalled()
+  })
+
+  it("shows git's error and keeps the dialog and message when the commit fails", async () => {
+    const user = userEvent.setup()
+    const identity =
+      'git commit failed: Author identity unknown *** Please tell me who you are. fatal: no email was given and auto-detection is disabled'
+    const api = repoApi({ commitAll: async () => Promise.reject(new Error(identity)) })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(git().getByRole('button', { name: 'Commit all…' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Commit all in fix login bug' }))
+    await dialog.findByText('3 files will be committed')
+    await user.type(dialog.getByRole('textbox', { name: 'Commit message' }), 'msg{Control>}{Enter}{/Control}')
+    expect(await screen.findByRole('alert')).toHaveTextContent(identity)
+    expect(dialog.getByRole('textbox', { name: 'Commit message' })).toHaveValue('msg')
+    expect(dialog.getByRole('button', { name: 'Commit' })).toBeEnabled()
+  })
+
+  it('says when there is nothing to commit', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({ listChanges: async () => ({ files: [] }) })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(git().getByRole('button', { name: 'Commit all…' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Commit all in fix login bug' }))
+    expect(await dialog.findByText('Nothing to commit')).toBeInTheDocument()
+    await user.type(dialog.getByRole('textbox', { name: 'Commit message' }), 'msg')
+    expect(dialog.getByRole('button', { name: 'Commit' })).toBeDisabled()
+  })
+
+  it('pushes the branch, with the Git buttons off meanwhile, and shows a failure', async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    const api = repoApi()
+    const pushTask = vi.fn<MeManagerApi['pushTask']>(async () => {
+      await new Promise<void>((r) => (finish = r))
+      return { branch: 'claude/client-x/fix-login-bug' }
+    })
+    api.pushTask = pushTask
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(git().getByRole('button', { name: 'Push branch' }))
+    expect(git().getByRole('button', { name: 'Push branch' })).toHaveTextContent('Pushing…')
+    for (const b of git().getAllByRole('button')) expect(b).toBeDisabled()
+    expect(pushTask).toHaveBeenCalledWith(await selectedTarget(api))
+    act(() => finish())
+    expect(await screen.findByRole('status')).toHaveTextContent('Pushed claude/client-x/fix-login-bug')
+    expect(git().getByRole('button', { name: 'Push branch' })).toBeEnabled()
+
+    api.pushTask = async () => Promise.reject(new Error('git push failed: ! [rejected] x -> x (fetch first)'))
+    await user.click(git().getByRole('button', { name: 'Push branch' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('git push failed: ! [rejected] x -> x (fetch first)')
+  })
+
+  it('opens the pull request in the browser', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const createPullRequest = vi.spyOn(api, 'createPullRequest')
+    const openExternal = vi.spyOn(api, 'openExternal')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const pr = git().getByRole('button', { name: 'Open pull request' })
+    await waitFor(() => expect(pr).not.toHaveAttribute('aria-disabled'))
+    expect(pr).toHaveAttribute('title', expect.stringContaining('gh pr create --fill'))
+    await user.click(pr)
+    expect(createPullRequest).toHaveBeenCalledWith(await selectedTarget(api))
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://github.com/demo/fix-login-bug/pull/1'))
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Created a pull request for claude/client-x/fix-login-bug',
+    )
+    await user.click(pr)
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Opened the pull request'))
+    expect(openExternal).toHaveBeenCalledTimes(2)
+  })
+
+  it('explains how to install gh when it is missing', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({ getGitTools: async () => ({ gh: false }) })
+    const createPullRequest = vi.spyOn(api, 'createPullRequest')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const pr = git().getByRole('button', { name: 'Open pull request' })
+    expect(pr).toHaveAttribute('aria-disabled', 'true')
+    expect(pr).toHaveAttribute('title', expect.stringContaining('install gh (https://cli.github.com'))
+    await user.click(pr)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Opening a pull request needs the GitHub CLI')
+    expect(createPullRequest).not.toHaveBeenCalled()
+  })
+
+  it('runs the git actions from the palette, for tasks only', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const pushTask = vi.spyOn(api, 'pushTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = within(await screen.findByRole('dialog', { name: 'Command palette' }))
+    await user.type(palette.getByRole('combobox'), 'git:')
+    expect(palette.getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
+      'Git: Commit all…',
+      'Git: Push branch',
+      'Git: Open pull request',
+    ])
+    await user.type(palette.getByRole('combobox'), ' push')
+    await user.keyboard('{Enter}')
+    expect(pushTask).toHaveBeenCalledTimes(1)
+    expect(await screen.findByRole('status')).toHaveTextContent('Pushed claude/client-x/fix-login-bug')
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const again = within(await screen.findByRole('dialog', { name: 'Command palette' }))
+    await user.type(again.getByRole('combobox'), 'commit all')
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('dialog', { name: 'Commit all in fix login bug' })).toBeInTheDocument()
+  })
+
+  it('has no Git group for folders', async () => {
+    const user = userEvent.setup()
+    render(<App api={createMockApi({ pickDirectory: async () => '/home/me/notes' })} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
+    await screen.findByRole('group', { name: 'Open' })
+    expect(screen.queryByRole('group', { name: 'Git' })).not.toBeInTheDocument()
+  })
+})

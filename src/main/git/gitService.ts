@@ -1,16 +1,48 @@
 import { existsSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { TaskGitStatus, UnsavedWork } from '../../shared/types'
+import type { CommitResult, TaskGitStatus, UnsavedWork } from '../../shared/types'
 import type { GitApi } from '../contracts'
-import { run } from '../exec'
+import { CommandError, run } from '../exec'
 import { GIT_ENV } from './gitEnv'
 
 /** A GUI app has no terminal to answer credential prompts, so fail fast instead of hanging. */
 const FETCH_TIMEOUT_MS = 30_000
-const NON_INTERACTIVE_ENV = {
+export const NON_INTERACTIVE_ENV = {
   GIT_TERMINAL_PROMPT: '0',
   GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes',
+}
+/** `git push` gives up after this long (a hung network, a server that never answers). */
+export const PUSH_TIMEOUT_MS = 60_000
+/** Commit hooks may run linters or tests; a commit still mustn't hang forever (e.g. a signing prompt). */
+const COMMIT_TIMEOUT_MS = 120_000
+const MAX_ERROR_SUMMARY = 500
+
+/** `-z` output as its entries, without the trailing empty one. */
+const splitZ = (out: string): string[] => out.split('\0').filter(Boolean)
+
+/**
+ * git's (or gh's) stderr as one line for a toast: `hint:` lines are dropped and, when there are any, only the
+ * `fatal:`/`error:` lines and `! [rejected]` ref lines are kept. `all` keeps every other line too (for messages
+ * whose explanation is the point, like a missing identity). Capped at MAX_ERROR_SUMMARY characters.
+ */
+export function summarizeGitError(stderr: string, all = false): string {
+  const lines = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !/^hint:/i.test(l))
+  const key = lines.filter((l) => /^(fatal|error):|^!\s|^remote: (fatal|error)/i.test(l))
+  const text = (all || key.length === 0 ? lines : key).join(' ').replace(/\s+/g, ' ')
+  return text.length > MAX_ERROR_SUMMARY ? `${text.slice(0, MAX_ERROR_SUMMARY - 1)}…` : text
+}
+
+/** `<what> failed: <git's summary>`, or `<what> timed out after …`, for a failed command. */
+export function commandFailure(what: string, err: unknown, all = false): Error {
+  if (!(err instanceof CommandError)) return err instanceof Error ? err : new Error(String(err))
+  if (err.timedOut)
+    return new Error(`${what} ${err.message.slice(err.message.lastIndexOf('timed out'))}`, { cause: err })
+  const summary = summarizeGitError(err.stderr, all)
+  return new Error(summary ? `${what} failed: ${summary}` : err.message, { cause: err })
 }
 
 /** taskStatus is polled; a stuck git (huge repo, network filesystem) must not hold the poll forever. */
@@ -84,6 +116,15 @@ export class GitService implements GitApi {
       ['-C', cwd, '--no-optional-locks', '-c', 'core.quotepath=false', '-c', 'log.showSignature=false', ...args],
       { env: GIT_ENV, timeoutMs: STATUS_TIMEOUT_MS },
     )
+  }
+
+  /** git that changes a work tree: no redirecting GIT_* variables, and a timeout when given. */
+  private work(
+    cwd: string,
+    args: string[],
+    extra: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  ): Promise<string> {
+    return run('git', ['-C', cwd, ...args], { env: { ...GIT_ENV, ...extra.env }, timeoutMs: extra.timeoutMs })
   }
 
   private async hasOrigin(repoPath: string): Promise<boolean> {
@@ -260,5 +301,31 @@ export class GitService implements GitApi {
     if (!counts) status.baseMissing = true
     if (last) status.lastCommit = last
     return status
+  }
+
+  async commitAll(worktreePath: string, message: string): Promise<CommitResult> {
+    await this.work(worktreePath, ['add', '-A']).catch((err) => {
+      throw commandFailure('git add', err)
+    })
+    const staged = splitZ(await this.work(worktreePath, ['diff', '--cached', '--name-only', '-z', '--no-renames']))
+    if (staged.length === 0) throw new Error('Nothing to commit')
+    // user.useConfigOnly: no identity guessed from the user and host names; git explains how to set one.
+    await this.work(worktreePath, ['-c', 'user.useConfigOnly=true', 'commit', '-m', message], {
+      timeoutMs: COMMIT_TIMEOUT_MS,
+    }).catch((err) => {
+      throw commandFailure('git commit', err, true)
+    })
+    const sha = (await this.work(worktreePath, ['rev-parse', '--short', 'HEAD'])).trim()
+    return { sha, files: staged.length }
+  }
+
+  async push(worktreePath: string, branch: string): Promise<void> {
+    if (!branch || branch.startsWith('-')) throw new Error(`Invalid branch: ${branch}`)
+    await this.work(worktreePath, ['push', '-u', 'origin', branch], {
+      env: NON_INTERACTIVE_ENV,
+      timeoutMs: PUSH_TIMEOUT_MS,
+    }).catch((err) => {
+      throw commandFailure('git push', err)
+    })
   }
 }

@@ -23,6 +23,36 @@ export interface NewTaskOptions {
   prompt?: string
 }
 
+/** The longest commit message "Commit all" accepts. */
+export const MAX_COMMIT_MESSAGE = 5_000
+
+export interface CommitResult {
+  /** The new commit's short sha. */
+  sha: string
+  /** Files in the commit. */
+  files: number
+}
+
+export interface PushResult {
+  /** The branch pushed (and set as the upstream), e.g. "claude/client-x/fix". */
+  branch: string
+}
+
+export interface PullRequestResult {
+  url: string
+  /** False when the branch already had a pull request. */
+  created: boolean
+}
+
+/** Optional command-line tools the app can use, detected once in main. */
+export interface GitTools {
+  /** The GitHub CLI, for "Open PR". */
+  gh: boolean
+}
+
+/** What listChanges compares the work tree with: the task's base (the default), or HEAD for uncommitted changes. */
+export type ChangeScope = 'base' | 'uncommitted'
+
 /** The branches a new task can start from. */
 export interface BranchList {
   /** The base a task gets when none is chosen, e.g. "origin/main". Always one of `branches`. */
@@ -193,8 +223,8 @@ export interface MeManagerApi {
   readFile(target: Target, path: string): Promise<FileContent>
   /** data: URL for an image inside the target's folder, or null if too large / not an image / outside. */
   readImage(target: Target, path: string): Promise<string | null>
-  /** Repo tasks only; rejects for folders. */
-  listChanges(target: Target): Promise<ChangeList>
+  /** Repo tasks only; rejects for folders. `uncommitted`: only what a commit would take (vs HEAD). */
+  listChanges(target: Target, scope?: ChangeScope): Promise<ChangeList>
   /**
    * Unified diff text for one changed file; '' if unchanged. Repo tasks only.
    * Pass the change's `oldPath` for a rename, which spares a whole-tree rename lookup.
@@ -209,6 +239,21 @@ export interface MeManagerApi {
   openInFileManager(target: Target): Promise<void>
   /** Opens an http(s) URL in the system browser; rejects other schemes. */
   openExternal(url: string): Promise<void>
+
+  /** Which optional tools (gh) are on PATH; detected once. */
+  getGitTools(): Promise<GitTools>
+  /**
+   * `git add -A` and `git commit -m <message>` in a task's worktree. The message is trimmed and must not be empty
+   * or over MAX_COMMIT_MESSAGE characters. Rejects with git's message (e.g. no identity configured).
+   */
+  commitAll(target: Target, message: string): Promise<CommitResult>
+  /** `git push -u origin <branch>`, non-interactive, with a timeout. Rejects with git's error summary. */
+  pushTask(target: Target): Promise<PushResult>
+  /**
+   * Creates a pull request for the task's branch into its base branch with `gh pr create --fill`, unless one
+   * exists, and returns its URL (the renderer opens it with openExternal). Rejects when gh is not installed.
+   */
+  createPullRequest(target: Target): Promise<PullRequestResult>
 
   /**
    * Claude usage of one task or folder, from Claude Code's transcripts (`~/.claude/projects`). A message counts

@@ -1,11 +1,15 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import {
+  MAX_COMMIT_MESSAGE,
   MAX_TASK_NOTES,
   MAX_TASK_PROMPT,
   type BranchList,
+  type ChangeList,
   type NewTaskOptions,
   type UnsavedWork,
 } from '../../../shared/types'
+import { STATUS_NAMES } from '../lib/files'
+import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 
@@ -355,6 +359,143 @@ export function NewTaskDialog(props: {
           </button>
           <button type="submit" disabled={busy || !name.trim()}>
             {busy ? 'Creating…' : 'Create'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+type ChangesLoad = { kind: 'loading' } | { kind: 'ready'; list: ChangeList } | { kind: 'failed'; error: string }
+
+/**
+ * "Commit all": the files `git add -A` will stage (the task's uncommitted changes, loaded when the dialog opens)
+ * and a required message. Mod+Enter commits, Esc cancels. Stays open with the message when committing fails.
+ */
+export function CommitDialog(props: {
+  taskName: string
+  branch: string
+  loadChanges: () => Promise<ChangeList>
+  onCommit: (message: string) => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  // The loader the dialog opened with: App passes a new function on every render.
+  const [loadChanges] = useState(() => props.loadChanges)
+  const [changes, setChanges] = useState<ChangesLoad>({ kind: 'loading' })
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const messageId = useId()
+  const counterId = useId()
+  const filesId = useId()
+
+  useEffect(() => {
+    let alive = true
+    loadChanges().then(
+      (list) => alive && setChanges({ kind: 'ready', list }),
+      (err: unknown) => alive && setChanges({ kind: 'failed', error: cleanError(err) }),
+    )
+    return () => {
+      alive = false
+    }
+  }, [loadChanges])
+
+  const files = changes.kind === 'ready' ? changes.list.files : []
+  const nothing = changes.kind === 'ready' && files.length === 0
+  const canCommit = !busy && message.trim() !== '' && !nothing && changes.kind !== 'loading'
+  const commit = async (): Promise<void> => {
+    if (busyRef.current || !canCommit) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onCommit(message.trim())
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="overlay">
+      <form
+        className="dialog commit-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Commit all in ${props.taskName}`}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void commit()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            props.onCancel()
+          } else if (isModEnter(e.nativeEvent)) {
+            e.preventDefault()
+            void commit()
+          }
+        }}
+      >
+        <h2>
+          Commit all <span className="dialog-title-context">on {props.branch}</span>
+        </h2>
+        <section className="dialog-field" aria-labelledby={filesId}>
+          <h3 id={filesId} className="dialog-field-heading">
+            {changes.kind === 'ready'
+              ? nothing
+                ? 'Nothing to commit'
+                : `${plural(files.length, 'file')} will be committed`
+              : 'Files'}
+          </h3>
+          {changes.kind === 'loading' && <p className="dialog-field-hint">Loading changes…</p>}
+          {changes.kind === 'failed' && (
+            <p className="dialog-field-hint dialog-field-error" role="alert">
+              Could not list the changes: {changes.error}. Everything in the worktree will still be committed.
+            </p>
+          )}
+          {nothing && <p className="dialog-field-hint">The worktree has no uncommitted changes.</p>}
+          {files.length > 0 && (
+            <ul className="commit-files" aria-label="Files to commit">
+              {files.map((f) => (
+                <li
+                  key={f.path}
+                  title={`${STATUS_NAMES[f.status]}: ${f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}`}
+                >
+                  <span className={`badge badge-${f.status}`} aria-label={STATUS_NAMES[f.status]}>
+                    {f.status}
+                  </span>
+                  <span className="commit-file-path">{f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <div className="dialog-field">
+          <label htmlFor={messageId}>Commit message</label>
+          <textarea
+            id={messageId}
+            autoFocus
+            required
+            aria-describedby={counterId}
+            rows={5}
+            maxLength={MAX_COMMIT_MESSAGE}
+            spellCheck
+            placeholder={'Summary on the first line\n\nDetails after a blank line'}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <div className="notes-meta">
+            <span>git add -A, then git commit</span>
+            <span id={counterId}>{`${message.length} / ${MAX_COMMIT_MESSAGE}`}</span>
+          </div>
+        </div>
+        <div className="dialog-actions">
+          <span className="dialog-actions-hint">{MOD_ENTER_LABEL} to commit</span>
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={!canCommit}>
+            {busy ? 'Committing…' : 'Commit'}
           </button>
         </div>
       </form>
