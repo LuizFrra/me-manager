@@ -1398,6 +1398,39 @@ describe('Orchestrator: update from base', () => {
     )
   })
 
+  it('refuses to press Enter while Claude waits for an answer or is busy, sending nothing', async () => {
+    const { orch, tmux, target, session } = await withTask()
+    // Enter would pick the highlighted option of a permission prompt or choice menu.
+    tmux.panes.set(
+      session,
+      [
+        ' Bash command',
+        '   rm -rf dist',
+        ' Do you want to proceed?',
+        ' ❯ 1. Yes',
+        '   2. No, and tell Claude what to do differently (esc)',
+        '',
+      ].join('\n'),
+    )
+    await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(
+      'Claude is waiting for input — answer it first',
+    )
+    expect(tmux.captureCalls).toEqual([`${session}:claude`])
+
+    // Working: its spinner printed something within the last few seconds.
+    tmux.panes.set(session, ['─'.repeat(40), '❯ ', '─'.repeat(40)].join('\n'))
+    tmux.activity.set(session, Math.floor(Date.now() / 1000))
+    await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(
+      "Claude is busy — try again when it's idle",
+    )
+    expect(tmux.sent).toEqual([])
+
+    // Idle at its prompt: the request goes in.
+    tmux.activity.set(session, Math.floor(Date.now() / 1000) - 60)
+    await orch.askClaudeToResolve(target, 'rebase', ['a.ts'])
+    expect(tmux.sent).toHaveLength(1)
+  })
+
   it("restarts Claude with the request when its window was closed, and needs the task's session", async () => {
     const { orch, tmux, promptFiles, target, session } = await withTask()
     await orch.newTab(target)

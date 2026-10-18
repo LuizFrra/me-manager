@@ -716,6 +716,7 @@ export class Orchestrator implements AppService {
     if (!(await this.deps.tmux.hasSession(session))) throw new Error('Open the task first: its session is not running')
     const claude = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
     if (claude) {
+      await this.assertClaudeReady(session)
       await this.deps.tmux.sendText(session, CLAUDE_WINDOW, text)
       await this.deps.tmux.selectWindow(session, claude.index)
     } else {
@@ -726,6 +727,22 @@ export class Orchestrator implements AppService {
       )
     }
     return this.deps.tmux.listWindows(session)
+  }
+
+  /**
+   * Refuses to type into a Claude that isn't at its prompt: the Enter after the text would pick the highlighted
+   * option of a permission prompt or choice menu, and a busy Claude would only queue it behind its work.
+   */
+  private async assertClaudeReady(session: string): Promise<void> {
+    const [pane, activity] = await Promise.all([
+      this.deps.tmux.capturePane(session, CLAUDE_WINDOW),
+      this.deps.tmux.windowActivity(CLAUDE_WINDOW).catch(() => ({}) as Record<string, number>),
+    ])
+    if (pane !== null && looksWaiting(pane)) throw new Error('Claude is waiting for input — answer it first')
+    const activitySec = activity[session]
+    if (activitySec !== undefined && isRecentlyActive(activitySec, this.now())) {
+      throw new Error("Claude is busy — try again when it's idle")
+    }
   }
 
   // File viewer. Read-only, so these skip the mutation queue.

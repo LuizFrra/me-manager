@@ -355,6 +355,8 @@ export interface MeManagerApi {
   /**
    * Types a request to rebase (or merge) and resolve the conflicts in `files` into the task's Claude window,
    * then Enter, and selects that window. Starts Claude (continuing its conversation) when its window was closed.
+   * Refuses, typing nothing, while Claude waits for an answer ("Claude is waiting for input — answer it first")
+   * or is busy ("Claude is busy — try again when it's idle"), as Enter would pick a menu option.
    */
   askClaudeToResolve(target: Target, strategy: UpdateStrategy, files: string[]): Promise<TabInfo[]>
 
