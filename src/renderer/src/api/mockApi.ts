@@ -1,4 +1,4 @@
-import type { AppState, MeManagerApi, TabInfo, Theme } from '../../../shared/types'
+import { MAX_TASK_NOTES, type AppState, type MeManagerApi, type TabInfo, type Theme } from '../../../shared/types'
 import { branchName, slugify } from '../../../shared/naming'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from './demoFiles'
 
@@ -80,6 +80,16 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
         if (repo?.kind !== 'repo' || !task) throw new Error(`Task not found: ${taskId}`)
         task.name = checkName(name, 'Task', repo.tasks, taskId)
+      }),
+    setTaskNotes: (themeId, repoId, taskId, notes) =>
+      edit(themeId, (t) => {
+        const repo = t.items.find((i) => i.id === repoId)
+        const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
+        if (!task) throw new Error(`Task not found: ${taskId}`)
+        const trimmed = notes.trim()
+        if (trimmed.length > MAX_TASK_NOTES) throw new Error(`Notes are limited to ${MAX_TASK_NOTES} characters`)
+        if (trimmed) task.notes = trimmed
+        else delete task.notes
       }),
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: (themeId, repoId, taskId) =>

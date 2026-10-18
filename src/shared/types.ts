@@ -6,7 +6,11 @@ export interface Task {
   worktreePath: string
   baseRef: string
   createdAt: string
+  /** Free-text notes about the task, at most MAX_TASK_NOTES characters; absent when there are none. */
+  notes?: string
 }
+
+export const MAX_TASK_NOTES = 2000
 
 export interface Repo {
   id: string
@@ -93,6 +97,8 @@ export interface MeManagerApi {
   createTask(themeId: string, repoId: string, name: string): Promise<AppState>
   /** Display name only; the slug, branch, worktree path and tmux session never change. */
   renameTask(themeId: string, repoId: string, taskId: string, name: string): Promise<AppState>
+  /** Up to MAX_TASK_NOTES characters; an empty string removes the notes. */
+  setTaskNotes(themeId: string, repoId: string, taskId: string, notes: string): Promise<AppState>
   checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork>
   removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState>
 

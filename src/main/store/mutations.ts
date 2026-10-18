@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { AppState, Folder, Item, Repo, Task, Theme } from '../../shared/types'
+import {
+  MAX_TASK_NOTES,
+  type AppState,
+  type Folder,
+  type Item,
+  type Repo,
+  type Task,
+  type Theme,
+} from '../../shared/types'
 import { slugify } from '../../shared/naming'
 
 export function emptyState(): AppState {
@@ -166,5 +174,26 @@ export function renameTask(state: AppState, themeId: string, repoId: string, tas
   assertTaskNameFree(getRepo(state, themeId, repoId), trimmed, taskId)
   const next = clone(state)
   getTask(next, themeId, repoId, taskId).name = trimmed
+  return next
+}
+
+/** Sets a task's notes, trimmed; empty (or only whitespace) removes them. */
+export function setTaskNotes(
+  state: AppState,
+  themeId: string,
+  repoId: string,
+  taskId: string,
+  notes: string,
+): AppState {
+  getTask(state, themeId, repoId, taskId)
+  if (typeof notes !== 'string') throw new Error('Notes must be text')
+  const trimmed = notes.trim()
+  if (trimmed.length > MAX_TASK_NOTES) {
+    throw new Error(`Notes are limited to ${MAX_TASK_NOTES} characters (got ${trimmed.length})`)
+  }
+  const next = clone(state)
+  const task = getTask(next, themeId, repoId, taskId)
+  if (trimmed) task.notes = trimmed
+  else delete task.notes
   return next
 }

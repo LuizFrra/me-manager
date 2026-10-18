@@ -6,7 +6,8 @@ import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
-import { NameDialog, RemoveTaskDialog } from './components/Dialogs'
+import { NameDialog, NotesDialog, RemoveTaskDialog } from './components/Dialogs'
+import { TaskHeader } from './components/TaskHeader'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
 import { startVisibleInterval } from './lib/visibleInterval'
@@ -36,6 +37,7 @@ interface NameAsk {
 type Dialog =
   | ({ kind: 'name'; onSubmit: (name: string) => Promise<void> } & NameAsk)
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
+  | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
 
 type AppAction =
   | { type: 'open'; target: Target }
@@ -323,6 +325,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     return commands
   }
 
+  const editNotes = (target: Target): void => {
+    const task = resolveTarget(state, target)?.task
+    if (!task || !target.taskId) return
+    const { themeId, itemId, taskId } = target
+    setDialog({
+      kind: 'notes',
+      taskName: task.name,
+      notes: task.notes ?? '',
+      onSave: async (notes) => {
+        if (await update(() => api.setTaskNotes(themeId, itemId, taskId, notes))) setDialog(null)
+      },
+    })
+  }
+
   const renameSelectedTask = (): void => {
     const target = selectedRef.current
     const task = target ? resolveTarget(state, target)?.task : undefined
@@ -342,6 +358,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   if (prereqs && !prereqs.ok) return <PrereqScreen result={prereqs} onRetry={checkPrereqs} />
 
   const header = selected ? describeTarget(state, selected) : null
+  const selectedTask = selected ? resolveTarget(state, selected)?.task : undefined
   const item = selected
     ? state.themes.find((t) => t.id === selected.themeId)?.items.find((i) => i.id === selected.itemId)
     : undefined
@@ -386,10 +403,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       <main className="main">
         {selected && header ? (
           <>
-            <header className="task-header">
-              <div className="task-title">{header.title}</div>
-              <div className="task-subtitle">{header.subtitle}</div>
-            </header>
+            <TaskHeader
+              key={targetKey(selected)}
+              title={header.title}
+              subtitle={header.subtitle}
+              notes={selectedTask?.notes}
+              onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
+            />
             <TabBar
               tabs={tabs}
               onSelect={(index) => void tabAction((t) => api.selectTab(t, index))}
@@ -455,6 +475,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           taskName={dialog.taskName}
           work={dialog.work}
           onConfirm={dialog.onConfirm}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'notes' && (
+        <NotesDialog
+          taskName={dialog.taskName}
+          initial={dialog.notes}
+          onSave={dialog.onSave}
           onCancel={() => setDialog(null)}
         />
       )}

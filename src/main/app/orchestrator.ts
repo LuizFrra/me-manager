@@ -206,6 +206,10 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commit(m.renameTask(this.state, themeId, repoId, taskId, name)))
   }
 
+  async setTaskNotes(themeId: string, repoId: string, taskId: string, notes: string): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.setTaskNotes(this.state, themeId, repoId, taskId, notes)))
+  }
+
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)

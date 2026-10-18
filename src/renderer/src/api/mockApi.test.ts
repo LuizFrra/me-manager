@@ -32,6 +32,21 @@ describe('createMockApi', () => {
     await expect(api.renameTask(themeId, repoId, taskId, '  ')).rejects.toThrow(/empty/)
   })
 
+  it('sets and clears task notes', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('T')
+    const themeId = s.themes[0].id
+    s = await api.addRepo(themeId, '/code/r')
+    const repoId = s.themes[0].items[0].id
+    s = await api.createTask(themeId, repoId, 'fix')
+    const taskOf = (st: typeof s): Record<string, unknown> =>
+      st.themes[0].items[0].kind === 'repo' ? { ...st.themes[0].items[0].tasks[0] } : {}
+    const taskId = taskOf(s).id as string
+    expect(taskOf(await api.setTaskNotes(themeId, repoId, taskId, ' hi '))).toMatchObject({ notes: 'hi' })
+    expect(taskOf(await api.setTaskNotes(themeId, repoId, taskId, ''))).not.toHaveProperty('notes')
+    await expect(api.setTaskNotes(themeId, repoId, taskId, 'x'.repeat(2001))).rejects.toThrow(/2000/)
+  })
+
   it('applies overrides', async () => {
     const api = createMockApi({ checkPrereqs: async () => ({ ok: false, missing: [] }) })
     await expect(api.checkPrereqs()).resolves.toEqual({ ok: false, missing: [] })

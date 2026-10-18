@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from 'react'
-import type { UnsavedWork } from '../../../shared/types'
+import { MAX_TASK_NOTES, type UnsavedWork } from '../../../shared/types'
+import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
 export function NameDialog(props: {
@@ -131,6 +132,77 @@ export function RemoveTaskDialog(props: {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
+export function NotesDialog(props: {
+  taskName: string
+  initial: string
+  onSave: (notes: string) => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  const [notes, setNotes] = useState(props.initial)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const counterId = useId()
+  const unchanged = notes.trim() === props.initial.trim()
+  const save = async (): Promise<void> => {
+    if (busyRef.current || unchanged) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onSave(notes)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="overlay">
+      <form
+        className="dialog notes-dialog"
+        role="dialog"
+        aria-label={`Notes for ${props.taskName}`}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void save()
+        }}
+      >
+        <h2>Notes for “{props.taskName}”</h2>
+        <textarea
+          autoFocus
+          aria-label="Notes"
+          aria-describedby={counterId}
+          rows={8}
+          maxLength={MAX_TASK_NOTES}
+          placeholder="What is this task about? What's left to do?"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              props.onCancel()
+            } else if (isModEnter(e.nativeEvent)) {
+              e.preventDefault()
+              void save()
+            }
+          }}
+        />
+        <div className="notes-meta">
+          <span>{MOD_ENTER_LABEL} to save</span>
+          <span id={counterId}>{`${notes.length} / ${MAX_TASK_NOTES}`}</span>
+        </div>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={busy || unchanged}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
