@@ -3,6 +3,7 @@ import type {
   AppState,
   ChangeList,
   FileContent,
+  FileList,
   LiveStatus,
   TabInfo,
   Target,
@@ -293,7 +294,7 @@ export class Orchestrator implements AppService {
     return { root, baseRef }
   }
 
-  async listFiles(target: Target): Promise<string[]> {
+  async listFiles(target: Target): Promise<FileList> {
     const { root, isRepo } = this.resolveRoot(target)
     return this.deps.files.listFiles(root, isRepo)
   }

@@ -22,7 +22,8 @@ describe('createMockApi', () => {
     const api = createMockApi()
     const task = { themeId: 't', itemId: 'r', taskId: 'k' }
     const files = await api.listFiles(task)
-    expect(files).toEqual(expect.arrayContaining(['README.md', 'src/app.ts']))
+    expect(files.truncated).toBe(false)
+    expect(files.paths).toEqual(expect.arrayContaining(['README.md', 'src/app.ts']))
     await expect(api.readFile(task, 'README.md')).resolves.toMatchObject({ kind: 'text', truncated: false })
     await expect(api.readFile(task, 'assets/icon.png')).resolves.toEqual({ kind: 'binary', size: 2048 })
     await expect(api.readFile(task, 'nope.ts')).resolves.toEqual({ kind: 'missing' })

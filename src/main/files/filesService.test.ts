@@ -2,7 +2,14 @@ import { mkdir, rm, symlink, unlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as exec from '../exec'
-import { FilesService, MAX_COUNT_BYTES, MAX_IMAGE_BYTES, MAX_TEXT_BYTES, safePath } from './filesService'
+import {
+  FilesService,
+  MAX_COUNT_BYTES,
+  MAX_IMAGE_BYTES,
+  MAX_REPO_ENTRIES,
+  MAX_TEXT_BYTES,
+  safePath,
+} from './filesService'
 import { cleanupTempDirs, commitAll, git, makeRepo, makeTaskClone, makeTempDir, put } from './testRepos'
 
 const svc = new FilesService()
@@ -97,20 +104,17 @@ describe('listFiles (repo)', () => {
     await put(repo, 'ignored.log', 'i')
     await put(repo, 'build/out.js', 'o')
     await put(repo, 'ação *.txt', 'unicode')
-    await expect(svc.listFiles(repo, true)).resolves.toEqual([
-      '.gitignore',
-      'README.md',
-      'ação *.txt',
-      'src/a.ts',
-      'untracked.txt',
-    ])
+    await expect(svc.listFiles(repo, true)).resolves.toEqual({
+      paths: ['.gitignore', 'README.md', 'ação *.txt', 'src/a.ts', 'untracked.txt'],
+      truncated: false,
+    })
   })
 
   it('drops tracked-but-deleted files and keeps symlinks', async () => {
     const repo = await makeRepo({ 'keep.txt': 'k', 'gone.txt': 'g' })
     await unlink(join(repo, 'gone.txt'))
     await symlink('keep.txt', join(repo, 'link.txt'))
-    await expect(svc.listFiles(repo, true)).resolves.toEqual(['keep.txt', 'link.txt'])
+    await expect(svc.listFiles(repo, true)).resolves.toEqual({ paths: ['keep.txt', 'link.txt'], truncated: false })
   })
 
   it('drops nested repositories (directories) reported by ls-files', async () => {
@@ -118,7 +122,45 @@ describe('listFiles (repo)', () => {
     await mkdir(join(repo, 'nested'))
     await git(join(repo, 'nested'), 'init', '-q')
     await put(repo, 'nested/inner.txt', 'n')
-    await expect(svc.listFiles(repo, true)).resolves.toEqual(['a.txt'])
+    await expect(svc.listFiles(repo, true)).resolves.toEqual({ paths: ['a.txt'], truncated: false })
+  })
+
+  it('drops tracked submodules (gitlinks)', async () => {
+    const repo = await makeRepo({ 'a.txt': 'a' })
+    const sub = join(repo, 'sub')
+    await mkdir(sub)
+    await git(sub, 'init', '-q', '-b', 'main')
+    await put(sub, 's.txt', 's')
+    await commitAll(sub, 'sub')
+    await git(repo, 'add', 'sub')
+    await expect(svc.listFiles(repo, true)).resolves.toEqual({ paths: ['a.txt'], truncated: false })
+  })
+
+  it('drops files deleted from the work tree but still staged, without stat-ing every path', async () => {
+    const repo = await makeRepo({ 'keep.txt': 'k' })
+    await put(repo, 'staged.txt', 's')
+    await git(repo, 'add', 'staged.txt')
+    await unlink(join(repo, 'staged.txt'))
+    await expect(svc.listFiles(repo, true)).resolves.toEqual({ paths: ['keep.txt'], truncated: false })
+  })
+
+  it('stops at maxRepoEntries and reports truncation', async () => {
+    const repo = await makeRepo({ 'a.txt': 'a', 'b.txt': 'b' })
+    await put(repo, 'c.txt', 'c')
+    await put(repo, 'd.txt', 'd')
+    const capped = new FilesService({ maxRepoEntries: 3 })
+    const res = await capped.listFiles(repo, true)
+    expect(res.truncated).toBe(true)
+    expect(res.paths).toHaveLength(3)
+    expect(res.paths).toEqual(expect.arrayContaining(['a.txt', 'b.txt']))
+    await expect(new FilesService({ maxRepoEntries: 4 }).listFiles(repo, true)).resolves.toEqual({
+      paths: ['a.txt', 'b.txt', 'c.txt', 'd.txt'],
+      truncated: false,
+    })
+  })
+
+  it('defaults to a cap of MAX_REPO_ENTRIES', () => {
+    expect(MAX_REPO_ENTRIES).toBe(50_000)
   })
 
   it('ignores GIT_DIR / GIT_WORK_TREE from the environment', async () => {
@@ -128,7 +170,7 @@ describe('listFiles (repo)', () => {
     process.env.GIT_DIR = join(other, '.git')
     process.env.GIT_WORK_TREE = other
     try {
-      await expect(svc.listFiles(repo, true)).resolves.toEqual(['a.txt'])
+      await expect(svc.listFiles(repo, true)).resolves.toEqual({ paths: ['a.txt'], truncated: false })
     } finally {
       if (saved.dir === undefined) delete process.env.GIT_DIR
       else process.env.GIT_DIR = saved.dir
@@ -147,7 +189,22 @@ describe('listFiles (folder)', () => {
     await put(root, 'node_modules/pkg/index.js', 'x')
     await put(root, 'sub/node_modules/pkg/index.js', 'x')
     await put(root, '.env', 'x')
-    await expect(svc.listFiles(root, false)).resolves.toEqual(['.env', 'a/deep/c.txt', 'b.txt'])
+    await expect(svc.listFiles(root, false)).resolves.toEqual({
+      paths: ['.env', 'a/deep/c.txt', 'b.txt'],
+      truncated: false,
+    })
+  })
+
+  it('stops at maxWalkEntries and reports truncation', async () => {
+    const root = await makeTempDir()
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) await put(root, name, name)
+    const res = await new FilesService({ maxWalkEntries: 2 }).listFiles(root, false)
+    expect(res).toEqual({ paths: expect.any(Array), truncated: true })
+    expect(res.paths).toHaveLength(2)
+    await expect(new FilesService({ maxWalkEntries: 3 }).listFiles(root, false)).resolves.toEqual({
+      paths: ['a.txt', 'b.txt', 'c.txt'],
+      truncated: false,
+    })
   })
 
   it('lists symlinks as entries but does not follow symlinked directories', async () => {
@@ -157,7 +214,7 @@ describe('listFiles (folder)', () => {
     await put(root, 'a.txt', 'a')
     await symlink(outside, join(root, 'outdir'))
     await symlink(root, join(root, 'loop'))
-    await expect(svc.listFiles(root, false)).resolves.toEqual(['a.txt', 'loop', 'outdir'])
+    await expect(svc.listFiles(root, false)).resolves.toEqual({ paths: ['a.txt', 'loop', 'outdir'], truncated: false })
   })
 })
 

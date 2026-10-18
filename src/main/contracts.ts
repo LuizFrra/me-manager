@@ -1,4 +1,4 @@
-import type { AppState, ChangeList, FileContent, MeManagerApi, TabInfo, UnsavedWork } from '../shared/types'
+import type { AppState, ChangeList, FileContent, FileList, MeManagerApi, TabInfo, UnsavedWork } from '../shared/types'
 
 export interface StoreApi {
   load(): Promise<AppState>
@@ -48,8 +48,11 @@ export interface PtyApi {
 }
 
 export interface FilesApi {
-  /** Relative paths (POSIX separators), sorted. Repos: tracked + untracked-not-ignored. Folders: walk minus .git/node_modules. */
-  listFiles(root: string, isRepo: boolean): Promise<string[]>
+  /**
+   * Relative paths (POSIX separators), sorted. Repos: tracked + untracked-not-ignored. Folders: walk minus
+   * .git/node_modules. Stops at a cap and sets `truncated`.
+   */
+  listFiles(root: string, isRepo: boolean): Promise<FileList>
   readFile(root: string, relPath: string): Promise<FileContent>
   readImage(root: string, relPath: string): Promise<string | null>
   listChanges(worktree: string, baseRef: string): Promise<ChangeList>

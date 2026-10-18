@@ -1,4 +1,4 @@
-import type { AppState, ChangeList, FileContent, TabInfo, UnsavedWork } from '../../shared/types'
+import type { AppState, ChangeList, FileContent, FileList, TabInfo, UnsavedWork } from '../../shared/types'
 import type { FilesApi, GitApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
 import { emptyState } from '../store/mutations'
 
@@ -112,9 +112,9 @@ export class FakePty implements PtyApi {
 
 export class FakeFiles implements FilesApi {
   calls: string[] = []
-  async listFiles(root: string, isRepo: boolean): Promise<string[]> {
+  async listFiles(root: string, isRepo: boolean): Promise<FileList> {
     this.calls.push(`listFiles ${root} ${isRepo}`)
-    return []
+    return { paths: [], truncated: false }
   }
   async readFile(root: string, relPath: string): Promise<FileContent> {
     this.calls.push(`readFile ${root} ${relPath}`)

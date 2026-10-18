@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeList, ChangeStatus, FileContent, MeManagerApi, Target } from '../../../../shared/types'
+import type { ChangeList, ChangeStatus, FileContent, FileList, MeManagerApi, Target } from '../../../../shared/types'
 import { ancestorDirs, buildTree, filterPaths } from '../../lib/fileTree'
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
@@ -43,7 +43,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const { api, target, isRepo, missing, state, onState, onError } = p
   const tab: PanelTab = isRepo ? state.tab : 'files'
 
-  const [files, setFiles] = useState<string[] | null>(null)
+  const [fileList, setFileList] = useState<FileList | null>(null)
+  const files = fileList?.paths ?? null
   const [changes, setChanges] = useState<ChangeList | null>(null)
   const [view, setView] = useState<Loaded | null>(null)
   const [stale, setStale] = useState(false)
@@ -63,7 +64,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const fetchFiles = useCallback(
     async (alive: Alive): Promise<void> => {
       const next = await api.listFiles(target)
-      if (alive() && changed(lastJson.current, 'files', next)) setFiles(next)
+      if (alive() && changed(lastJson.current, 'files', next)) setFileList(next)
     },
     [api, target],
   )
@@ -240,6 +241,11 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
                   }}
                 />
                 <div className="panel-list-scroll">
+                  {fileList?.truncated && (
+                    <div className="panel-notice">
+                      Showing the first {fileList.paths.length.toLocaleString('en-US')} files.
+                    </div>
+                  )}
                   {files === null ? (
                     <p className="panel-hint">Loading…</p>
                   ) : files.length === 0 ? (
