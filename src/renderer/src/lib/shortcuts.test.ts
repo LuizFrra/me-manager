@@ -68,6 +68,14 @@ describe('matchShortcut', () => {
   it('matches the panel toggle too', () => {
     expect(matchShortcut(mod(false, { key: 'E', shiftKey: true }), false)).toEqual({ id: 'panel' })
   })
+
+  it('is Mod+Shift+S for "Search in files", which also works while typing; Ctrl+S stays with the terminal', () => {
+    expect(matchShortcut(mod(false, { key: 'S', shiftKey: true }), false)).toEqual({ id: 'searchFiles' })
+    expect(matchShortcut(mod(true, { key: 's', shiftKey: true }), true)).toEqual({ id: 'searchFiles' })
+    expect(matchShortcut(mod(false, { key: 's' }), false)).toBeNull()
+    expect(worksWhileTyping('searchFiles')).toBe(true)
+    expect(shortcutLabel('searchFiles', false)).toBe('Ctrl+Shift+S')
+  })
 })
 
 describe('shortcut labels', () => {
@@ -87,6 +95,7 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+,'], description: 'Settings' },
       { keys: ['Ctrl+Shift+E'], description: 'Toggle files panel' },
       { keys: ['Ctrl+Shift+F'], description: 'Filter the sidebar' },
+      { keys: ['Ctrl+Shift+S'], description: 'Search in files' },
       { keys: ['Ctrl+Shift+O'], description: 'Open in editor' },
       { keys: ['Ctrl+Shift+U'], description: 'Claude usage and cost' },
       { keys: ['Ctrl+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
@@ -104,6 +113,7 @@ describe('shortcut labels', () => {
       ['⌘,'],
       ['⌘⇧E'],
       ['⌘⇧F'],
+      ['⌘⇧S'],
       ['⌘⇧O'],
       ['⌘⇧U'],
       ['⌘1…9'],

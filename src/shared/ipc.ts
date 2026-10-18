@@ -31,6 +31,7 @@ export const INVOKE_METHODS = [
   'listFiles',
   'readFile',
   'readImage',
+  'searchFiles',
   'listChanges',
   'fileDiff',
   'openInEditor',

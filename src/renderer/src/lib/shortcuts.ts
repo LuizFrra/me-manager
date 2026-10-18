@@ -25,6 +25,7 @@ export type ShortcutId =
   | 'settings'
   | 'panel'
   | 'filterSidebar'
+  | 'searchFiles'
   | 'openEditor'
   | 'usage'
   | 'target'
@@ -88,6 +89,9 @@ const SHORTCUTS: ShortcutDef[] = [
   { id: 'settings', description: 'Settings', chords: [{ shift: false, keys: [','], codes: ['Comma'], display: ',' }] },
   { id: 'panel', description: 'Toggle files panel', chords: [letter(true, 'E')] },
   { id: 'filterSidebar', description: 'Filter the sidebar', chords: [letter(true, 'F')] },
+  // Mod+Shift+F (the usual "find in files") already filters the sidebar; S for Search. Free in shells and Claude
+  // Code on Linux (Ctrl+Shift chords), and macOS has no File menu whose Cmd+Shift+S ("Save As") it would shadow.
+  { id: 'searchFiles', description: 'Search in files', chords: [letter(true, 'S')] },
   { id: 'openEditor', description: 'Open in editor', chords: [letter(true, 'O')] },
   { id: 'usage', description: 'Claude usage and cost', chords: [letter(true, 'U')] },
   {
@@ -136,7 +140,7 @@ const chordsFor = (def: ShortcutDef, mac: boolean): Chord[] => def.chords.filter
  * ignored in inputs and textareas (the terminal's hidden textarea excepted, see isEditableTarget), so a field
  * keeps its own keys and a stray chord doesn't switch tasks under the user.
  */
-const WHILE_TYPING: ReadonlySet<ShortcutId> = new Set(['palette', 'help', 'usage', 'panel'])
+const WHILE_TYPING: ReadonlySet<ShortcutId> = new Set(['palette', 'help', 'usage', 'panel', 'searchFiles'])
 
 export const worksWhileTyping = (id: ShortcutId): boolean => WHILE_TYPING.has(id)
 

@@ -366,6 +366,43 @@ describe('App side panel', () => {
     expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
   })
 
+  it('opens Search in files with Ctrl+Shift+S, focused, without stealing focus when switching tasks', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    const pressed = fireEvent.keyDown(window, { key: 'S', ctrlKey: true, shiftKey: true })
+    expect(pressed).toBe(false) // handled, not sent on to the terminal
+    const input = await within(panel()).findByRole('textbox', { name: 'Search in files' })
+    expect(within(panel()).getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(input).toHaveFocus())
+    await user.type(input, 'formatName{Enter}')
+    await user.click(await within(panel()).findByRole('button', { name: /^src\/app\.ts, line 1:/ }))
+    expect(within(panel()).getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(document.querySelector('.code-line-mark')).toHaveAttribute('data-line', '1'))
+
+    // Back on the Search tab of another task and back: the query is remembered, focus is not taken.
+    await user.click(within(panel()).getByRole('tab', { name: 'Search' }))
+    await user.click(taskButton('task A'))
+    fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
+    await user.click(taskButton('task B'))
+    const again = await within(panel()).findByRole('textbox', { name: 'Search in files' })
+    expect(again).toHaveValue('formatName')
+    expect(again).not.toHaveFocus()
+  })
+
+  it('opens Search in files from the palette', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' })
+    await user.type(within(palette).getByRole('combobox'), 'search in files')
+    expect(within(palette).getAllByRole('option')[0]).toHaveTextContent('Ctrl+Shift+S')
+    await user.keyboard('{Enter}')
+    const input = await within(panel()).findByRole('textbox', { name: 'Search in files' })
+    await waitFor(() => expect(input).toHaveFocus())
+  })
+
   it('resizes the panel from the keyboard', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)

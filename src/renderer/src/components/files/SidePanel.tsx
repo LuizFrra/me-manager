@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeList, ChangeStatus, FileContent, FileList, MeManagerApi, Target } from '../../../../shared/types'
+import type {
+  ChangeList,
+  ChangeStatus,
+  FileContent,
+  FileList,
+  MeManagerApi,
+  SearchMatch,
+  Target,
+} from '../../../../shared/types'
 import { ancestorDirs, buildTree, filterPaths } from '../../lib/fileTree'
-import type { PanelState, PanelTab } from '../../lib/panelState'
+import { isMarkdown } from '../../lib/files'
+import type { PanelState, PanelTab, SearchState } from '../../lib/panelState'
 import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
 import { ChangesList } from './ChangesList'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
+import { SearchView } from './SearchView'
 import { startVisibleInterval } from '../../lib/visibleInterval'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 
@@ -20,6 +30,12 @@ export interface SidePanelProps {
   onState: (s: PanelState) => void
   onError: (e: unknown) => void
   onClose: () => void
+  /**
+   * Bumped (with `takeSearchFocus` then answering true once) when the app asks to focus the Search tab's input:
+   * Mod+Shift+S or the palette.
+   */
+  searchFocus?: number
+  takeSearchFocus?: () => boolean
 }
 
 export const PANEL_POLL_MS = 3000
@@ -43,7 +59,8 @@ function changed(cache: Map<string, string>, slot: string, value: unknown): bool
 
 export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const { api, target, isRepo, missing, state, onState, onError, pollMs = PANEL_POLL_MS } = p
-  const tab: PanelTab = isRepo ? state.tab : 'files'
+  // Folders have no Changes tab.
+  const tab: PanelTab = isRepo || state.tab !== 'changes' ? state.tab : 'files'
 
   const [fileList, setFileList] = useState<FileList | null>(null)
   const files = fileList?.paths ?? null
@@ -56,9 +73,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   // Last JSON per data slot, so polls that return the same data don't re-render.
   const lastJson = useRef(new Map<string, string>())
 
-  // In Changes, only files in the change list have something to show.
+  // In Changes, only files in the change list have something to show; Search shows no file.
   const inChanges = Boolean(changes?.files.some((f) => f.path === state.selected))
-  const shownPath = tab === 'changes' && !inChanges ? undefined : state.selected
+  const shownPath = tab === 'search' || (tab === 'changes' && !inChanges) ? undefined : state.selected
   const viewKey = shownPath ? `${tab}:${shownPath}` : ''
   // For a rename, the diff is taken between the pair, so the backend doesn't have to find the rename again.
   const oldPath = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath)?.oldPath : undefined
@@ -167,20 +184,43 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     setToggled((prev) => new Map(prev).set(dir, !(prev.get(dir) ?? selectedAncestors.has(dir))))
 
   const select = (nextTab: PanelTab, path: string): void =>
-    onState({ ...state, tab: nextTab, selected: path, history: [] })
+    onState({ ...state, tab: nextTab, selected: path, line: undefined, history: [] })
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
   const openLink = useLatestCallback((path: string): void =>
     onState({
       ...state,
       tab: 'files',
       selected: path,
+      line: undefined,
       history: state.selected ? [...state.history, state.selected] : state.history,
     }),
   )
   const back = useLatestCallback((): void => {
     const history = state.history.slice(0, -1)
-    onState({ ...state, tab: 'files', selected: state.history.at(-1), history })
+    onState({ ...state, tab: 'files', selected: state.history.at(-1), line: undefined, history })
   })
+  // A search result opens in Files at its line; Markdown as raw text, where lines can be shown.
+  const openMatch = useLatestCallback((m: SearchMatch): void => {
+    setFilter('')
+    onState({
+      ...state,
+      tab: 'files',
+      selected: m.path,
+      line: m.line,
+      history: [],
+      mdMode: isMarkdown(m.path) ? 'raw' : state.mdMode,
+    })
+  })
+  const setSearch = useLatestCallback((search: SearchState): void => onState({ ...state, search }))
+  // Focus requests for the search input: the app's (shortcut, palette) and a click on the Search tab.
+  const [tabFocus, setTabFocus] = useState(0)
+  const tabFocusPending = useRef(false)
+  const { takeSearchFocus } = p
+  const takeFocus = useCallback((): boolean => {
+    const own = tabFocusPending.current
+    tabFocusPending.current = false
+    return (takeSearchFocus?.() ?? false) || own
+  }, [takeSearchFocus])
   const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void => onState({ ...state, mdMode }))
   const openFile = useLatestCallback((path: string): void => select('files', path))
 
@@ -199,6 +239,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
               Changes {changes && <span className="panel-count">{changes.files.length}</span>}
             </button>
           )}
+          <button
+            role="tab"
+            aria-selected={tab === 'search'}
+            onClick={() => {
+              tabFocusPending.current = true
+              setTabFocus((n) => n + 1)
+              onState({ ...state, tab: 'search' })
+            }}
+          >
+            Search
+          </button>
         </div>
         <div className="panel-actions">
           <button
@@ -225,6 +276,19 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       {missing ? (
         <div className="panel-missing" role="status">
           ⚠ This task&apos;s folder is missing.
+        </div>
+      ) : tab === 'search' ? (
+        <div className="panel-body">
+          <SearchView
+            api={api}
+            target={target}
+            state={state.search}
+            onState={setSearch}
+            onOpen={openMatch}
+            reload={reload}
+            focusSeq={(p.searchFocus ?? 0) + tabFocus}
+            takeFocus={takeFocus}
+          />
         </div>
       ) : (
         <div className="panel-body">
@@ -297,6 +361,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             diff={tab === 'changes' && typeof loaded === 'string' ? loaded : undefined}
             change={change}
             mdMode={state.mdMode}
+            highlightLine={tab === 'files' ? state.line : undefined}
             canGoBack={state.history.length > 0}
             onBack={back}
             onMdMode={setMdMode}

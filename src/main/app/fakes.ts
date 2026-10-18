@@ -5,6 +5,8 @@ import type {
   PullRequestResult,
   FileContent,
   FileList,
+  SearchOptions,
+  SearchResult,
   TabInfo,
   TaskGitStatus,
   UnsavedWork,
@@ -268,6 +270,10 @@ export class FakeFiles implements FilesApi {
   async readImage(root: string, relPath: string): Promise<string | null> {
     this.calls.push(`readImage ${root} ${relPath}`)
     return null
+  }
+  async searchFiles(root: string, isRepo: boolean, query: string, options?: SearchOptions): Promise<SearchResult> {
+    this.calls.push(`searchFiles ${root} ${isRepo} ${JSON.stringify(query)} ${JSON.stringify(options ?? {})}`)
+    return { matches: [], truncated: false }
   }
   async listChanges(worktree: string, baseRef: string): Promise<ChangeList> {
     this.calls.push(`listChanges ${worktree} ${baseRef}`)

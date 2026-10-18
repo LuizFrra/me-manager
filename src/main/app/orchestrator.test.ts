@@ -665,6 +665,35 @@ describe('Orchestrator: file viewer', () => {
     expect(files.calls).toEqual(['readFile /wt/client-x/my-api/fix src/a.ts', 'readImage /docs/notes img/logo.png'])
   })
 
+  it('searches a task worktree with git and a folder by walking it, passing the query and options on', async () => {
+    const { orch, files, taskTarget, folderTarget } = await withTaskAndFolder()
+    files.searchFiles = async (root, isRepo, query, options) => {
+      files.calls.push(`searchFiles ${root} ${isRepo} ${query} ${JSON.stringify(options ?? {})}`)
+      return {
+        matches: [{ path: 'a.ts', line: 2, column: 3, preview: 'x', matchStart: 0, matchLength: 1 }],
+        truncated: true,
+      }
+    }
+    await expect(orch.searchFiles(taskTarget, 'needle', { regex: true })).resolves.toEqual({
+      matches: [{ path: 'a.ts', line: 2, column: 3, preview: 'x', matchStart: 0, matchLength: 1 }],
+      truncated: true,
+    })
+    await orch.searchFiles(folderTarget, '--output=x')
+    expect(files.calls).toEqual([
+      'searchFiles /wt/client-x/my-api/fix true needle {"regex":true}',
+      'searchFiles /docs/notes false --output=x {}',
+    ])
+  })
+
+  it('refuses to search a missing root, a repo without a task or an unknown target', async () => {
+    const { orch, files, deps, themeId, repoId, taskTarget } = await withTaskAndFolder()
+    await expect(orch.searchFiles({ themeId, itemId: repoId }, 'x')).rejects.toThrow('Choose a task to open')
+    await expect(orch.searchFiles({ themeId, itemId: 'nope' }, 'x')).rejects.toThrow()
+    deps.pathExists = () => false
+    await expect(orch.searchFiles(taskTarget, 'x')).rejects.toThrow('Folder not found: /wt/client-x/my-api/fix')
+    expect(files.calls).toEqual([])
+  })
+
   it("passes the task's baseRef to listChanges and fileDiff", async () => {
     const { orch, files, taskTarget } = await withTaskAndFolder()
     await orch.listChanges(taskTarget)

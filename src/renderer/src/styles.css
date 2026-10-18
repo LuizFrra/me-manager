@@ -946,6 +946,180 @@ body.resizing .side-panel {
   font-size: 12px;
 }
 
+/* Search tab */
+.search-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 8px 8px 4px;
+  padding: 0 3px 0 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  font: inherit;
+  outline: none;
+}
+.search-toggle {
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.search-toggle-mono {
+  font-family: var(--mono);
+}
+.search-toggle:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.search-toggle[aria-pressed='true'] {
+  color: var(--text);
+  background: #4fa3ff2e;
+  border-color: #4fa3ff99;
+}
+.search-status {
+  min-height: 18px;
+  padding: 0 12px 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.search-busy::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border: 1.5px solid var(--muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -1px;
+  animation: search-spin 0.8s linear infinite;
+}
+@keyframes search-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.search-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 8px;
+  border-top: 1px solid var(--border);
+}
+.search-error {
+  margin: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid #e5534b66;
+  background: #e5534b1a;
+  color: #ff938a;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.search-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 3px 10px 3px 6px;
+  text-align: left;
+  white-space: nowrap;
+  line-height: 18px;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+.search-file:hover {
+  background: #2d2d2e;
+}
+.search-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.search-file-dir {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 11px;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.search-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 1px 10px 1px 22px;
+  text-align: left;
+  white-space: nowrap;
+  line-height: 18px;
+}
+.search-hit:hover {
+  background: var(--hover);
+}
+.search-hit:focus-visible {
+  background: var(--selected);
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.search-ln {
+  flex: 0 0 auto;
+  min-width: 28px;
+  text-align: right;
+  color: #6e7681;
+  font: 11px var(--mono);
+}
+.search-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 12px var(--mono);
+  color: #c5c5c5;
+}
+.search-text mark {
+  background: #e3b34140;
+  color: #ffe08a;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #e3b34159;
+}
+
 /* Tree and change rows */
 .tree-row,
 .change-row {
@@ -1125,10 +1299,26 @@ body.resizing .side-panel {
 
 /* Code */
 .code-view {
+  position: relative;
   display: flex;
   min-width: max-content;
   min-height: 100%;
   font: 12px/18px var(--mono);
+}
+/* A search result's line: over both the gutter and the text, 8px (the pre padding) + 18px per line down. */
+.code-line-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(8px + var(--mark-line, 0) * 18px);
+  height: 18px;
+  background: #e3b3411f;
+  box-shadow:
+    inset 2px 0 0 var(--waiting),
+    inset 0 1px 0 #e3b34126,
+    inset 0 -1px 0 #e3b34126;
+  pointer-events: none;
+  scroll-margin: 48px;
 }
 .code-view pre {
   margin: 0;

@@ -79,6 +79,7 @@ type AppAction =
       type:
         | 'newTheme'
         | 'togglePanel'
+        | 'searchFiles'
         | 'newTab'
         | 'restartClaude'
         | 'renameTask'
@@ -172,6 +173,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const togglePanel = useCallback(() => {
     const target = selectedRef.current
     if (target) updatePanel({ open: !panelsRef.current.get(targetKey(target))?.open })
+  }, [updatePanel])
+
+  // "Search in files" opens the panel on its Search tab and focuses the input: the bump says "focus now", the
+  // pending flag (taken once) keeps a later remount of the panel, e.g. on switching tasks, from stealing focus.
+  const [searchFocus, setSearchFocus] = useState(0)
+  const searchFocusPending = useRef(false)
+  const takeSearchFocus = useCallback((): boolean => {
+    const pending = searchFocusPending.current
+    searchFocusPending.current = false
+    return pending
+  }, [])
+  const searchInFiles = useCallback(() => {
+    if (!selectedRef.current) return
+    searchFocusPending.current = true
+    setSearchFocus((n) => n + 1)
+    updatePanel({ open: true, tab: 'search' })
   }, [updatePanel])
 
   const attempt = useCallback(
@@ -540,6 +557,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         return zoom(shortcut.id === 'zoomIn' ? 1 : shortcut.id === 'zoomOut' ? -1 : 0)
       case 'panel':
         return togglePanel()
+      case 'searchFiles':
+        return searchInFiles()
       case 'filterSidebar':
         sidebarFilterRef.current?.focus()
         sidebarFilterRef.current?.select()
@@ -590,6 +609,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     action('New theme', 'newTheme')
     if (selected) {
       action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
+      action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
       action('New shell tab', 'newTab', shortcutLabel('newTab'))
       action('Restart Claude', 'restartClaude')
       action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
@@ -656,6 +676,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (action.type === 'open') void open(action.target)
     else if (action.type === 'newTheme') newTheme()
     else if (action.type === 'togglePanel') togglePanel()
+    else if (action.type === 'searchFiles') searchInFiles()
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
     else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
     else if (action.type === 'renameTask') renameSelectedTask()
@@ -785,6 +806,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                         onState={updatePanel}
                         onError={showError}
                         onClose={() => updatePanel({ open: false })}
+                        searchFocus={searchFocus}
+                        takeSearchFocus={takeSearchFocus}
                       />
                     </Suspense>
                   </aside>
