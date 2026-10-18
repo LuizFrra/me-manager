@@ -5,10 +5,16 @@ import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
 import type { MeManagerApi, TabInfo, Target, TaskGitStatus, UsageReport, UsageSummary } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
+import { fuzzyFilter } from './lib/fuzzy'
 
 vi.mock('./components/TerminalView', () => ({
   TerminalView: ({ fontSize }: { fontSize: number }) => <div data-testid="terminal" data-font-size={fontSize} />,
 }))
+// The real matcher, spied on: the palette must not re-run it on App renders that change none of its inputs.
+vi.mock('./lib/fuzzy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/fuzzy')>()
+  return { ...actual, fuzzyFilter: vi.fn(actual.fuzzyFilter) }
+})
 vi.mock('./components/files/MarkdownView', () => ({
   MarkdownView: ({ source }: { source: string }) => <div data-testid="markdown">MD:{source}</div>,
 }))
@@ -457,6 +463,32 @@ describe('App command palette', () => {
     await openPalette()
     fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+  })
+
+  it('does not re-run the fuzzy matching when App re-renders for something else', async () => {
+    const user = userEvent.setup()
+    let ptyExit: (code: number) => void = () => {}
+    const api = repoApi({
+      onPtyExit: (cb) => {
+        ptyExit = cb
+        return () => {}
+      },
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await openPalette()
+    await user.type(search(), 'task')
+    await screen.findByRole('option', { name: 'Client X › my-api › task A' })
+    const matcher = vi.mocked(fuzzyFilter)
+    matcher.mockClear()
+    act(() => ptyExit(0)) // App re-renders: the session-ended overlay
+    expect(await screen.findByText('Session ended.')).toBeInTheDocument()
+    expect(matcher).not.toHaveBeenCalled()
+    await user.type(search(), ' B')
+    expect(matcher).toHaveBeenCalled() // a new query does match again
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')[0]).toHaveAccessibleName(
+      'Client X › my-api › task B',
+    )
   })
 
   it('leaves Ctrl+K and Ctrl+/ to the terminal on Linux', async () => {
