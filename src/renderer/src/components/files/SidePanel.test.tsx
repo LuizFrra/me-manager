@@ -7,13 +7,24 @@ import { createMockApi } from '../../api/mockApi'
 import { DEFAULT_PANEL, type PanelState } from '../../lib/panelState'
 import { PANEL_POLL_MS, SidePanel } from './SidePanel'
 
+interface MdProps {
+  source: string
+  filePath: string
+  loadImage: unknown
+  onOpenLink: (path: string) => void
+  onOpenExternal: unknown
+}
+const mdRenders = vi.hoisted(() => [] as MdProps[])
 vi.mock('./MarkdownView', () => ({
-  MarkdownView: (p: { source: string; filePath: string; onOpenLink: (path: string) => void }) => (
-    <div data-testid="markdown">
-      MD:{p.source}
-      <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
-    </div>
-  ),
+  MarkdownView: (p: MdProps) => {
+    mdRenders.push(p)
+    return (
+      <div data-testid="markdown">
+        MD:{p.source}
+        <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
+      </div>
+    )
+  },
 }))
 vi.mock('./DiffView', () => ({ DiffView: (p: { diff: string }) => <pre data-testid="diff">DIFF:{p.diff}</pre> }))
 
@@ -137,6 +148,22 @@ describe('SidePanel', () => {
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
+  })
+
+  it('passes MarkdownView the same callbacks when the panel re-renders', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi()
+    const { rerender } = render(<Harness api={api} />)
+    await user.click(await screen.findByRole('button', { name: 'README.md' }))
+    await screen.findByTestId('markdown')
+    const first = mdRenders.at(-1)!
+    rerender(<Harness api={api} onError={() => {}} />)
+    await user.type(screen.getByRole('textbox', { name: 'Filter files' }), 'R')
+    const last = mdRenders.at(-1)!
+    expect(last).not.toBe(first)
+    expect(last.onOpenLink).toBe(first.onOpenLink)
+    expect(last.loadImage).toBe(first.loadImage)
+    expect(last.onOpenExternal).toBe(first.onOpenExternal)
   })
 
   it('hides the Changes tab for folders and never asks for changes', async () => {

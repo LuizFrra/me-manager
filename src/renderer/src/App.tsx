@@ -10,6 +10,7 @@ import { NameDialog, RemoveTaskDialog } from './components/Dialogs'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
 import { startVisibleInterval } from './lib/visibleInterval'
+import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget } from './lib/describe'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
@@ -85,12 +86,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   )
 
   const refresh = useCallback(() => {
-    api.getStatus().then(setStatus, () => {})
+    // Polled every few seconds: only update (and re-render) when something actually changed.
+    api.getStatus().then(
+      (next) => setStatus(keepIfEqual(next)),
+      () => {},
+    )
     const current = selectedRef.current
     if (current)
       api.listTabs(current).then(
         (next) => {
-          if (sameTarget(selectedRef.current, current)) setTabs(next)
+          if (sameTarget(selectedRef.current, current)) setTabs(keepIfEqual(next))
         },
         () => {},
       )

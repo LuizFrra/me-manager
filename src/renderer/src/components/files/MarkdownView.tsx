@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { isExternal, resolveRelative } from '../../lib/markdown/paths'
 import { MermaidBlock } from './MermaidBlock'
+import { useLatestCallback } from '../../lib/useLatestCallback'
 
 export interface MarkdownViewProps {
   source: string
@@ -93,13 +94,20 @@ function MdImage({
   )
 }
 
-export function MarkdownView({
+/**
+ * Memoized, and the components map only depends on `filePath`: callbacks are read through stable wrappers, so a
+ * parent re-render with new callback identities doesn't make react-markdown remount links, images and diagrams.
+ */
+export const MarkdownView = memo(function MarkdownView({
   source,
   filePath,
-  loadImage,
-  onOpenLink,
-  onOpenExternal,
+  loadImage: loadImageProp,
+  onOpenLink: onOpenLinkProp,
+  onOpenExternal: onOpenExternalProp,
 }: MarkdownViewProps): React.JSX.Element {
+  const loadImage = useLatestCallback(loadImageProp)
+  const onOpenLink = useLatestCallback(onOpenLinkProp)
+  const onOpenExternal = useLatestCallback(onOpenExternalProp)
   const components = useMemo<Components>(
     () => ({
       a({ href, title, children }) {
@@ -172,4 +180,4 @@ export function MarkdownView({
       </Markdown>
     </div>
   )
-}
+})

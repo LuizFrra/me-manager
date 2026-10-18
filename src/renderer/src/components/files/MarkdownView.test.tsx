@@ -58,6 +58,38 @@ describe('MarkdownView', () => {
     expect(screen.getByText('after')).toBeInTheDocument()
   })
 
+  it('keeps images and diagrams mounted when rerendered with new callbacks but the same source', async () => {
+    const source = '![logo](img/logo.png)\n\n```mermaid\ngraph TD; A-->B\n```\n'
+    const { container, props, rerender } = setup(source)
+    const svg = await screen.findByTestId('mermaid-svg')
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull())
+    const img = container.querySelector('img')
+    const renders = mermaidMock.render.mock.calls.length
+    const next: MarkdownViewProps = {
+      ...props,
+      loadImage: vi.fn(async () => 'data:image/png;base64,BBBB'),
+      onOpenLink: vi.fn(),
+      onOpenExternal: vi.fn(),
+    }
+    rerender(<MarkdownView {...next} />)
+    rerender(<MarkdownView {...next} onOpenLink={vi.fn()} />)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(props.loadImage).toHaveBeenCalledTimes(1)
+    expect(next.loadImage).not.toHaveBeenCalled()
+    expect(mermaidMock.render).toHaveBeenCalledTimes(renders)
+    expect(container.querySelector('img')).toBe(img)
+    expect(screen.getByTestId('mermaid-svg')).toBe(svg)
+  })
+
+  it('calls the latest onOpenLink after a rerender', () => {
+    const { props, rerender } = setup('[next](b.md)')
+    const onOpenLink = vi.fn()
+    rerender(<MarkdownView {...props} onOpenLink={onOpenLink} />)
+    click(screen.getByText('next'))
+    expect(onOpenLink).toHaveBeenCalledWith('docs/b.md')
+    expect(props.onOpenLink).not.toHaveBeenCalled()
+  })
+
   describe('raw HTML', () => {
     it('does not create a script element', () => {
       const { container } = setup('<script>alert(1)</script>\n\nInline <script>alert(2)</script> text')
