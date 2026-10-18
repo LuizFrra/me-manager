@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
-import { App } from './App'
+import { describe, expect, it, vi, type MockInstance } from 'vitest'
+import { App, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
 import type { MeManagerApi, TabInfo, Target } from '../../shared/types'
 
-vi.mock('./components/TerminalView', () => ({ TerminalView: () => <div data-testid="terminal" /> }))
+vi.mock('./components/TerminalView', () => ({
+  TerminalView: ({ fontSize }: { fontSize: number }) => <div data-testid="terminal" data-font-size={fontSize} />,
+}))
 vi.mock('./components/files/MarkdownView', () => ({
   MarkdownView: ({ source }: { source: string }) => <div data-testid="markdown">MD:{source}</div>,
 }))
@@ -1133,5 +1135,97 @@ describe('App open in editor / file manager', () => {
     await user.type(within(dialog).getByLabelText('Editor command'), 'vim')
     expect(within(dialog).getByText(/vim runs in a terminal/)).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+})
+
+describe('App terminal zoom', () => {
+  const press = (key: string, over: Partial<KeyboardEventInit> = {}): boolean =>
+    fireEvent.keyDown(window, { key, ctrlKey: true, ...over })
+  const fontSize = (): string | null => screen.getByTestId('terminal').getAttribute('data-font-size')
+  const wait = (ms: number): Promise<void> =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+
+  async function setup(api = repoApi()): Promise<MockInstance<MeManagerApi['updateSettings']>> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const updateSettings = vi.spyOn(api, 'updateSettings')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    updateSettings.mockClear()
+    return updateSettings
+  }
+
+  it('zooms in with Ctrl+= and Ctrl++, out with Ctrl+-, resets with Ctrl+0, and saves once, debounced', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const updateSettings = await setup()
+      expect(fontSize()).toBe('13')
+      expect(press('=')).toBe(false) // handled: never reaches the terminal
+      press('+', { shiftKey: true, code: 'Equal' })
+      expect(fontSize()).toBe('15')
+      expect(screen.getByText('Font size 15')).toBeInTheDocument()
+      press('-')
+      expect(fontSize()).toBe('14')
+      expect(screen.getByText('Font size 14')).toBeInTheDocument()
+      expect(updateSettings).not.toHaveBeenCalled()
+      await wait(ZOOM_SAVE_MS + 50)
+      expect(updateSettings).toHaveBeenCalledTimes(1)
+      expect(updateSettings).toHaveBeenCalledWith({ terminalFontSize: 14 })
+
+      press('0')
+      expect(fontSize()).toBe('13')
+      await wait(ZOOM_SAVE_MS + 50)
+      expect(updateSettings).toHaveBeenLastCalledWith({ terminalFontSize: 13 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops at the largest size without saving past it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = repoApi()
+      await api.updateSettings({ terminalFontSize: 31 })
+      const updateSettings = await setup(api)
+      expect(fontSize()).toBe('31')
+      press('=')
+      press('=')
+      press('=')
+      expect(fontSize()).toBe('32')
+      expect(screen.getByText('Font size 32')).toBeInTheDocument()
+      await wait(ZOOM_SAVE_MS + 50)
+      expect(updateSettings.mock.calls).toEqual([[{ terminalFontSize: 32 }]])
+      press('=') // already at the limit: says so, saves nothing
+      expect(screen.getByText('Font size 32')).toBeInTheDocument()
+      await wait(ZOOM_SAVE_MS + 50)
+      expect(updateSettings).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops at the smallest size', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = repoApi()
+      await api.updateSettings({ terminalFontSize: 9 })
+      const updateSettings = await setup(api)
+      for (let i = 0; i < 4; i++) press('-')
+      expect(fontSize()).toBe('8')
+      expect(screen.getByText('Font size 8')).toBeInTheDocument()
+      await wait(ZOOM_SAVE_MS + 50)
+      expect(updateSettings.mock.calls).toEqual([[{ terminalFontSize: 8 }]])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('lists the zoom keys in the shortcut help', async () => {
+    render(<App api={repoApi()} />)
+    press('?', { shiftKey: true })
+    const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    for (const keys of ['Ctrl+=', 'Ctrl++', 'Ctrl+-', 'Ctrl+0'])
+      expect(within(help).getByText(keys)).toBeInTheDocument()
   })
 })

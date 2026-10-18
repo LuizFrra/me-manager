@@ -93,6 +93,9 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+Shift+W'], description: 'Close the active tab' },
       { keys: ['Ctrl+Shift+['], description: 'Previous tab' },
       { keys: ['Ctrl+Shift+]'], description: 'Next tab' },
+      { keys: ['Ctrl+=', 'Ctrl++'], description: 'Terminal: larger font' },
+      { keys: ['Ctrl+-'], description: 'Terminal: smaller font' },
+      { keys: ['Ctrl+0'], description: 'Terminal: reset the font size' },
     ])
     expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
       ['⌘K', '⌘⇧P'],
@@ -106,6 +109,9 @@ describe('shortcut labels', () => {
       ['⌘⇧W'],
       ['⌘⇧['],
       ['⌘⇧]'],
+      ['⌘=', '⌘+'],
+      ['⌘-'],
+      ['⌘0'],
     ])
   })
 })
@@ -127,7 +133,7 @@ describe.each([
     expect(press('1')).toEqual({ id: 'target', index: 0 })
     expect(press('2')).toEqual({ id: 'target', index: 1 })
     expect(press('9')).toEqual({ id: 'target', index: 8 })
-    expect(press('0')).toBeNull()
+    expect(press('0')).toEqual({ id: 'zoomReset' }) // not a target
     expect(shifted('!', { code: 'Digit1' })).toBeNull()
   })
 
@@ -173,6 +179,21 @@ describe.each([
   it('opens the editor with Mod+Shift+O, never plain Mod+O', () => {
     expect(shifted('O')).toEqual({ id: 'openEditor' })
     expect(press('o')).toBeNull()
+  })
+
+  it('zooms the terminal with Mod+= / Mod++, Mod+- and Mod+0, on any layout and the keypad', () => {
+    expect(press('=')).toEqual({ id: 'zoomIn' })
+    expect(shifted('+', { code: 'Equal' })).toEqual({ id: 'zoomIn' }) // US: + is Shift+=
+    expect(press('+', { code: 'BracketRight' })).toEqual({ id: 'zoomIn' }) // German: + has its own key
+    expect(press('+', { code: 'NumpadAdd' })).toEqual({ id: 'zoomIn' })
+    expect(press('-')).toEqual({ id: 'zoomOut' })
+    expect(press('-', { code: 'NumpadSubtract' })).toEqual({ id: 'zoomOut' })
+    expect(press('ß', { code: 'Minus' })).toEqual({ id: 'zoomOut' })
+    expect(press('0', { code: 'Numpad0' })).toEqual({ id: 'zoomReset' })
+    expect(press('à', { code: 'Digit0' })).toEqual({ id: 'zoomReset' }) // AZERTY
+    expect(shifted('_', { code: 'Minus' })).toBeNull()
+    expect(shifted(')', { code: 'Digit0' })).toBeNull()
+    expect(shortcutLabel('zoomIn', mac)).toBe(mac ? '⌘=' : 'Ctrl+=')
   })
 
   it('adds Mod+K and Mod+/ only on macOS', () => {

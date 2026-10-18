@@ -5,11 +5,23 @@ import { TerminalView } from './TerminalView'
 type KeyHandler = (e: KeyboardEvent) => boolean
 const handlers: KeyHandler[] = []
 const noop = (): void => undefined
+interface FakeTerm {
+  options: { fontSize?: number }
+  cols: number
+  rows: number
+}
+const terms = vi.hoisted(() => [] as FakeTerm[])
+const fits = vi.hoisted(() => ({ count: 0 }))
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     cols = 80
     rows = 24
+    options: { fontSize?: number }
+    constructor(options: { fontSize?: number }) {
+      this.options = { ...options }
+      terms.push(this)
+    }
     loadAddon = noop
     open = noop
     attachCustomKeyEventHandler(handler: KeyHandler): void {
@@ -29,7 +41,9 @@ vi.mock('@xterm/xterm', () => ({
 }))
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class {
-    fit = noop
+    fit(): void {
+      fits.count++
+    }
   },
 }))
 vi.mock('@xterm/addon-clipboard', () => ({ ClipboardAddon: class {} }))
@@ -48,7 +62,7 @@ describe('TerminalView key handler', () => {
   const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
 
   it('keeps every app shortcut away from tmux and passes other keys through', () => {
-    render(<TerminalView api={api} sessionKey="s" />)
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
     const handler = handlers.at(-1)
     expect(handler).toBeDefined()
     const shortcuts = [
@@ -56,6 +70,10 @@ describe('TerminalView key handler', () => {
       key({ key: '?', shiftKey: true }),
       key({ key: ',' }),
       key({ key: 'O', shiftKey: true }),
+      key({ key: '=' }),
+      key({ key: '+', shiftKey: true, code: 'Equal' }),
+      key({ key: '-' }),
+      key({ key: '0' }),
       key({ key: 'E', shiftKey: true }),
       key({ key: '1' }),
       key({ key: '9' }),
@@ -77,5 +95,29 @@ describe('TerminalView key handler', () => {
       key({ key: 'a', ctrlKey: false }),
     ]
     for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)
+  })
+})
+
+describe('TerminalView font size', () => {
+  it('starts with the given size and applies changes live, refitting and resizing the pty', () => {
+    const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+    const { rerender } = render(<TerminalView api={api} sessionKey="s" fontSize={15} />)
+    const term = terms.at(-1)!
+    expect(term.options.fontSize).toBe(15)
+    const created = terms.length
+    api.ptyResize.mockClear()
+    const fitsBefore = fits.count
+
+    term.cols = 70
+    term.rows = 20
+    rerender(<TerminalView api={api} sessionKey="s" fontSize={17} />)
+    expect(terms.length).toBe(created) // the same terminal, not a new one
+    expect(term.options.fontSize).toBe(17)
+    expect(fits.count).toBe(fitsBefore + 1)
+    expect(api.ptyResize).toHaveBeenCalledWith(70, 20)
+
+    api.ptyResize.mockClear()
+    rerender(<TerminalView api={api} sessionKey="s" fontSize={17} />)
+    expect(api.ptyResize).not.toHaveBeenCalled()
   })
 })

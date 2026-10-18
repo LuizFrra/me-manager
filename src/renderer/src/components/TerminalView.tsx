@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
@@ -12,6 +12,8 @@ export interface TerminalViewProps {
   api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'>
   /** Changes whenever the attached session changes; the terminal resets. */
   sessionKey: string
+  /** Applied live: the terminal refits and the pty is resized to the new rows and columns. */
+  fontSize: number
 }
 
 // OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
@@ -20,17 +22,19 @@ const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboar
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
 const RESIZE_SETTLE_MS = 100
 
-export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.Element {
+export function TerminalView({ api, sessionKey, fontSize }: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  // The size to create the terminal with; later changes are applied by the effect below, without recreating it.
+  const [initialFontSize] = useState(fontSize)
 
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
     const term = new Terminal({
       fontFamily: 'Menlo, "DejaVu Sans Mono", "Ubuntu Mono", monospace',
-      fontSize: 13,
+      fontSize: initialFontSize,
       cursorBlink: true,
       macOptionClickForcesSelection: true,
       theme: { background: '#1e1e1e' },
@@ -87,7 +91,7 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
       termRef.current = null
       fitRef.current = null
     }
-  }, [api])
+  }, [api, initialFontSize])
 
   useEffect(() => {
     const term = termRef.current
@@ -97,6 +101,14 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
     api.ptyResize(term.cols, term.rows)
     term.focus()
   }, [sessionKey, api])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (!term || term.options.fontSize === fontSize) return
+    term.options.fontSize = fontSize
+    fitRef.current?.fit() // same pixels, different cell size: new cols and rows
+    api.ptyResize(term.cols, term.rows)
+  }, [fontSize, api])
 
   return <div className="terminal-host" ref={hostRef} />
 }
