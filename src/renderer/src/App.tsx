@@ -8,6 +8,7 @@ import type {
   TabInfo,
   Target,
   UnsavedWork,
+  UsageSummary,
 } from '../../shared/types'
 import { hasUnsavedWork } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
@@ -33,6 +34,7 @@ import { useLatestCallback } from './lib/useLatestCallback'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
+import { UsageView } from './components/UsageView'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -65,6 +67,7 @@ type AppAction =
         | 'fileManager'
         | 'settings'
         | 'help'
+        | 'usage'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -79,6 +82,8 @@ const RENAME_NOTE = 'The branch and folder keep their original name.'
 const EMPTY: AppState = { version: 1, themes: [] }
 /** Terminal zoom saves the font size once the keys have been still this long. */
 export const ZOOM_SAVE_MS = 500
+/** The header's usage badge refreshes this often: reading transcripts costs more than the status poll. */
+export const USAGE_POLL_MS = 10_000
 
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
 
@@ -92,6 +97,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
+  // The selected target's usage, tagged with its targetKey so another target's numbers never show.
+  const [usage, setUsage] = useState<{ key: string; summary: UsageSummary } | null>(null)
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
@@ -164,6 +172,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       )
   }, [api])
 
+  const refreshUsage = useCallback((): Promise<void> | undefined => {
+    const current = selectedRef.current
+    if (!current) return undefined
+    const key = targetKey(current)
+    return api.getUsage(current).then(
+      (summary) => {
+        if (!sameTarget(selectedRef.current, current)) return
+        const next = { key, summary }
+        setUsage((prev) => (prev ? keepIfEqual(next)(prev) : next))
+      },
+      () => {}, // the badge just keeps its last numbers
+    )
+  }, [api])
+
   const checkPrereqs = useCallback(() => {
     void attempt(async () => setPrereqs(await api.checkPrereqs()))
   }, [api, attempt])
@@ -180,6 +202,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     refresh()
     return startVisibleInterval(refresh, pollMs)
   }, [refresh, pollMs])
+
+  const selectedKey = selected ? targetKey(selected) : null
+  useEffect(() => {
+    if (selectedKey === null) return undefined
+    void refreshUsage()
+    return startVisibleInterval(refreshUsage, USAGE_POLL_MS)
+  }, [refreshUsage, selectedKey])
 
   useEffect(
     () =>
@@ -320,19 +349,21 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
-  // - the palette or help overlay is open: only their toggles (Mod+Shift+P, Mod+Shift+/), which also switch between them;
+  // - the palette, help or usage overlay is open: only their toggles (Mod+Shift+P, Mod+Shift+/, Mod+Shift+U), which
+  //   also switch between them;
   // - a text field has focus: only the palette, help and panel toggles (see worksWhileTyping), so inputs keep
   //   their keys. The terminal's hidden textarea doesn't count as a text field.
   const onShortcutKey = useLatestCallback((e: KeyboardEvent): void => {
     const shortcut = matchShortcut(e)
     if (!shortcut || dialog) return
-    if (shortcut.id === 'palette' || shortcut.id === 'help') {
+    if (shortcut.id === 'palette' || shortcut.id === 'help' || shortcut.id === 'usage') {
       e.preventDefault()
       setPaletteOpen((o) => shortcut.id === 'palette' && !o)
       setHelpOpen((o) => shortcut.id === 'help' && !o)
+      setUsageOpen((o) => shortcut.id === 'usage' && !o)
       return
     }
-    if (paletteOpen || helpOpen) return
+    if (paletteOpen || helpOpen || usageOpen) return
     if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target)) return
     e.preventDefault()
     switch (shortcut.id) {
@@ -404,6 +435,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (selected?.taskId) action('Rename current task', 'renameTask')
     for (const { kind, label } of copiesFor(selected))
       commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
+    action('Show usage', 'usage', shortcutLabel('usage'))
     action('Open settings', 'settings', shortcutLabel('settings'))
     action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
     return commands
@@ -459,6 +491,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
     else if (action.type === 'renameTask') renameSelectedTask()
     else if (action.type === 'settings') openSettings()
+    else if (action.type === 'usage') setUsageOpen(true)
     else if (action.type === 'openEditor') openExternally('editor')
     else if (action.type === 'fileManager') openExternally('fileManager')
     else if (action.type === 'copy') {
@@ -512,6 +545,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
         onOpenSettings={openSettings}
+        onOpenUsage={() => setUsageOpen(true)}
       />
       <main className="main">
         {selected && header ? (
@@ -527,6 +561,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onOpenInEditor={() => openExternally('editor')}
               onRevealInFileManager={() => openExternally('fileManager')}
               sessionFlags={settings}
+              usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
+              onOpenUsage={() => setUsageOpen(true)}
             />
             <TabBar
               tabs={tabs}
@@ -618,6 +654,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         />
       )}
       {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
+      {usageOpen && (
+        <UsageView
+          api={api}
+          onClose={() => setUsageOpen(false)}
+          onOpenTarget={(target) => {
+            if (!sameTarget(selectedRef.current, target)) void open(target)
+          }}
+        />
+      )}
       <Toasts toasts={toasts} onDismiss={dismiss} />
     </div>
   )

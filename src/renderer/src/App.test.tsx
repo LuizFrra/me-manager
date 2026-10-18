@@ -3,7 +3,8 @@ import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi, type MockInstance } from 'vitest'
 import { App, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
-import type { MeManagerApi, TabInfo, Target } from '../../shared/types'
+import type { MeManagerApi, TabInfo, Target, UsageReport, UsageSummary } from '../../shared/types'
+import { emptyUsageSummary } from '../../shared/usage'
 
 vi.mock('./components/TerminalView', () => ({
   TerminalView: ({ fontSize }: { fontSize: number }) => <div data-testid="terminal" data-font-size={fontSize} />,
@@ -501,7 +502,7 @@ describe('App command palette', () => {
   it('leaves out target actions when nothing is selected', async () => {
     render(<App api={createMockApi()} />)
     const dialog = await openPalette()
-    expect(optionNames(dialog)).toEqual(['New theme', 'Open settings', 'Show keyboard shortcuts'])
+    expect(optionNames(dialog)).toEqual(['New theme', 'Show usage', 'Open settings', 'Show keyboard shortcuts'])
   })
 })
 
@@ -1229,5 +1230,222 @@ describe('App terminal zoom', () => {
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     for (const keys of ['Ctrl+=', 'Ctrl++', 'Ctrl+-', 'Ctrl+0'])
       expect(within(help).getByText(keys)).toBeInTheDocument()
+  })
+})
+
+describe('App usage', () => {
+  /** A summary where every period has `cost` dollars of opus output (plus extra fields), scaled down for shorter periods. */
+  const usageOf = (cost: number, extra: Partial<UsageSummary['all']> = {}): UsageSummary => {
+    const s = emptyUsageSummary()
+    const shares = { today: 0.1, week: 0.5, month: 0.8, all: 1 } as const
+    for (const p of ['today', 'week', 'month', 'all'] as const) {
+      const c = cost * shares[p]
+      s[p] = {
+        ...s[p],
+        cost: c,
+        output: Math.round((c / 20) * 1e6),
+        messages: c > 0 ? 3 : 0,
+        sessions: c > 0 ? 1 : 0,
+        models:
+          c > 0
+            ? [
+                {
+                  ...s[p],
+                  model: 'claude-opus-5-5',
+                  priced: true,
+                  cost: c,
+                  output: Math.round((c / 20) * 1e6),
+                  messages: 3,
+                  sessions: 1,
+                },
+              ]
+            : [],
+        ...extra,
+      }
+    }
+    return s
+  }
+
+  /** The mock API, with fixed usage per task name and a report built from the current state. */
+  function usageApi(costs: Record<string, number>, extra: Partial<MeManagerApi> = {}): MeManagerApi {
+    const api: MeManagerApi = repoApi({
+      getUsage: async (target) => usageOf(costs[(await nameOf(target)) ?? ''] ?? 0),
+      getUsageReport: async (): Promise<UsageReport> => {
+        const state = await api.getState()
+        const themes = state.themes.map((theme) => {
+          const targets = theme.items.flatMap((item) =>
+            item.kind === 'repo'
+              ? item.tasks.map((task) => ({
+                  target: { themeId: theme.id, itemId: item.id, taskId: task.id },
+                  kind: 'task' as const,
+                  label: `${item.name} › ${task.name}`,
+                  path: task.worktreePath,
+                  usage: usageOf(costs[task.name] ?? 0),
+                }))
+              : [],
+          )
+          const sum = targets.reduce((n, t) => n + t.usage.all.cost, 0)
+          return { themeId: theme.id, name: theme.name, usage: usageOf(sum), targets }
+        })
+        const total = usageOf(
+          Object.values(costs).reduce((a, b) => a + b, 0),
+          costs.unpriced ? { unpricedTokens: 5000 } : {},
+        )
+        if (costs.unpriced)
+          for (const p of ['today', 'week', 'month', 'all'] as const)
+            total[p].models = [
+              ...total[p].models,
+              {
+                ...emptyUsageSummary()[p],
+                model: 'claude-mystery-1',
+                priced: false,
+                unpricedTokens: 5000,
+                input: 5000,
+              },
+            ]
+        return { generatedAt: new Date().toISOString(), total, themes }
+      },
+      ...extra,
+    })
+    const nameOf = async (target: Target): Promise<string | undefined> => {
+      const repo = (await api.getState()).themes.flatMap((t) => t.items).find((i) => i.id === target.itemId)
+      return repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === target.taskId)?.name : undefined
+    }
+    return api
+  }
+
+  const usageDialog = (): HTMLElement => screen.getByRole('dialog', { name: 'Claude usage' })
+
+  it("shows the selected task's usage as a header badge, with the periods and token split on hover", async () => {
+    const user = userEvent.setup()
+    render(<App api={usageApi({ 'fix login bug': 3.42 })} />)
+    await createRepoAndTask(user)
+    const badge = await screen.findByRole('button', { name: 'Claude usage: $3.42 · 171k tok' })
+    const tip = screen.getByRole('tooltip', { hidden: true })
+    expect(badge).toHaveAttribute('aria-describedby', tip.id)
+    expect(within(tip).getByText('Estimated cost at API prices')).toBeInTheDocument()
+    for (const [label, cost] of [
+      ['Today', '$0.34'],
+      ['Last 7 days', '$1.71'],
+      ['This month', '$2.74'],
+      ['All time', '$3.42'],
+    ]) {
+      const row = within(tip).getByRole('rowheader', { name: label, hidden: true }).closest('tr')!
+      expect(row).toHaveTextContent(cost)
+    }
+    for (const label of ['Input', 'Output', 'Cache read', 'Cache write'])
+      expect(within(tip).getByText(label)).toBeInTheDocument()
+    expect(within(tip).getByText(/don't pay per token/)).toBeInTheDocument()
+  })
+
+  it('refreshes the badge every 10 seconds, not at the status poll rate', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = usageApi({ 'fix login bug': 1 })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      render(<App api={api} />)
+      await createRepoAndTask(user)
+      await screen.findByRole('button', { name: /^Claude usage:/ })
+      const getUsage = vi.spyOn(api, 'getUsage')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(8_000)
+      })
+      expect(getUsage).not.toHaveBeenCalled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500)
+      })
+      expect(getUsage).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('opens the usage view from the badge, the sidebar, the palette and Ctrl+Shift+U', async () => {
+    const user = userEvent.setup()
+    render(<App api={usageApi({ 'fix login bug': 2 })} />)
+    await createRepoAndTask(user)
+
+    await user.click(await screen.findByRole('button', { name: /^Claude usage:/ }))
+    expect(usageDialog()).toBeInTheDocument()
+    fireEvent.keyDown(usageDialog(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Claude usage' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Usage' }))
+    expect(usageDialog()).toBeInTheDocument()
+    await user.click(within(usageDialog()).getByRole('button', { name: 'Close usage' }))
+    expect(screen.queryByRole('dialog', { name: 'Claude usage' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' })
+    await user.type(within(palette).getByRole('combobox'), 'show usage')
+    await user.keyboard('{Enter}')
+    expect(usageDialog()).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'U', ctrlKey: true, shiftKey: true }) // toggles it closed
+    expect(screen.queryByRole('dialog', { name: 'Claude usage' })).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'U', ctrlKey: true, shiftKey: true })
+    expect(usageDialog()).toBeInTheDocument()
+  })
+
+  it('shows totals, per-theme tables sortable by cost, models and the estimate footnote, per period', async () => {
+    const user = userEvent.setup()
+    render(<App api={usageApi({ 'task A': 1, 'task B': 4, 'task C': 0 })} />)
+    await createRepoAndTask(user, 'task A', 'task B', 'task C')
+    await user.click(screen.getByRole('button', { name: 'Usage' }))
+    const view = usageDialog()
+    const totals = await within(view).findByRole('region', { name: 'Totals' })
+
+    // This month by default.
+    expect(within(view).getByRole('button', { name: 'This month' })).toHaveAttribute('aria-pressed', 'true')
+    expect(totals).toHaveTextContent('$4.00')
+    expect(within(totals).getByText('Estimated cost at API prices')).toBeInTheDocument()
+    await user.click(within(view).getByRole('button', { name: 'All time' }))
+    expect(totals).toHaveTextContent('$5.00')
+    await user.click(within(view).getByRole('button', { name: 'Today' }))
+    expect(totals).toHaveTextContent('$0.50')
+
+    const table = within(view).getByRole('table', { name: 'Usage by task and folder' })
+    const theme = within(table).getByRole('rowgroup', { name: 'Client X' })
+    const rows = (): string[] =>
+      within(theme)
+        .getAllByRole('button')
+        .map((b) => b.textContent ?? '')
+    expect(rows()).toEqual(['⎇my-api › task B', '⎇my-api › task A'])
+    expect(theme).toHaveTextContent('1 more without usage in this period')
+    await user.click(within(table).getByRole('button', { name: /Est. cost/ }))
+    expect(rows()).toEqual(['⎇my-api › task A', '⎇my-api › task B'])
+    expect(within(table).getByRole('columnheader', { name: /Est. cost/ })).toHaveAttribute('aria-sort', 'ascending')
+
+    const models = within(view).getByRole('table', { name: 'Usage by model' })
+    expect(within(models).getByText('claude-opus-5-5')).toBeInTheDocument()
+    expect(within(view).queryByRole('note')).not.toBeInTheDocument()
+    expect(view).toHaveTextContent(
+      "On a Pro/Max subscription you don't pay per token; this is what the same usage would cost on the API.",
+    )
+  })
+
+  it('notes unpriced models, and opens a task from its row', async () => {
+    const user = userEvent.setup()
+    const openTarget = vi.fn(async () => [] as TabInfo[])
+    render(<App api={usageApi({ 'task A': 1, 'task B': 2, unpriced: 0.000001 }, { openTarget })} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await user.click(screen.getByRole('button', { name: 'Usage' }))
+    const note = await within(usageDialog()).findByRole('note')
+    expect(note).toHaveTextContent('Unpriced models: claude-mystery-1.')
+    expect(within(usageDialog()).getByText('unpriced')).toBeInTheDocument()
+
+    openTarget.mockClear()
+    await user.click(within(usageDialog()).getByRole('button', { name: 'my-api › task A' }))
+    expect(screen.queryByRole('dialog', { name: 'Claude usage' })).not.toBeInTheDocument()
+    expect(openTarget).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('my-api › task A')).toBeInTheDocument()
+  })
+
+  it('lists Ctrl+Shift+U in the shortcut help', async () => {
+    render(<App api={repoApi()} />)
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true })
+    const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(help).getByText('Ctrl+Shift+U')).toBeInTheDocument()
+    expect(within(help).getByText('Claude usage and cost')).toBeInTheDocument()
   })
 })
