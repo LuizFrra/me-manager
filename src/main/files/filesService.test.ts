@@ -745,6 +745,19 @@ describe('searchFiles (repo)', () => {
     await expect(noPcre.searchFiles(root, true, 'abc')).resolves.not.toHaveProperty('note')
   })
 
+  it("returns git's matches unhighlighted when highlighting them runs past the timeout", async () => {
+    // git's POSIX engine finishes at once; JavaScript backtracks exponentially on the run of a's.
+    const root = await makeRepo({ 'a.txt': `${'a'.repeat(40)}c\nplain c\n` })
+    const slow = new FilesService({ searchTimeoutMs: 500, perlRegex: false })
+    const started = Date.now()
+    const r = await slow.searchFiles(root, true, '(a+)+b|c', { regex: true })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(r.matches.map((m) => [m.line, m.column, m.matchLength])).toEqual([
+      [1, 41, 0],
+      [2, 7, 0],
+    ])
+  })
+
   it('recognizes the error of a git built without Perl-compatible regexes', () => {
     expect(isNoPcreError('fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n')).toBe(true)
     expect(isNoPcreError("fatal: -e option, 'foo(': missing closing parenthesis")).toBe(false)
