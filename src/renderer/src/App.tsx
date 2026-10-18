@@ -1,7 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppState, LiveStatus, MeManagerApi, PrereqResult, TabInfo, Target, UnsavedWork } from '../../shared/types'
+import type {
+  AppState,
+  LiveStatus,
+  MeManagerApi,
+  PrereqResult,
+  Settings,
+  TabInfo,
+  Target,
+  UnsavedWork,
+} from '../../shared/types'
 import { hasUnsavedWork } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
@@ -22,6 +32,7 @@ import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
+import { SettingsDialog } from './components/SettingsDialog'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -39,10 +50,11 @@ type Dialog =
   | ({ kind: 'name'; onSubmit: (name: string) => Promise<void> } & NameAsk)
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
+  | { kind: 'settings' }
 
 type AppAction =
   | { type: 'open'; target: Target }
-  | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'renameTask' | 'help' }
+  | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'renameTask' | 'settings' | 'help' }
   | { type: 'copy'; kind: CopyKind }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
@@ -54,7 +66,6 @@ interface AppCommand extends PaletteCommand {
 const RENAME_NOTE = 'The branch and folder keep their original name.'
 
 const EMPTY: AppState = { version: 1, themes: [] }
-const POLL_MS = 3000
 
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
 
@@ -68,6 +79,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  // The defaults until main answers; the poll interval and terminal font size follow it.
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [sidebarFilter, setSidebarFilter] = useState('')
   const sidebarFilterRef = useRef<HTMLInputElement>(null)
@@ -146,12 +159,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     checkPrereqs()
     void attempt(async () => setState(await api.getState()))
     api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
+    void attempt(async () => setSettings(await api.getSettings()))
   }, [api, attempt, checkPrereqs])
 
+  const pollMs = settings.pollIntervalMs
   useEffect(() => {
     refresh()
-    return startVisibleInterval(refresh, POLL_MS)
-  }, [refresh])
+    return startVisibleInterval(refresh, pollMs)
+  }, [refresh, pollMs])
 
   useEffect(
     () =>
@@ -251,6 +266,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else await doRemove(true)
   }
 
+  const openSettings = (): void => setDialog({ kind: 'settings' })
+
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
@@ -270,6 +287,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target)) return
     e.preventDefault()
     switch (shortcut.id) {
+      case 'settings':
+        return openSettings()
       case 'panel':
         return togglePanel()
       case 'filterSidebar':
@@ -328,8 +347,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (selected?.taskId) action('Rename current task', 'renameTask')
     for (const { kind, label } of copiesFor(selected))
       commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
+    action('Open settings', 'settings', shortcutLabel('settings'))
     action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
     return commands
+  }
+
+  const saveSettings = async (next: Settings): Promise<void> => {
+    const saved = await attempt(() => api.updateSettings(next))
+    if (!saved) return
+    setSettings(saved)
+    setDialog(null)
+    showInfo('Settings saved')
   }
 
   const editNotes = (target: Target): void => {
@@ -373,6 +401,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
     else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
     else if (action.type === 'renameTask') renameSelectedTask()
+    else if (action.type === 'settings') openSettings()
     else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
       if (entry) void copy(entry)
@@ -423,6 +452,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         }
         onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
+        onOpenSettings={openSettings}
       />
       <main className="main">
         {selected && header ? (
@@ -471,6 +501,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                         isRepo={isRepo}
                         missing={status.missing.includes(targetKey(selected))}
                         state={panel}
+                        pollMs={pollMs}
                         onState={updatePanel}
                         onError={showError}
                         onClose={() => updatePanel({ open: false })}
@@ -511,6 +542,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onSave={dialog.onSave}
           onCancel={() => setDialog(null)}
         />
+      )}
+      {dialog?.kind === 'settings' && (
+        <SettingsDialog settings={settings} onSave={saveSettings} onCancel={() => setDialog(null)} />
       )}
       {paletteOpen && (
         <CommandPalette

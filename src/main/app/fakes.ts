@@ -1,6 +1,9 @@
 import type { AppState, ChangeList, FileContent, FileList, TabInfo, UnsavedWork } from '../../shared/types'
 import type { FilesApi, GitApi, OrchestratorDeps, PtyApi, StoreApi, TmuxApi } from '../contracts'
 import { emptyState } from '../store/mutations'
+import { SettingsService, type SettingsStoreApi } from '../store/settings'
+import type { Settings } from '../../shared/types'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
 
 export class MemoryStore implements StoreApi {
   saved: AppState[] = []
@@ -11,6 +14,18 @@ export class MemoryStore implements StoreApi {
   async save(state: AppState): Promise<void> {
     this.state = state
     this.saved.push(state)
+  }
+}
+
+export class MemorySettingsStore implements SettingsStoreApi {
+  saved: Settings[] = []
+  constructor(private settings: Settings = { ...DEFAULT_SETTINGS, claudeArgs: [] }) {}
+  async load(): Promise<Settings> {
+    return this.settings
+  }
+  async save(settings: Settings): Promise<void> {
+    this.settings = settings
+    this.saved.push(settings)
   }
 }
 
@@ -141,21 +156,24 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   tmux: FakeTmux
   pty: FakePty
   files: FakeFiles
+  settings: SettingsService
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
   const tmux = new FakeTmux()
   const pty = new FakePty()
   const files = new FakeFiles()
+  const settings = new SettingsService(new MemorySettingsStore())
   const deps: OrchestratorDeps = {
     store,
     git,
     tmux,
     pty,
     files,
+    settings,
     worktreesRoot: '/wt',
     pathExists: () => true,
     ...overrides,
   }
-  return { deps, store, git, tmux, pty, files }
+  return { deps, store, git, tmux, pty, files, settings }
 }

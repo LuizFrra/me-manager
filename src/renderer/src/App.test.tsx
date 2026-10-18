@@ -499,7 +499,7 @@ describe('App command palette', () => {
   it('leaves out target actions when nothing is selected', async () => {
     render(<App api={createMockApi()} />)
     const dialog = await openPalette()
-    expect(optionNames(dialog)).toEqual(['New theme', 'Show keyboard shortcuts'])
+    expect(optionNames(dialog)).toEqual(['New theme', 'Open settings', 'Show keyboard shortcuts'])
   })
 })
 
@@ -917,5 +917,144 @@ describe('App copy actions', () => {
     await user.click(within(header()).getByRole('button', { name: 'Copy branch name' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not copy the branch name to the clipboard')
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+})
+
+describe('App settings', () => {
+  const dialog = (): HTMLElement => screen.getByRole('dialog', { name: 'Settings' })
+  const field = (name: string): HTMLElement => within(dialog()).getByLabelText(name)
+
+  it('opens from the sidebar button, shows the current settings and saves edits', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.updateSettings({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 5000 })
+    const updateSettings = vi.spyOn(api, 'updateSettings')
+    render(<App api={api} />)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(field('Extra claude arguments')).toHaveValue('--model opus')
+    expect(field('Extra claude arguments')).toHaveFocus()
+    expect(field('Refresh interval')).toHaveValue(5)
+    expect(field('Terminal font size')).toHaveValue(13)
+    expect(within(dialog()).getByRole('checkbox', { name: 'Desktop notifications' })).toBeChecked()
+    expect(within(dialog()).getByText(/Applies to sessions started after saving/)).toBeInTheDocument()
+
+    await user.clear(field('Extra claude arguments'))
+    await user.type(field('Extra claude arguments'), `--model sonnet --append-system-prompt "be brief"`)
+    await user.type(field('Editor command'), 'code -n')
+    await user.clear(field('Terminal font size'))
+    await user.type(field('Terminal font size'), '15')
+    await user.click(within(dialog()).getByRole('checkbox', { name: 'Desktop notifications' }))
+    await user.click(within(dialog()).getByRole('button', { name: 'Save' }))
+
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      claudeArgs: ['--model', 'sonnet', '--append-system-prompt', 'be brief'],
+      editorCommand: 'code -n',
+      pollIntervalMs: 5000,
+      terminalFontSize: 15,
+      notifications: false,
+    })
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(await screen.findByText('Settings saved')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(field('Extra claude arguments')).toHaveValue("--model sonnet --append-system-prompt 'be brief'")
+    expect(field('Terminal font size')).toHaveValue(15)
+  })
+
+  it('shows inline errors and keeps Save off until the fields are valid', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const updateSettings = vi.spyOn(api, 'updateSettings')
+    render(<App api={api} />)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    const save = within(dialog()).getByRole('button', { name: 'Save' })
+
+    await user.type(field('Extra claude arguments'), `--append-system-prompt 'oops`)
+    expect(field('Extra claude arguments')).toHaveAttribute('aria-invalid', 'true')
+    expect(field('Extra claude arguments')).toHaveAccessibleDescription(/single quote.*not closed/)
+    await user.clear(field('Refresh interval'))
+    await user.type(field('Refresh interval'), '0.2')
+    expect(within(dialog()).getByText('Enter a number of seconds from 1 to 30.')).toBeInTheDocument()
+    await user.clear(field('Terminal font size'))
+    await user.type(field('Terminal font size'), '99')
+    expect(within(dialog()).getByText('Enter a whole number from 8 to 32.')).toBeInTheDocument()
+    expect(save).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(updateSettings).not.toHaveBeenCalled()
+
+    await user.type(field('Extra claude arguments'), `'`)
+    await user.clear(field('Refresh interval'))
+    await user.type(field('Refresh interval'), '2')
+    await user.clear(field('Terminal font size'))
+    await user.type(field('Terminal font size'), '14')
+    expect(field('Extra claude arguments')).toHaveAttribute('aria-invalid', 'false')
+    expect(save).toBeEnabled()
+    await user.click(save)
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ claudeArgs: ['--append-system-prompt', 'oops'], pollIntervalMs: 2000 }),
+    )
+  })
+
+  it('opens with Ctrl+, and from the palette; Cancel and Esc close without saving', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const updateSettings = vi.spyOn(api, 'updateSettings')
+    render(<App api={api} />)
+    const comma = fireEvent.keyDown(window, { key: ',', ctrlKey: true })
+    expect(comma).toBe(false) // handled, so it never reaches the terminal
+    await user.type(field('Editor command'), 'subl')
+    await user.click(within(dialog()).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    await user.type(screen.getByRole('combobox', { name: 'Search tasks, files and actions' }), 'settings')
+    const palette = screen.getByRole('dialog', { name: 'Command palette' })
+    expect(within(palette).getByRole('option', { name: 'Open settings' })).toHaveTextContent('Ctrl+,')
+    await user.keyboard('{Enter}')
+    expect(field('Editor command')).toHaveValue('') // the cancelled edit is gone
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('keeps the dialog open and shows the error when saving fails', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi({ updateSettings: async () => Promise.reject(new Error('disk full')) })} />)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(within(dialog()).getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('disk full')).toBeInTheDocument()
+    expect(dialog()).toBeInTheDocument()
+  })
+
+  it('polls status at the saved interval', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = repoApi()
+      await api.updateSettings({ pollIntervalMs: 10_000 })
+      const getStatus = vi.spyOn(api, 'getStatus')
+      render(<App api={api} />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100)
+      })
+      getStatus.mockClear()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_000)
+      })
+      expect(getStatus).not.toHaveBeenCalled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500)
+      })
+      expect(getStatus).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('lists Ctrl+, in the shortcut help', async () => {
+    render(<App api={repoApi()} />)
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true })
+    const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(help).getByText('Ctrl+,')).toBeInTheDocument()
+    expect(within(help).getByText('Settings')).toBeInTheDocument()
   })
 })

@@ -1,5 +1,13 @@
-import { MAX_TASK_NOTES, type AppState, type MeManagerApi, type TabInfo, type Theme } from '../../../shared/types'
+import {
+  MAX_TASK_NOTES,
+  type AppState,
+  type MeManagerApi,
+  type Settings,
+  type TabInfo,
+  type Theme,
+} from '../../../shared/types'
 import { branchName, slugify } from '../../../shared/naming'
+import { DEFAULT_SETTINGS, normalizeSettings } from '../../../shared/settings'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from './demoFiles'
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
@@ -20,6 +28,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
   let counter = 0
   const id = (): string => `id-${++counter}`
   const tabs: TabInfo[] = [{ index: 0, name: 'claude', active: true }]
+  let settings: Settings = normalizeSettings(DEFAULT_SETTINGS)
 
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
     const next = clone(state)
@@ -35,6 +44,11 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     getStatus: async () => ({ running: [], missing: [] }),
     checkPrereqs: async () => ({ ok: true, missing: [] }),
     getTmuxSocket: async () => 'me-manager',
+    getSettings: async () => clone(settings),
+    updateSettings: async (patch) => {
+      settings = normalizeSettings({ ...settings, ...patch }, settings)
+      return clone(settings)
+    },
     createTheme: async (name) => {
       state = { ...state, themes: [...state.themes, { id: id(), name, slug: slugify(name), items: [] }] }
       return state

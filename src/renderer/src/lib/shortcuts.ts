@@ -20,7 +20,7 @@ export interface KeyLike {
  * extra, familiar chords for the palette and the help overlay.
  */
 export type ShortcutId =
-  'palette' | 'help' | 'panel' | 'filterSidebar' | 'target' | 'newTab' | 'closeTab' | 'prevTab' | 'nextTab'
+  'palette' | 'help' | 'settings' | 'panel' | 'filterSidebar' | 'target' | 'newTab' | 'closeTab' | 'prevTab' | 'nextTab'
 
 /** `target` carries the 0-based position of the task or folder to select (Mod+1 is index 0). */
 export type Shortcut = { id: Exclude<ShortcutId, 'target'> } | { id: 'target'; index: number }
@@ -68,6 +68,8 @@ const SHORTCUTS: ShortcutDef[] = [
       { shift: true, keys: ['/', '?'], display: '/' },
     ],
   },
+  // Mod+, is the usual "preferences" chord on both platforms; Ctrl+, means nothing to a terminal.
+  { id: 'settings', description: 'Settings', chords: [{ shift: false, keys: [','], codes: ['Comma'], display: ',' }] },
   { id: 'panel', description: 'Toggle files panel', chords: [letter(true, 'E')] },
   { id: 'filterSidebar', description: 'Filter the sidebar', chords: [letter(true, 'F')] },
   {

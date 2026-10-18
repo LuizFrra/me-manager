@@ -67,4 +67,12 @@ describe('createMockApi', () => {
     await expect(api.fileDiff(task, 'src/app.ts')).resolves.toContain('@@')
     await expect(api.listChanges({ themeId: 't', itemId: 'f' })).rejects.toThrow('repository tasks')
   })
+
+  it('keeps settings, normalizing updates like main does', async () => {
+    const api = createMockApi()
+    expect(await api.getSettings()).toMatchObject({ claudeArgs: [], pollIntervalMs: 3000, terminalFontSize: 13 })
+    const next = await api.updateSettings({ claudeArgs: ['--model', 'opus'], terminalFontSize: 99 })
+    expect(next).toMatchObject({ claudeArgs: ['--model', 'opus'], terminalFontSize: 32 })
+    expect(await api.getSettings()).toEqual(next)
+  })
 })

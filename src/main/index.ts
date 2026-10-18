@@ -8,10 +8,11 @@ import { Orchestrator } from './app/orchestrator'
 import { FilesService } from './files/filesService'
 import { GitService } from './git/gitService'
 import { registerIpc } from './ipc'
-import { stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
+import { settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, worktreesRoot } from './paths'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
+import { SettingsService, SettingsStore } from './store/settings'
 import { TmuxService } from './tmux/tmuxService'
 import { isAppUrl, isHttpUrl } from './urls'
 
@@ -82,12 +83,15 @@ async function bootstrap(): Promise<void> {
   const tmux = new TmuxService(TMUX_SOCKET, tmuxConfFile())
   await tmux.ensureConfig()
   ptyService = new PtyService(nodePty.spawn)
+  const settings = new SettingsService(new SettingsStore(settingsFile()))
+  await settings.init()
   const orchestrator = new Orchestrator({
     store: new FileStore(stateFile()),
     git: new GitService(),
     tmux,
     pty: ptyService,
     files: new FilesService(),
+    settings,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
   })

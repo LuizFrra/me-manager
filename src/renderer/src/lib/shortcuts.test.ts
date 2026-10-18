@@ -84,6 +84,7 @@ describe('shortcut labels', () => {
     expect(shortcutHelp(false)).toEqual([
       { keys: ['Ctrl+Shift+P'], description: 'Command palette' },
       { keys: ['Ctrl+Shift+/'], description: 'Keyboard shortcuts' },
+      { keys: ['Ctrl+,'], description: 'Settings' },
       { keys: ['Ctrl+Shift+E'], description: 'Toggle files panel' },
       { keys: ['Ctrl+Shift+F'], description: 'Filter the sidebar' },
       { keys: ['Ctrl+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
@@ -95,6 +96,7 @@ describe('shortcut labels', () => {
     expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
       ['⌘K', '⌘⇧P'],
       ['⌘/', '⌘⇧/'],
+      ['⌘,'],
       ['⌘⇧E'],
       ['⌘⇧F'],
       ['⌘1…9'],
@@ -157,6 +159,13 @@ describe.each([
     expect(shifted('E')).toEqual({ id: 'panel' })
     expect(shifted('F')).toEqual({ id: 'filterSidebar' })
     expect(press('f')).toBeNull()
+  })
+
+  it('opens settings with Mod+, (Ctrl+, on Linux, Cmd+, on macOS)', () => {
+    expect(press(',')).toEqual({ id: 'settings' })
+    expect(press('?', { code: 'Comma' })).toEqual({ id: 'settings' }) // a layout where that key types something else
+    expect(shifted(',')).toBeNull()
+    expect(shortcutLabel('settings', mac)).toBe(mac ? '⌘,' : 'Ctrl+,')
   })
 
   it('adds Mod+K and Mod+/ only on macOS', () => {
