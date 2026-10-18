@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import type { MeManagerApi } from '../../../shared/types'
 import { createWriteOnlyClipboard } from '../lib/clipboardProvider'
 import { isMac, isPanelShortcut } from '../lib/shortcuts'
+import { debounceSettled } from '../lib/settledResize'
 
 export interface TerminalViewProps {
   api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'>
@@ -15,6 +16,9 @@ export interface TerminalViewProps {
 
 // OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
 const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboard.writeText(text))
+
+/** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
+const RESIZE_SETTLE_MS = 100
 
 export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -65,7 +69,9 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
       fit.fit()
       api.ptyResize(term.cols, term.rows)
     }
-    const observer = new ResizeObserver(doFit)
+    // One fit + pty resize after the size settles, not one SIGWINCH per pixel of a drag.
+    const settled = debounceSettled(doFit, RESIZE_SETTLE_MS)
+    const observer = new ResizeObserver(() => settled.schedule())
     observer.observe(host)
     termRef.current = term
     fitRef.current = fit
@@ -73,6 +79,7 @@ export function TerminalView({ api, sessionKey }: TerminalViewProps): React.JSX.
 
     return () => {
       observer.disconnect()
+      settled.cancel()
       offData()
       input.dispose()
       term.dispose()
