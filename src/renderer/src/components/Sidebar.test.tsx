@@ -22,6 +22,7 @@ function renderSidebar(patch: Partial<SidebarProps> = {}): void {
       onRenameTheme={vi.fn()}
       onRemoveTheme={vi.fn()}
       onAddRepo={vi.fn()}
+      onCloneRepo={vi.fn()}
       onAddFolder={vi.fn()}
       onRemoveItem={vi.fn()}
       onAddTask={vi.fn()}

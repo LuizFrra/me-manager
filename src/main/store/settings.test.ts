@@ -22,6 +22,7 @@ const custom: Settings = {
   remoteControl: false,
   skipPermissions: true,
   updateStrategy: 'merge',
+  cloneDirectory: '/home/me/code',
 }
 
 describe('SettingsStore', () => {

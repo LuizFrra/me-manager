@@ -118,6 +118,71 @@ describe('Orchestrator: undoing a removal', () => {
   })
 })
 
+describe('Orchestrator: cloneRepo', () => {
+  /** A theme "Client X"; only the folders in `existing` exist on disk. */
+  async function cloneSetup(): Promise<
+    ReturnType<typeof makeDeps> & { orch: Orchestrator; themeId: string; existing: Set<string> }
+  > {
+    const existing = new Set(['/code'])
+    const ctx = makeDeps({ pathExists: (p) => existing.has(p) })
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    const themeId = (await orch.createTheme('Client X')).themes[0].id
+    return { ...ctx, orch, themeId, existing }
+  }
+  const URL = 'git@github.com:acme/my-api.git'
+
+  it('clones into <parent>/<name>, adds the repo and remembers the parent folder', async () => {
+    const { orch, git, settings, themeId } = await cloneSetup()
+    const s = await orch.cloneRepo(themeId, ` ${URL} `, '/code', ' my-api ')
+    expect(git.calls).toEqual([`clone ${URL} /code/my-api`])
+    expect(s.themes[0].items[0]).toMatchObject({ kind: 'repo', name: 'my-api', path: '/code/my-api', tasks: [] })
+    expect(settings.get().cloneDirectory).toBe('/code')
+  })
+
+  it('checks the URL, name and folders before running git', async () => {
+    const { orch, git, existing, themeId } = await cloneSetup()
+    await expect(orch.cloneRepo(themeId, '-u touch /tmp/x', '/code', 'x')).rejects.toThrow(/start with “-”/)
+    await expect(orch.cloneRepo(themeId, 'ext::sh', '/code', 'x')).rejects.toThrow(/ext::/)
+    await expect(orch.cloneRepo(themeId, URL, '/code', '../x')).rejects.toThrow(/“\/”/)
+    await expect(orch.cloneRepo(themeId, URL, '/code', '..')).rejects.toThrow(/another folder name/)
+    await expect(orch.cloneRepo(themeId, URL, 'code', 'x')).rejects.toThrow('Choose the folder to clone into')
+    await expect(orch.cloneRepo(themeId, URL, '/nope', 'x')).rejects.toThrow('Folder not found: /nope')
+    existing.add('/code/my-api')
+    await expect(orch.cloneRepo(themeId, URL, '/code', 'my-api')).rejects.toThrow('/code/my-api already exists')
+    await expect(orch.cloneRepo('nope', URL, '/code', 'x')).rejects.toThrow(/Theme not found/)
+    expect(git.calls).toEqual([])
+  })
+
+  it('refuses a name the theme already has before cloning', async () => {
+    const { orch, git, themeId } = await cloneSetup()
+    await orch.addFolder(themeId, '/docs/my-api')
+    await expect(orch.cloneRepo(themeId, URL, '/code', 'my-api')).rejects.toThrow(/already exists in this theme/)
+    expect(git.calls).toEqual([])
+  })
+
+  it("adds nothing and keeps the settings when git fails, with git's error", async () => {
+    const { orch, git, store, settings, themeId } = await cloneSetup()
+    git.failClone = 'git clone failed: fatal: repository not found'
+    const saves = store.saved.length
+    await expect(orch.cloneRepo(themeId, URL, '/code', 'my-api')).rejects.toThrow('fatal: repository not found')
+    expect(store.saved.length).toBe(saves)
+    expect((await orch.getState()).themes[0].items).toEqual([])
+    expect(settings.get().cloneDirectory).toBe('')
+  })
+
+  it("doesn't hold up other changes while cloning, and reports a theme removed meanwhile", async () => {
+    const { orch, git, themeId } = await cloneSetup()
+    let release = (): void => {}
+    git.cloneGate = new Promise((r) => (release = r))
+    const cloning = orch.cloneRepo(themeId, URL, '/code', 'my-api')
+    await orch.createTheme('Other') // not queued behind the clone
+    await orch.removeTheme(themeId)
+    release()
+    await expect(cloning).rejects.toThrow(/^Cloned into \/code\/my-api, but could not add it: Theme not found/)
+  })
+})
+
 describe('Orchestrator: createTask', () => {
   it('fetches, creates worktree + session, and saves', async () => {
     const { orch, git, tmux, themeId, repoId } = await setup()

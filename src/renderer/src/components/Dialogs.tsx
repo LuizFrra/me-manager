@@ -9,6 +9,7 @@ import {
   type UnsavedWork,
   type UpdateStrategy,
 } from '../../../shared/types'
+import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
@@ -234,6 +235,193 @@ export function ConfirmRemoveDialog(props: {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * "Clone repository…": a URL, the folder to clone into (the last one used, or picked) and the new folder's name,
+ * taken from the URL until it is edited. Shows a spinner while main clones (there is no progress report), and
+ * stays open with git's error when cloning fails. Can't be closed meanwhile: the clone can't be stopped.
+ */
+export function CloneRepoDialog(props: {
+  themeName: string
+  /** The folder to clone into at first (Settings.cloneDirectory); '' when none was used yet. */
+  initialParent: string
+  pickDirectory: () => Promise<string | null>
+  /** Rejects with the reason when cloning fails. */
+  onClone: (url: string, parentDir: string, name: string) => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  const [url, setUrl] = useState('')
+  const [parent, setParent] = useState(props.initialParent)
+  // null: follow the URL; a string once the user edits the name.
+  const [typedName, setTypedName] = useState<string | null>(null)
+  const [urlTouched, setUrlTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const [error, setError] = useState<string | null>(null)
+  const urlId = useId()
+  const urlHintId = useId()
+  const nameId = useId()
+  const nameHintId = useId()
+  const parentId = useId()
+
+  const name = typedName ?? cloneNameFromUrl(url)
+  const urlError = cloneUrlError(url)
+  const nameError = cloneNameError(name)
+  const showUrlError = urlError !== null && urlTouched && url.trim() !== ''
+  const showNameError = nameError !== null && (typedName !== null || (urlError === null && url.trim() !== ''))
+  const canClone = !busy && urlError === null && nameError === null && parent !== ''
+  const dest = parent && !nameError ? `${parent.replace(/\/+$/, '')}/${name.trim()}` : null
+
+  const pick = async (): Promise<void> => {
+    try {
+      const picked = await props.pickDirectory()
+      if (picked) setParent(picked)
+    } catch (err) {
+      setError(cleanError(err))
+    }
+  }
+
+  const clone = async (): Promise<void> => {
+    setUrlTouched(true)
+    if (busyRef.current || !canClone) return
+    busyRef.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      await props.onClone(url.trim(), parent, name.trim())
+    } catch (err) {
+      setError(cleanError(err))
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="overlay">
+      <form
+        className="dialog clone-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Clone repository into ${props.themeName}`}
+        aria-busy={busy}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void clone()
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          if (!busyRef.current) props.onCancel()
+        }}
+      >
+        <h2>
+          Clone repository <span className="dialog-title-context">into {props.themeName}</span>
+        </h2>
+        <div className="dialog-field">
+          <label htmlFor={urlId}>Repository URL</label>
+          <input
+            id={urlId}
+            type="text"
+            className="mono"
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            aria-describedby={urlHintId}
+            aria-invalid={showUrlError}
+            placeholder="https://github.com/owner/repo.git"
+            disabled={busy}
+            value={url}
+            onChange={(e) => {
+              setUrl(e.target.value)
+              setError(null)
+            }}
+            onBlur={() => setUrlTouched(true)}
+          />
+          {showUrlError ? (
+            <p id={urlHintId} className="dialog-field-hint dialog-field-error" role="alert">
+              {urlError}
+            </p>
+          ) : (
+            <p id={urlHintId} className="dialog-field-hint">
+              https://, ssh://, git@host:path or file://
+            </p>
+          )}
+        </div>
+        <div className="dialog-field">
+          <label htmlFor={parentId}>Clone into</label>
+          <div className="clone-parent">
+            <input
+              id={parentId}
+              type="text"
+              className="mono"
+              readOnly
+              placeholder="No folder chosen"
+              title={parent || undefined}
+              value={parent}
+            />
+            <button type="button" onClick={() => void pick()} disabled={busy}>
+              Choose…
+            </button>
+          </div>
+        </div>
+        <div className="dialog-field">
+          <label htmlFor={nameId}>Folder name</label>
+          <input
+            id={nameId}
+            type="text"
+            className="mono"
+            spellCheck={false}
+            autoComplete="off"
+            aria-describedby={nameHintId}
+            aria-invalid={showNameError}
+            placeholder="from the URL"
+            disabled={busy}
+            value={name}
+            onChange={(e) => {
+              setTypedName(e.target.value)
+              setError(null)
+            }}
+          />
+          {showNameError ? (
+            <p id={nameHintId} className="dialog-field-hint dialog-field-error" role="alert">
+              {nameError}
+            </p>
+          ) : (
+            <p id={nameHintId} className="dialog-field-hint">
+              {dest ? (
+                <>
+                  Clones to <code>{dest}</code>, which must not exist yet.
+                </>
+              ) : (
+                'A new folder, named after the repository unless you change it.'
+              )}
+            </p>
+          )}
+        </div>
+        {busy && (
+          <p className="clone-busy" role="status">
+            Cloning… Large repositories can take a few minutes.
+          </p>
+        )}
+        {error && (
+          <div className="dialog-warning clone-error" role="alert">
+            <strong>Could not clone</strong>
+            <p>{error}</p>
+          </div>
+        )}
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={!canClone}>
+            {busy ? 'Cloning…' : 'Clone'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }

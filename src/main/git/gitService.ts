@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
+import { checkCloneUrl } from '../../shared/clone'
 import type { CommitResult, TaskGitStatus, UnsavedWork, UpdateResult, UpdateStrategy } from '../../shared/types'
 import type { GitApi } from '../contracts'
 import { CommandError, run } from '../exec'
@@ -19,6 +20,14 @@ const COMMIT_TIMEOUT_MS = 120_000
 const MAX_ERROR_SUMMARY = 500
 /** A rebase or merge replays commits (and may run hooks or sign them); it still mustn't hang forever. */
 const UPDATE_TIMEOUT_MS = 120_000
+/** A clone can be big and the network slow, but a GUI app can't wait forever for one that hangs. */
+export const CLONE_TIMEOUT_MS = 10 * 60_000
+/**
+ * Off for every clone, whatever the user's config says: `ext::` runs a command and `fd::` reads file descriptors.
+ * checkCloneUrl refuses them already; this is the second lock.
+ */
+const CLONE_PROTOCOL_GUARD = ['-c', 'protocol.ext.allow=never', '-c', 'protocol.fd.allow=never']
+
 /** Message of the refusal to update a worktree with uncommitted changes. */
 export const UNCOMMITTED_REFUSAL = 'Commit or stash your changes first'
 
@@ -105,7 +114,18 @@ export function parseBranchRefs(out: string): string[] {
   return [...remote.sort(byName), ...local.filter((name) => !remoteNames.has(name)).sort(byName)]
 }
 
+export interface GitServiceOptions {
+  /** Overrides CLONE_TIMEOUT_MS (for tests). */
+  cloneTimeoutMs?: number
+}
+
 export class GitService implements GitApi {
+  private readonly cloneTimeoutMs: number
+
+  constructor(options: GitServiceOptions = {}) {
+    this.cloneTimeoutMs = options.cloneTimeoutMs ?? CLONE_TIMEOUT_MS
+  }
+
   private git(cwd: string, args: string[]): Promise<string> {
     return run('git', ['-C', cwd, ...args])
   }
@@ -211,6 +231,30 @@ export class GitService implements GitApi {
       return true
     } catch {
       return false
+    }
+  }
+
+  async clone(url: string, dest: string): Promise<void> {
+    const checked = checkCloneUrl(url)
+    if (!isAbsolute(dest)) throw new Error(`Invalid clone destination: ${dest}`)
+    // Created here, not by git: mkdir fails on a folder that exists, so a failed clone only ever removes ours.
+    try {
+      await mkdir(dest)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') throw new Error(`${dest} already exists; choose another folder name`, { cause: err })
+      if (code === 'ENOENT') throw new Error(`Folder not found: ${dirname(dest)}`, { cause: err })
+      throw err
+    }
+    try {
+      await run('git', [...CLONE_PROTOCOL_GUARD, 'clone', '--', checked, dest], {
+        cwd: dirname(dest),
+        env: { ...GIT_ENV, ...NON_INTERACTIVE_ENV },
+        timeoutMs: this.cloneTimeoutMs,
+      })
+    } catch (err) {
+      await rm(dest, { recursive: true, force: true }).catch(() => {})
+      throw commandFailure('git clone', err)
     }
   }
 

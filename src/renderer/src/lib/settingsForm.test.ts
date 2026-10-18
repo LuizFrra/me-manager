@@ -46,7 +46,8 @@ describe('settings form', () => {
         updateStrategy: 'merge',
       },
     })
-    expect(parseForm(form())).toEqual({ settings: DEFAULT_SETTINGS })
+    // toEqual skips the undefined cloneDirectory: the dialog never edits it.
+    expect(parseForm(form())).toEqual({ settings: { ...DEFAULT_SETTINGS, cloneDirectory: undefined } })
   })
 
   it('reports each invalid field', () => {

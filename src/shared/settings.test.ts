@@ -14,6 +14,7 @@ describe('normalizeSettings', () => {
       remoteControl: true,
       skipPermissions: true,
       updateStrategy: 'rebase',
+      cloneDirectory: '',
     })
   })
 
@@ -27,6 +28,7 @@ describe('normalizeSettings', () => {
       remoteControl: false,
       skipPermissions: false,
       updateStrategy: 'merge',
+      cloneDirectory: ' /home/me/code ',
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -39,9 +41,11 @@ describe('normalizeSettings', () => {
       remoteControl: false,
       skipPermissions: false,
       updateStrategy: 'merge',
+      cloneDirectory: '/home/me/code',
     })
     expect(Object.keys(s).sort()).toEqual([
       'claudeArgs',
+      'cloneDirectory',
       'editorCommand',
       'notifications',
       'pollIntervalMs',
@@ -50,6 +54,15 @@ describe('normalizeSettings', () => {
       'terminalFontSize',
       'updateStrategy',
     ])
+  })
+
+  it('keeps only an absolute clone directory', () => {
+    for (const cloneDirectory of ['code', 'a\0b', 3, null]) {
+      expect(normalizeSettings({ cloneDirectory }).cloneDirectory).toBe('')
+    }
+    expect(
+      normalizeSettings({ cloneDirectory: '' }, { ...DEFAULT_SETTINGS, cloneDirectory: '/x' }).cloneDirectory,
+    ).toBe('')
   })
 
   it('accepts only known update strategies', () => {

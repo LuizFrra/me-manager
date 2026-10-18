@@ -25,6 +25,7 @@ import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
 import {
+  CloneRepoDialog,
   CommitDialog,
   ConfirmRemoveDialog,
   ConflictDialog,
@@ -75,6 +76,7 @@ type Dialog =
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | { kind: 'settings' }
+  | { kind: 'clone'; themeId: string; themeName: string }
   | {
       kind: 'confirmRemove'
       what: RemovalKind
@@ -476,6 +478,27 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (path) await update(() => add(themeId, path))
   }
 
+  const cloneRepo = (themeId: string): void => {
+    const theme = state.themes.find((t) => t.id === themeId)
+    if (theme) setDialog({ kind: 'clone', themeId, themeName: theme.name })
+  }
+
+  /** Rejects (to the dialog, which shows why) when the clone fails. */
+  const doClone = async (themeId: string, url: string, parentDir: string, name: string): Promise<void> => {
+    const next = await api.cloneRepo(themeId, url, parentDir, name)
+    setState(next)
+    setSettings((s) => ({ ...s, cloneDirectory: parentDir })) // main saved it too: the default next time
+    setDialog(null)
+    setCollapsed((prev) => {
+      if (!prev.has(themeId)) return prev
+      const open = new Set(prev)
+      open.delete(themeId)
+      return open
+    })
+    const theme = next.themes.find((t) => t.id === themeId)
+    showInfo(`Cloned ${name}${theme ? ` into ${theme.name}` : ''}`)
+  }
+
   const removeTask = async (themeId: string, repoId: string, taskId: string, taskName: string): Promise<void> => {
     const work = await attempt(() => api.checkTaskRemoval(themeId, repoId, taskId))
     if (!work) return
@@ -794,7 +817,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     return commands
   }
 
-  const saveSettings = async (next: Settings): Promise<void> => {
+  const saveSettings = async (next: Partial<Settings>): Promise<void> => {
     const saved = await attempt(() => api.updateSettings(next))
     if (!saved) return
     setSettings(saved)
@@ -884,6 +907,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onRenameTheme={renameTheme}
         onRemoveTheme={removeTheme}
         onAddRepo={(themeId) => void addPath(themeId, api.addRepo)}
+        onCloneRepo={cloneRepo}
         onAddFolder={(themeId) => void addPath(themeId, api.addFolder)}
         onRemoveItem={removeItem}
         onAddTask={newTask}
@@ -1003,6 +1027,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           taskName={dialog.taskName}
           work={dialog.work}
           onConfirm={dialog.onConfirm}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'clone' && (
+        <CloneRepoDialog
+          themeName={dialog.themeName}
+          initialParent={settings.cloneDirectory}
+          pickDirectory={() => api.pickDirectory()}
+          onClone={(url, parentDir, name) => doClone(dialog.themeId, url, parentDir, name)}
           onCancel={() => setDialog(null)}
         />
       )}

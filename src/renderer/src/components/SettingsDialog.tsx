@@ -1,7 +1,7 @@
 import { useId, useMemo, useRef, useState } from 'react'
 import { FONT_SIZE_LIMITS } from '../../../shared/settings'
 import type { Settings, UpdateStrategy } from '../../../shared/types'
-import { parseForm, POLL_SECONDS, toForm, type SettingsForm } from '../lib/settingsForm'
+import { parseForm, POLL_SECONDS, toForm, type EditableSettings, type SettingsForm } from '../lib/settingsForm'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 
 /** A labelled field with an optional hint, and its validation message (which also marks the input invalid). */
@@ -45,7 +45,8 @@ const UPDATE_CHOICES: { value: UpdateStrategy; label: string; hint: string }[] =
 /** Edits the app settings. Fields are checked as you type; Save is off while one is invalid. Esc cancels. */
 export function SettingsDialog(props: {
   settings: Settings
-  onSave: (settings: Settings) => Promise<void>
+  /** The edited settings, a patch over the current ones. */
+  onSave: (settings: EditableSettings) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
   const [form, setForm] = useState<SettingsForm>(() => toForm(props.settings))

@@ -22,6 +22,7 @@ export interface SidebarProps {
   onRenameTheme: (themeId: string, currentName: string) => void
   onRemoveTheme: (themeId: string) => void
   onAddRepo: (themeId: string) => void
+  onCloneRepo: (themeId: string) => void
   onAddFolder: (themeId: string) => void
   onRemoveItem: (themeId: string, itemId: string) => void
   onAddTask: (themeId: string, repoId: string) => void
@@ -113,6 +114,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                     onClick={() => p.onAddRepo(theme.id)}
                   >
                     📦+
+                  </button>
+                  <button
+                    aria-label={`Clone repository into ${theme.name}`}
+                    title="Clone repository…"
+                    onClick={() => p.onCloneRepo(theme.id)}
+                  >
+                    📦⤓
                   </button>
                   <button
                     aria-label={`Add folder to ${theme.name}`}

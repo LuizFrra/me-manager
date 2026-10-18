@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { isAbsolute, join } from 'node:path'
+import { checkCloneName, checkCloneUrl } from '../../shared/clone'
 import { MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT } from '../../shared/types'
 import type {
   AppState,
@@ -401,6 +403,33 @@ export class Orchestrator implements AppService {
       if (!root) throw new Error(`Not a git repository: ${path}`)
       return this.commit(m.addRepo(this.state, themeId, root))
     })
+  }
+
+  /**
+   * Everything is checked before git runs: the URL, the name, the parent folder, and that the theme will take the
+   * repo (its path and name are free). The clone itself runs outside the state queue, so a slow one doesn't hold
+   * up other changes; the repo is added once it is done.
+   */
+  async cloneRepo(themeId: string, url: string, parentDir: string, name: string): Promise<AppState> {
+    const checkedUrl = checkCloneUrl(url)
+    const folder = checkCloneName(name)
+    if (typeof parentDir !== 'string' || !isAbsolute(parentDir) || parentDir.includes('\0')) {
+      throw new Error('Choose the folder to clone into')
+    }
+    if (!this.deps.pathExists(parentDir)) throw new Error(`Folder not found: ${parentDir}`)
+    const dest = join(parentDir, folder)
+    if (this.deps.pathExists(dest)) throw new Error(`${dest} already exists; choose another folder name`)
+    m.addRepo(this.state, themeId, dest) // throws now, not after the clone, if the theme won't take it
+    await this.deps.git.clone(checkedUrl, dest)
+    const root = (await this.deps.git.repoRoot(dest)) ?? dest
+    const next = await this.exclusive(async () => this.commit(m.addRepo(this.state, themeId, root))).catch((err) => {
+      // The theme changed while cloning; the clone is complete, so it stays where it is.
+      throw new Error(`Cloned into ${dest}, but could not add it: ${err instanceof Error ? err.message : err}`, {
+        cause: err,
+      })
+    })
+    await this.deps.settings.update({ cloneDirectory: parentDir }).catch(() => {}) // only a default for next time
+    return next
   }
 
   async addFolder(themeId: string, path: string): Promise<AppState> {

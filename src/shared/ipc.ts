@@ -17,6 +17,7 @@ export const INVOKE_METHODS = [
   'restoreTheme',
   'pickDirectory',
   'addRepo',
+  'cloneRepo',
   'addFolder',
   'removeItem',
   'restoreItem',
