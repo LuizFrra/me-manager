@@ -8,6 +8,7 @@ import {
   claudeContinueCommand,
 } from './orchestrator'
 import type { AppState, Target, Task } from '../../shared/types'
+import { emptyUsageSummary } from '../../shared/usage'
 import { makeDeps } from './fakes'
 
 type Ctx = ReturnType<typeof makeDeps> & { orch: Orchestrator; themeId: string; repoId: string }
@@ -629,5 +630,67 @@ describe('Orchestrator: open in editor / file manager', () => {
     const { orch, launcher, taskTarget } = await withTargets()
     launcher.fail = 'No editor found — set one in Settings'
     await expect(orch.openInEditor(taskTarget)).rejects.toThrow('No editor found — set one in Settings')
+  })
+})
+
+describe('Orchestrator: usage', () => {
+  const summary = (cost: number): ReturnType<typeof emptyUsageSummary> => {
+    const s = emptyUsageSummary()
+    s.all.cost = cost
+    return s
+  }
+
+  async function withTargets(): Promise<Ctx & { taskTarget: Target; folderTarget: Target; otherTheme: string }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    const s = await ctx.orch.addFolder(ctx.themeId, '/docs/notes')
+    const other = await ctx.orch.createTheme('Personal')
+    const otherTheme = other.themes[1].id
+    await ctx.orch.addFolder(otherTheme, '/home/me/blog')
+    return {
+      ...ctx,
+      otherTheme,
+      taskTarget: { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id },
+      folderTarget: { themeId: ctx.themeId, itemId: s.themes[0].items[1].id },
+    }
+  }
+
+  it("returns a target's usage, asking for every known root so each message counts once", async () => {
+    const { orch, usage, taskTarget, folderTarget } = await withTargets()
+    usage.byRoot['/wt/client-x/my-api/fix'] = summary(1.5)
+    usage.byRoot['/docs/notes'] = summary(0.25)
+    expect((await orch.getUsage(taskTarget)).all.cost).toBe(1.5)
+    expect((await orch.getUsage(folderTarget)).all.cost).toBe(0.25)
+    expect(usage.calls[0].roots).toEqual(['/wt/client-x/my-api/fix', '/docs/notes', '/home/me/blog'])
+  })
+
+  it('works for a target whose folder is gone, but not for a repo without a task', async () => {
+    const ctx = await withTargets()
+    ctx.deps.pathExists = () => false
+    expect((await ctx.orch.getUsage(ctx.folderTarget)).all.messages).toBe(0)
+    await expect(ctx.orch.getUsage({ themeId: ctx.themeId, itemId: ctx.repoId })).rejects.toThrow(/Choose a task/)
+  })
+
+  it('reports every target per theme, with theme and grand totals', async () => {
+    const { orch, usage, themeId, otherTheme } = await withTargets()
+    usage.byRoot['/home/me/blog'] = summary(3)
+    usage.byGroup.total = summary(10)
+    usage.byGroup[`theme:${themeId}`] = summary(7)
+    const report = await orch.getUsageReport()
+    expect(usage.calls[0].groups).toEqual({
+      total: ['/wt/client-x/my-api/fix', '/docs/notes', '/home/me/blog'],
+      [`theme:${themeId}`]: ['/wt/client-x/my-api/fix', '/docs/notes'],
+      [`theme:${otherTheme}`]: ['/home/me/blog'],
+    })
+    expect(report.total.all.cost).toBe(10)
+    expect(report.themes.map((t) => [t.name, t.usage.all.cost])).toEqual([
+      ['Client X', 7],
+      ['Personal', 0],
+    ])
+    expect(report.themes[0].targets.map((t) => [t.kind, t.label, t.path])).toEqual([
+      ['task', 'my-api › fix', '/wt/client-x/my-api/fix'],
+      ['folder', 'notes', '/docs/notes'],
+    ])
+    expect(report.themes[1].targets[0].usage.all.cost).toBe(3)
   })
 })

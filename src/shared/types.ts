@@ -153,6 +153,14 @@ export interface MeManagerApi {
   /** Opens an http(s) URL in the system browser; rejects other schemes. */
   openExternal(url: string): Promise<void>
 
+  /**
+   * Claude usage of one task or folder, from Claude Code's transcripts (`~/.claude/projects`). A message counts
+   * for the most specific task or folder whose path contains its working directory.
+   */
+  getUsage(target: Target): Promise<UsageSummary>
+  /** Usage of every task and folder, per theme, with totals. Cheap to call again: it is computed from a cache. */
+  getUsageReport(): Promise<UsageReport>
+
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
   onPtyData(cb: (data: string) => void): () => void

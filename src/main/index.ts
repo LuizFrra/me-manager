@@ -15,6 +15,7 @@ import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
 import { SettingsService, SettingsStore } from './store/settings'
 import { TmuxService } from './tmux/tmuxService'
+import { UsageService } from './usage/usageService'
 import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
@@ -104,6 +105,7 @@ async function bootstrap(): Promise<void> {
     files: new FilesService(),
     settings,
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
+    usage: new UsageService(), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
   })
