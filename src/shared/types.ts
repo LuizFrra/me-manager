@@ -193,3 +193,65 @@ export interface ChangeList {
   /** Set when the base ref was missing and only uncommitted changes vs HEAD are shown. */
   fallback?: 'uncommitted-only'
 }
+
+/** Usage periods, in the local timezone: today, the last 7 days (today included), this calendar month, all time. */
+export type UsagePeriod = 'today' | 'week' | 'month' | 'all'
+
+export const USAGE_PERIODS: readonly UsagePeriod[] = ['today', 'week', 'month', 'all']
+
+/** Token counts and estimated cost of Claude Code messages (from its transcripts), each message counted once. */
+export interface UsageTotals {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite5m: number
+  cacheWrite1h: number
+  /** Estimated USD cost at API prices, for the priced models only. */
+  cost: number
+  /** Tokens of models without a known price (see shared/pricing.ts); not in `cost`. */
+  unpricedTokens: number
+  messages: number
+  /** Distinct Claude Code sessions. */
+  sessions: number
+  /** ISO timestamps of the first and last message; null when there are none. */
+  firstSeen: string | null
+  lastSeen: string | null
+}
+
+export interface UsageModelTotals extends UsageTotals {
+  /** The model id as Claude Code recorded it, e.g. `claude-opus-5-5`. */
+  model: string
+  priced: boolean
+}
+
+export interface UsageBucket extends UsageTotals {
+  /** Per model, costliest first (then by tokens). */
+  models: UsageModelTotals[]
+}
+
+/** One task's, folder's, theme's or the grand total's usage, per period. */
+export type UsageSummary = Record<UsagePeriod, UsageBucket>
+
+export interface UsageTargetReport {
+  target: Target
+  kind: 'task' | 'folder'
+  /** "Repo › Task" or the folder's name. */
+  label: string
+  /** The worktree or folder path. */
+  path: string
+  usage: UsageSummary
+}
+
+export interface UsageThemeReport {
+  themeId: string
+  name: string
+  usage: UsageSummary
+  targets: UsageTargetReport[]
+}
+
+export interface UsageReport {
+  /** ISO time the report was computed. */
+  generatedAt: string
+  total: UsageSummary
+  themes: UsageThemeReport[]
+}
