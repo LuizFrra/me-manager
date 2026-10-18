@@ -1,3 +1,4 @@
+import type { UiStateStoreApi } from './store/uiState'
 import type {
   AppState,
   ChangeList,
@@ -181,6 +182,8 @@ export interface OrchestratorDeps {
   pty: PtyApi
   files: FilesApi
   settings: SettingsApi
+  /** ui-state.json (see MeManagerApi.getUiState). */
+  ui: UiStateStoreApi
   launcher: LauncherApi
   usage: UsageApi
   worktreesRoot: string

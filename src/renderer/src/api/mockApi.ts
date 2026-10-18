@@ -11,6 +11,7 @@ import {
   type Task,
   type TaskGitStatus,
   type Theme,
+  type UiState,
 } from '../../../shared/types'
 import { branchName, slugify, targetKey } from '../../../shared/naming'
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../../shared/settings'
@@ -21,6 +22,7 @@ import {
   normalizeSearchOptions,
   searchPattern,
 } from '../../../shared/search'
+import { emptyUiState, normalizeUiState } from '../../../shared/uiState'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -62,6 +64,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
   const id = (): string => `id-${++counter}`
   const tabs: TabInfo[] = [{ index: 0, name: 'claude', active: true }]
   let settings: Settings = normalizeSettings(DEFAULT_SETTINGS)
+  let uiState: UiState = emptyUiState()
 
   /** Tasks that have a demo pull request, and those already updated from their base. */
   const prs = new Set<string>()
@@ -96,6 +99,11 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     },
     checkPrereqs: async () => ({ ok: true, missing: [] }),
     getTmuxSocket: async () => 'me-manager',
+    // Normalized against the state on the way out and in, like main does.
+    getUiState: async () => normalizeUiState(clone(uiState), state),
+    saveUiState: async (next) => {
+      uiState = normalizeUiState(clone(next), state)
+    },
     getSettings: async () => clone(settings),
     updateSettings: async (patch) => {
       settings = normalizeSettings({ ...settings, ...patch }, settings)

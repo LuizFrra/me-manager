@@ -1,4 +1,6 @@
-export type PanelTab = 'files' | 'changes' | 'search'
+import type { PanelTabName } from '../../../shared/types'
+
+export type PanelTab = PanelTabName
 
 /** The Search tab's query and toggles. */
 export interface SearchState {

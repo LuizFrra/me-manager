@@ -182,6 +182,35 @@ export function hasUnsavedWork(work: UnsavedWork): boolean {
   return work.uncommittedFiles.length > 0 || work.unpushedCommits.length > 0 || Boolean(work.warning)
 }
 
+/** The side panel's tabs. */
+export type PanelTabName = 'files' | 'changes' | 'search'
+
+/** What the side panel showed for one target, remembered across restarts. */
+export interface UiPanelState {
+  open: boolean
+  tab: PanelTabName
+  /** The selected file (root-relative). */
+  selected?: string
+}
+
+/**
+ * The UI as it was left, restored at the next start (ui-state.json next to state.json). Always normalized against
+ * the current AppState: see normalizeUiState.
+ */
+export interface UiState {
+  version: 1
+  /** The selected task or folder. */
+  selected?: Target
+  /** Ids of collapsed themes and repos. */
+  collapsed: string[]
+  /** Side panel state by targetKey, least recently changed first. */
+  panels: Record<string, UiPanelState>
+  /** The side panel's width, as a fraction of the workspace. */
+  panelWidth?: number
+  /** The sidebar filter's text; absent when empty. */
+  sidebarFilter?: string
+}
+
 /** The API the renderer sees as `window.api`. */
 export interface MeManagerApi {
   getState(): Promise<AppState>
@@ -194,6 +223,11 @@ export interface MeManagerApi {
   checkPrereqs(): Promise<PrereqResult>
   /** The `tmux -L` socket name the app's sessions live on, for "copy attach command". */
   getTmuxSocket(): Promise<string>
+
+  /** The UI state saved by the last saveUiState, normalized: targets that no longer exist are dropped. */
+  getUiState(): Promise<UiState>
+  /** Normalizes (see normalizeUiState) and saves the UI state for the next start. Saves run one at a time. */
+  saveUiState(state: UiState): Promise<void>
 
   getSettings(): Promise<Settings>
   /** Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result. */

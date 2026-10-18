@@ -1241,3 +1241,51 @@ describe('Orchestrator: update from base', () => {
     )
   })
 })
+
+describe('Orchestrator: UI state', () => {
+  it('hands back the saved UI state, without targets that are gone', async () => {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
+    ctx.ui.stored = {
+      version: 1,
+      selected: target,
+      collapsed: [ctx.themeId, 'removed-repo'],
+      panels: { [task.id]: { open: true, tab: 'changes', selected: 'a.ts' }, removed: { open: true, tab: 'files' } },
+      sidebarFilter: 'fix',
+    }
+    await expect(ctx.orch.getUiState()).resolves.toEqual({
+      version: 1,
+      selected: target,
+      collapsed: [ctx.themeId],
+      panels: { [task.id]: { open: true, tab: 'changes', selected: 'a.ts' } },
+      sidebarFilter: 'fix',
+    })
+    await ctx.orch.removeTask(ctx.themeId, ctx.repoId, task.id, false)
+    await expect(ctx.orch.getUiState()).resolves.toEqual({
+      version: 1,
+      collapsed: [ctx.themeId],
+      panels: {},
+      sidebarFilter: 'fix',
+    })
+  })
+
+  it('normalizes what the renderer sends before saving it', async () => {
+    const ctx = await setup()
+    await ctx.orch.saveUiState({
+      version: 1,
+      selected: { themeId: ctx.themeId, itemId: ctx.repoId, taskId: 'nope' },
+      collapsed: [ctx.repoId, 'x'],
+      panels: {},
+      panelWidth: 9,
+      junk: true,
+    } as never)
+    expect(ctx.ui.saved).toEqual([{ version: 1, collapsed: [ctx.repoId], panels: {} }])
+  })
+
+  it('treats an unreadable store as an empty UI state', async () => {
+    const ctx = await setup()
+    ctx.ui.stored = 'garbage'
+    await expect(ctx.orch.getUiState()).resolves.toEqual({ version: 1, collapsed: [], panels: {} })
+  })
+})

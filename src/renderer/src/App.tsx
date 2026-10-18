@@ -11,6 +11,7 @@ import type {
   Target,
   Task,
   TaskGitStatus,
+  UiState,
   UnsavedWork,
   UpdateResult,
   UsageSummary,
@@ -41,7 +42,7 @@ import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { useToasts } from './lib/toasts'
 import type { GitActionKind } from './lib/gitActions'
 import { plural } from './lib/gitStatus'
-import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
+import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
 import { filterSidebar } from './lib/sidebarFilter'
@@ -106,6 +107,8 @@ const RENAME_NOTE = 'The branch and folder keep their original name.'
 const EMPTY: AppState = { version: 1, themes: [] }
 /** Terminal zoom saves the font size once the keys have been still this long. */
 export const ZOOM_SAVE_MS = 500
+/** UI state (selection, collapsed groups, panels, filter) is saved once it has been still this long. */
+export const UI_SAVE_MS = 500
 /** The header's usage badge refreshes this often: reading transcripts costs more than the status poll. */
 export const USAGE_POLL_MS = 10_000
 
@@ -166,6 +169,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (!target) return
     const key = targetKey(target)
     const next = { ...(panelsRef.current.get(key) ?? DEFAULT_PANEL), ...patch }
+    // Re-inserted, so the map runs from least to most recently changed (the saved UI state keeps the newest).
+    panelsRef.current.delete(key)
     panelsRef.current.set(key, next)
     setPanel(next)
   }, [])
@@ -266,7 +271,6 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   useEffect(() => {
     checkPrereqs()
-    void attempt(async () => setState(await api.getState()))
     api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
     api.getGitTools().then(setGitTools, () => {}) // without it, "PR" says gh is missing
     void attempt(async () => setSettings(await api.getSettings()))
@@ -295,15 +299,99 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [api, refresh],
   )
 
-  const open = async (target: Target): Promise<void> => {
+  /** `quiet`: a failure selects nothing instead of showing an error (restoring the last selection at start). */
+  const open = async (target: Target, { quiet = false } = {}): Promise<void> => {
     select(target)
     setSessionEnded(false)
     setTabs([])
-    const result = await attempt(() => api.openTarget(target))
+    const result = quiet
+      ? await api.openTarget(target).catch(() => undefined)
+      : await attempt(() => api.openTarget(target))
     if (!sameTarget(selectedRef.current, target)) return
+    if (result === undefined && quiet) {
+      select(null)
+      return
+    }
     setTabs(result ?? [])
     refresh()
   }
+
+  // The UI as it was left (ui-state.json in main): restored once at start, then saved debounced and on unload.
+  // Nothing is saved before the restore has run, so a slow start can't overwrite what was saved with defaults.
+  const uiRestored = useRef(false)
+  const uiSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const uiSnapshot = useLatestCallback((): UiState => ({
+    version: 1,
+    ...(selectedRef.current ? { selected: selectedRef.current } : {}),
+    collapsed: [...collapsed],
+    panels: Object.fromEntries(
+      [...panelsRef.current].map(([key, e]) => [
+        key,
+        { open: e.open, tab: e.tab, ...(e.selected ? { selected: e.selected } : {}) },
+      ]),
+    ),
+    panelWidth: panelFraction,
+    ...(sidebarFilter.trim() ? { sidebarFilter } : {}),
+  }))
+  const saveUiNow = useLatestCallback((): void => {
+    if (uiSaveTimer.current === null) return
+    clearTimeout(uiSaveTimer.current)
+    uiSaveTimer.current = null
+    api.saveUiState(uiSnapshot()).catch(() => {}) // not worth an error: the UI just isn't remembered
+  })
+
+  /**
+   * Applies the saved UI state: collapsed groups, sidebar filter, panel entries and width, then the selection, which
+   * is opened only if it still exists and its folder is there; otherwise nothing is selected, without an error.
+   */
+  const restoreUi = useLatestCallback(async (loaded: AppState | undefined): Promise<void> => {
+    try {
+      if (!loaded) return
+      const [ui, live] = await Promise.all([api.getUiState(), api.getStatus().catch(() => null)])
+      setCollapsed(new Set(ui.collapsed))
+      if (ui.sidebarFilter) setSidebarFilter((current) => current || (ui.sidebarFilter ?? ''))
+      for (const [key, entry] of Object.entries(ui.panels)) {
+        if (!panelsRef.current.has(key)) panelsRef.current.set(key, { ...DEFAULT_PANEL, ...entry })
+      }
+      if (ui.panelWidth !== undefined) setPanelFraction(clampFraction(ui.panelWidth))
+      const target = ui.selected
+      // The user may have picked something while this loaded: theirs wins.
+      if (!target || selectedRef.current || !resolveTarget(loaded, target)) return
+      if (live?.missing.includes(targetKey(target))) return
+      void open(target, { quiet: true })
+    } catch {
+      // No saved UI state to restore: start as usual.
+    } finally {
+      uiRestored.current = true
+    }
+  })
+
+  // The app state, then the UI as it was left.
+  useEffect(() => {
+    void (async () => {
+      const loaded = await attempt(() => api.getState())
+      if (loaded) setState(loaded)
+      await restoreUi(loaded)
+    })()
+  }, [api, attempt, restoreUi])
+
+  useEffect(() => {
+    if (!uiRestored.current) return
+    if (uiSaveTimer.current !== null) clearTimeout(uiSaveTimer.current)
+    uiSaveTimer.current = setTimeout(() => {
+      uiSaveTimer.current = null
+      api.saveUiState(uiSnapshot()).catch(() => {})
+    }, UI_SAVE_MS)
+  }, [api, uiSnapshot, selected, collapsed, sidebarFilter, panel, panelFraction])
+
+  // A save still waiting goes out when the window closes or reloads (and if the App unmounts).
+  useEffect(() => {
+    window.addEventListener('beforeunload', saveUiNow)
+    return () => {
+      window.removeEventListener('beforeunload', saveUiNow)
+      saveUiNow()
+    }
+  }, [saveUiNow])
 
   // A desktop notification was clicked: show its target, expanding its theme and repo if they are collapsed.
   const onSelectTarget = useLatestCallback((target: Target): void => {

@@ -24,12 +24,14 @@ import type {
   TaskGitStatus,
   UnsavedWork,
   UpdateResult,
+  UiState,
   UpdateStrategy,
   UsageReport,
   UsageSummary,
   UsageTargetReport,
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
+import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
 import { mapLimit } from '../concurrency'
@@ -258,6 +260,16 @@ export class Orchestrator implements AppService {
   /** The target the terminal is attached to (what the user has selected), or null. Main-process only. */
   currentTarget(): Target | null {
     return this.current
+  }
+
+  /** Checked against the current state, so a removed task or theme is never handed back. */
+  async getUiState(): Promise<UiState> {
+    return normalizeUiState(await this.deps.ui.load(), this.state)
+  }
+
+  /** From the renderer: normalized before it is written. Doesn't wait for state mutations. */
+  async saveUiState(state: UiState): Promise<void> {
+    await this.deps.ui.save(normalizeUiState(state, this.state))
   }
 
   async getSettings(): Promise<Settings> {

@@ -10,6 +10,7 @@ import type {
   TabInfo,
   TaskGitStatus,
   UnsavedWork,
+  UiState,
   UpdateResult,
   UpdateStrategy,
   UsageSummary,
@@ -30,6 +31,7 @@ import { GH_INSTALL_HINT } from '../../shared/git'
 import { emptyUsageSummary } from '../../shared/usage'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
+import type { UiStateStoreApi } from '../store/uiState'
 import type { Settings } from '../../shared/types'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
 
@@ -51,6 +53,19 @@ export const TEST_SETTINGS: Settings = {
   claudeArgs: [],
   remoteControl: false,
   skipPermissions: false,
+}
+
+/** UI state in memory; `stored` is what load() returns, unchecked like a file's contents. */
+export class MemoryUiStore implements UiStateStoreApi {
+  saved: UiState[] = []
+  constructor(public stored: unknown = { version: 1, collapsed: [], panels: {} }) {}
+  async load(): Promise<unknown> {
+    return this.stored
+  }
+  async save(state: UiState): Promise<void> {
+    this.stored = state
+    this.saved.push(state)
+  }
 }
 
 export class MemorySettingsStore implements SettingsStoreApi {
@@ -327,6 +342,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   pty: FakePty
   files: FakeFiles
   settings: SettingsService
+  ui: MemoryUiStore
   launcher: FakeLauncher
   usage: FakeUsage
 } {
@@ -339,6 +355,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const settings = new SettingsService(new MemorySettingsStore(), TEST_SETTINGS)
   const launcher = new FakeLauncher()
   const usage = new FakeUsage()
+  const ui = new MemoryUiStore()
   const deps: OrchestratorDeps = {
     store,
     git,
@@ -347,11 +364,12 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     pty,
     files,
     settings,
+    ui,
     launcher,
     usage,
     worktreesRoot: '/wt',
     pathExists: () => true,
     ...overrides,
   }
-  return { deps, store, git, gh, tmux, pty, files, settings, launcher, usage }
+  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage }
 }
