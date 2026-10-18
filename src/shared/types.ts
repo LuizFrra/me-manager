@@ -84,6 +84,10 @@ export interface Settings {
   pollIntervalMs: number
   terminalFontSize: number
   /** Desktop notifications (used by a later feature). */
+  /** Start every Claude session with Remote Control on, named `<theme>/<repo>/<task>` (`--remote-control`). */
+  remoteControl: boolean
+  /** Start every Claude session with `--dangerously-skip-permissions`: Claude runs commands without asking. */
+  skipPermissions: boolean
   notifications: boolean
 }
 

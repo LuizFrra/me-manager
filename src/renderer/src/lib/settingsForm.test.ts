@@ -13,6 +13,8 @@ describe('settings form', () => {
         pollSeconds: '2.5',
         terminalFontSize: '13',
         notifications: true,
+        remoteControl: true,
+        skipPermissions: true,
       },
     )
   })
@@ -26,6 +28,8 @@ describe('settings form', () => {
           pollSeconds: '5',
           terminalFontSize: '15',
           notifications: false,
+          remoteControl: false,
+          skipPermissions: false,
         }),
       ),
     ).toEqual({
@@ -35,6 +39,8 @@ describe('settings form', () => {
         pollIntervalMs: 5000,
         terminalFontSize: 15,
         notifications: false,
+        remoteControl: false,
+        skipPermissions: false,
       },
     })
     expect(parseForm(form())).toEqual({ settings: DEFAULT_SETTINGS })

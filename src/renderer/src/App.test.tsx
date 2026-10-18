@@ -954,6 +954,8 @@ describe('App settings', () => {
       pollIntervalMs: 5000,
       terminalFontSize: 15,
       notifications: false,
+      remoteControl: true,
+      skipPermissions: true,
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()

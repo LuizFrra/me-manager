@@ -10,6 +10,8 @@ export interface SettingsForm {
   pollSeconds: string
   terminalFontSize: string
   notifications: boolean
+  remoteControl: boolean
+  skipPermissions: boolean
 }
 
 export type SettingsFormErrors = Partial<Record<keyof SettingsForm, string>>
@@ -23,6 +25,8 @@ export function toForm(s: Settings): SettingsForm {
     pollSeconds: String(s.pollIntervalMs / 1000),
     terminalFontSize: String(s.terminalFontSize),
     notifications: s.notifications,
+    remoteControl: s.remoteControl,
+    skipPermissions: s.skipPermissions,
   }
 }
 
@@ -61,6 +65,8 @@ export function parseForm(
       pollIntervalMs: Math.round(poll! * 1000),
       terminalFontSize: fontSize!,
       notifications: form.notifications,
+      remoteControl: form.remoteControl,
+      skipPermissions: form.skipPermissions,
     },
   }
 }

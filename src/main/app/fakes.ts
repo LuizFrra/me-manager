@@ -17,9 +17,17 @@ export class MemoryStore implements StoreApi {
   }
 }
 
+/** Tests start with the built-in Claude flags off, so command assertions only show what each test enables. */
+export const TEST_SETTINGS: Settings = {
+  ...DEFAULT_SETTINGS,
+  claudeArgs: [],
+  remoteControl: false,
+  skipPermissions: false,
+}
+
 export class MemorySettingsStore implements SettingsStoreApi {
   saved: Settings[] = []
-  constructor(private settings: Settings = { ...DEFAULT_SETTINGS, claudeArgs: [] }) {}
+  constructor(private settings: Settings = TEST_SETTINGS) {}
   async load(): Promise<Settings> {
     return this.settings
   }
@@ -177,7 +185,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const tmux = new FakeTmux()
   const pty = new FakePty()
   const files = new FakeFiles()
-  const settings = new SettingsService(new MemorySettingsStore())
+  const settings = new SettingsService(new MemorySettingsStore(), TEST_SETTINGS)
   const launcher = new FakeLauncher()
   const deps: OrchestratorDeps = {
     store,

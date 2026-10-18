@@ -18,13 +18,30 @@ export function TaskHeader(props: {
   /** Opens the task's worktree or the folder in an editor / the file manager. */
   onOpenInEditor: () => void
   onRevealInFileManager: () => void
+  /** Settings flags that new Claude sessions start with; shown as badges so they're never forgotten. */
+  sessionFlags?: { remoteControl: boolean; skipPermissions: boolean }
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
     <header className="task-header">
       <div className="task-header-top">
         <div className="task-header-text">
-          <div className="task-title">{props.title}</div>
+          <div className="task-title">
+            {props.title}
+            {props.sessionFlags?.remoteControl && (
+              <span className="session-badge" title="New Claude sessions start with --remote-control">
+                Remote
+              </span>
+            )}
+            {props.sessionFlags?.skipPermissions && (
+              <span
+                className="session-badge session-badge-warn"
+                title="New Claude sessions start with --dangerously-skip-permissions: Claude runs commands without asking"
+              >
+                ⚠ permissions skipped
+              </span>
+            )}
+          </div>
           <div className="task-subtitle">{props.subtitle}</div>
         </div>
         <div className="task-header-actions">
