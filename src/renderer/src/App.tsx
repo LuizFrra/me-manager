@@ -14,8 +14,8 @@ import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget } from './lib/describe'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
-import { matchShortcut, shortcutLabel } from './lib/shortcuts'
-import { allTargets } from './lib/targets'
+import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
+import { allTargets, visibleTargets } from './lib/targets'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
@@ -50,6 +50,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const toggleCollapsed = useCallback(
+    (id: string) =>
+      setCollapsed((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      }),
+    [],
+  )
   const { toasts, showError, dismiss } = useToasts()
   // Mirrors `selected` synchronously, so async responses can check whether their target is still selected.
   const selectedRef = useRef<Target | null>(null)
@@ -76,29 +87,6 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const target = selectedRef.current
     if (target) updatePanel({ open: !panelsRef.current.get(targetKey(target))?.open })
   }, [updatePanel])
-
-  // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
-  // instead of sending them to tmux.
-  const onShortcutKey = useLatestCallback((e: KeyboardEvent): void => {
-    const shortcut = matchShortcut(e)
-    // A name or remove dialog is a modal flow of its own: leave it alone.
-    if (!shortcut || dialog) return
-    if (shortcut.id === 'palette') {
-      e.preventDefault()
-      setHelpOpen(false)
-      setPaletteOpen((o) => !o)
-      return
-    }
-    // The palette and the help overlay are modal too: only their own toggles act while one is open.
-    if (paletteOpen || helpOpen) return
-    e.preventDefault()
-    togglePanel()
-  })
-
-  useEffect(() => {
-    window.addEventListener('keydown', onShortcutKey)
-    return () => window.removeEventListener('keydown', onShortcutKey)
-  }, [onShortcutKey])
 
   const attempt = useCallback(
     async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -169,6 +157,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
 
+  const cycleTab = (step: number): void => {
+    const current = tabs.findIndex((t) => t.active)
+    if (current === -1 || tabs.length < 2) return
+    const next = tabs[(current + step + tabs.length) % tabs.length]
+    void tabAction((t) => api.selectTab(t, next.index))
+  }
+
   // Reads the ref, not `selected`: callers run after an await, when the selection may have changed.
   const clearSelectionIf = (pred: (t: Target) => boolean): void => {
     const current = selectedRef.current
@@ -224,6 +219,50 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else await doRemove(true)
   }
 
+  // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
+  // instead of sending them to tmux. Which ones act when:
+  // - a name or remove dialog is open: none (it is a modal flow of its own);
+  // - the palette or help overlay is open: only their toggles (Mod+K, Mod+/), which also switch between them;
+  // - a text field has focus: only the palette, help and panel toggles (see worksWhileTyping), so inputs keep
+  //   their keys. The terminal's hidden textarea doesn't count as a text field.
+  const onShortcutKey = useLatestCallback((e: KeyboardEvent): void => {
+    const shortcut = matchShortcut(e)
+    if (!shortcut || dialog) return
+    if (shortcut.id === 'palette' || shortcut.id === 'help') {
+      e.preventDefault()
+      setPaletteOpen((o) => shortcut.id === 'palette' && !o)
+      setHelpOpen((o) => shortcut.id === 'help' && !o)
+      return
+    }
+    if (paletteOpen || helpOpen) return
+    if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target)) return
+    e.preventDefault()
+    switch (shortcut.id) {
+      case 'panel':
+        return togglePanel()
+      case 'target': {
+        const target = visibleTargets(state, collapsed)[shortcut.index]
+        if (target && !sameTarget(selectedRef.current, target)) void open(target)
+        return
+      }
+      case 'newTab':
+        return void tabAction((t) => api.newTab(t))
+      case 'closeTab': {
+        const active = tabs.find((t) => t.active)
+        if (active) void tabAction((t) => api.closeTab(t, active.index))
+        return
+      }
+      case 'prevTab':
+      case 'nextTab':
+        return cycleTab(shortcut.id === 'nextTab' ? 1 : -1)
+    }
+  })
+
+  useEffect(() => {
+    window.addEventListener('keydown', onShortcutKey)
+    return () => window.removeEventListener('keydown', onShortcutKey)
+  }, [onShortcutKey])
+
   const openFileInPanel = useCallback(
     (path: string) => updatePanel({ open: true, tab: 'files', selected: path, history: [] }),
     [updatePanel],
@@ -247,10 +286,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     action('New theme', 'newTheme')
     if (selected) {
       action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
-      action('New shell tab', 'newTab')
+      action('New shell tab', 'newTab', shortcutLabel('newTab'))
       action('Restart Claude', 'restartClaude')
     }
-    action('Show keyboard shortcuts', 'help')
+    action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
     return commands
   }
 
@@ -277,6 +316,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         state={state}
         status={status}
         selected={selected}
+        collapsed={collapsed}
+        onToggleCollapsed={toggleCollapsed}
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
         onRemoveTheme={async (themeId) => {

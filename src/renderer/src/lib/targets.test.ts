@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
-import { allTargets } from './targets'
+import { allTargets, visibleTargets } from './targets'
 
 describe('allTargets', () => {
   it('lists tasks and folders in sidebar order with breadcrumb labels', () => {
@@ -26,5 +26,24 @@ describe('allTargets', () => {
 
   it('is empty without themes', () => {
     expect(allTargets(appState())).toEqual([])
+  })
+})
+
+describe('visibleTargets', () => {
+  const state = appState(
+    theme('A', [repo('api', [task('t1'), task('t2')]), folder('notes')]),
+    theme('B', [folder('blog'), repo('web', [task('t3')])]),
+  )
+  const ids = (collapsed: string[]): string[] =>
+    visibleTargets(state, new Set(collapsed)).map((t) => t.taskId ?? t.itemId)
+
+  it('lists every task and folder in sidebar order when nothing is collapsed', () => {
+    expect(ids([])).toEqual(['t1', 't2', 'notes', 'blog', 't3'])
+  })
+
+  it('skips the tasks of a collapsed repo and everything in a collapsed theme', () => {
+    expect(ids(['api'])).toEqual(['notes', 'blog', 't3'])
+    expect(ids(['A'])).toEqual(['blog', 't3'])
+    expect(ids(['A', 'web'])).toEqual(['blog'])
   })
 })
