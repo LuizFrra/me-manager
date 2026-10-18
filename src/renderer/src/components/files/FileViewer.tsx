@@ -2,9 +2,11 @@ import 'highlight.js/styles/github-dark.css'
 import { useCallback } from 'react'
 import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../../shared/types'
 import type { PanelState, PanelTab } from '../../lib/panelState'
+import { isImagePath, isSvgPath } from '../../../../shared/images'
 import { formatSize, isMarkdown } from '../../lib/files'
 import { CodeView } from './CodeView'
 import { DiffView } from './DiffView'
+import { ImageView } from './ImageView'
 import { MarkdownView } from './MarkdownView'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 
@@ -48,16 +50,32 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   // A deletion can still be opened when only git forgot the file (`git rm --cached`).
   const gone = p.change?.status === 'D' && !p.change.existsOnDisk
   const md = p.tab === 'files' && isMarkdown(path) && p.content?.kind === 'text'
+  // An SVG is text: it can be shown as an image (the default) or as its source, like Markdown.
+  const svg = p.tab === 'files' && isSvgPath(path) && p.content?.kind === 'text'
+  const image = isImagePath(path)
 
   let body: React.ReactNode
   if (p.tab === 'changes') {
-    body = p.diff === undefined ? <p className="panel-hint">Loading…</p> : <DiffView diff={p.diff} />
+    const diff = p.diff === undefined ? <p className="panel-hint">Loading…</p> : <DiffView diff={p.diff} />
+    // A changed image: its new version, when there is one, above the diff ("Binary file changed").
+    const current = p.change && (p.change.status !== 'D' || p.change.existsOnDisk)
+    body =
+      image && current ? (
+        <>
+          <ImageView key={path} path={path} load={loadImage} compact label="New version" />
+          {diff}
+        </>
+      ) : (
+        diff
+      )
   } else if (!p.content) {
     body = <p className="panel-hint">Loading…</p>
   } else if (p.content.kind === 'missing') {
     body = <p className="viewer-message">File no longer exists</p>
   } else if (p.content.kind === 'symlinkToFolder') {
     body = <p className="viewer-message">Symlink to a folder</p>
+  } else if (image && (p.content.kind === 'binary' || (p.content.kind === 'text' && p.mdMode === 'view'))) {
+    body = <ImageView key={path} path={path} size={p.content.size} load={loadImage} />
   } else if (p.content.kind === 'binary') {
     body = <p className="viewer-message">Binary file ({formatSize(p.content.size)})</p>
   } else {
@@ -95,13 +113,13 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
         <span className="viewer-path" title={path}>
           {p.change?.oldPath ? `${p.change.oldPath} → ${path}` : path}
         </span>
-        {md && (
-          <div className="segmented" role="group" aria-label="Markdown mode">
+        {(md || svg) && (
+          <div className="segmented" role="group" aria-label={md ? 'Markdown mode' : 'SVG mode'}>
             <button aria-pressed={p.mdMode === 'view'} onClick={() => p.onMdMode('view')}>
-              View
+              {md ? 'View' : 'Image'}
             </button>
             <button aria-pressed={p.mdMode === 'raw'} onClick={() => p.onMdMode('raw')}>
-              Raw
+              {md ? 'Raw' : 'Source'}
             </button>
           </div>
         )}

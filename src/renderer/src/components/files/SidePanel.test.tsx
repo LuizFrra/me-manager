@@ -132,9 +132,9 @@ describe('SidePanel', () => {
   it('shows binary, missing, folder-symlink and truncated files', async () => {
     const user = userEvent.setup()
     const api = createMockApi({
-      listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'icon.png', 'linked'], truncated: false }),
+      listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'blob.bin', 'linked'], truncated: false }),
       readFile: async (_t, path) =>
-        path === 'icon.png'
+        path === 'blob.bin'
           ? { kind: 'binary', size: 2048 }
           : path === 'big.log'
             ? { kind: 'text', content: 'start', size: 1_500_000, truncated: true }
@@ -143,7 +143,7 @@ describe('SidePanel', () => {
               : { kind: 'missing' },
     })
     render(<Harness api={api} />)
-    await user.click(await screen.findByRole('button', { name: 'icon.png' }))
+    await user.click(await screen.findByRole('button', { name: 'blob.bin' }))
     expect(await screen.findByText('Binary file (2.0 KB)')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'gone.ts' }))
     expect(await screen.findByText('File no longer exists')).toBeInTheDocument()

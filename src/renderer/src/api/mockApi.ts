@@ -22,7 +22,7 @@ import {
   searchPattern,
 } from '../../../shared/search'
 import { demoUsage, demoUsageReport } from './demoUsage'
-import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from './demoFiles'
+import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
 /** The branches a demo task can start from; listBranches' default is the first. */
 const DEMO_BRANCHES = ['origin/main', 'origin/develop', 'origin/release/2.0', 'main']
@@ -182,10 +182,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       if (path in DEMO_BINARY) return { kind: 'binary', size: DEMO_BINARY[path] }
       return { kind: 'missing' }
     },
-    readImage: async (_target, path) =>
-      path.endsWith('.svg') && DEMO_FILES[path] !== undefined
+    readImage: async (_target, path) => {
+      if (path === 'assets/icon.png') return `data:image/png;base64,${DEMO_PNG_BASE64}`
+      return path.endsWith('.svg') && DEMO_FILES[path] !== undefined
         ? `data:image/svg+xml;base64,${btoa(DEMO_FILES[path])}`
-        : null,
+        : null
+    },
     // The demo files, matched like main matches a folder (JavaScript patterns).
     searchFiles: async (_target, query, options) => {
       const pattern = searchPattern(checkSearchQuery(query), normalizeSearchOptions(options))

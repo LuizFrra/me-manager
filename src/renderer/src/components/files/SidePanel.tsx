@@ -9,6 +9,7 @@ import type {
   Target,
 } from '../../../../shared/types'
 import { ancestorDirs, buildTree, filterPaths } from '../../lib/fileTree'
+import { isSvgPath } from '../../../../shared/images'
 import { isMarkdown } from '../../lib/files'
 import type { PanelState, PanelTab, SearchState } from '../../lib/panelState'
 import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
@@ -199,7 +200,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     const history = state.history.slice(0, -1)
     onState({ ...state, tab: 'files', selected: state.history.at(-1), line: undefined, history })
   })
-  // A search result opens in Files at its line; Markdown as raw text, where lines can be shown.
+  // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.
   const openMatch = useLatestCallback((m: SearchMatch): void => {
     setFilter('')
     onState({
@@ -208,7 +209,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: m.path,
       line: m.line,
       history: [],
-      mdMode: isMarkdown(m.path) ? 'raw' : state.mdMode,
+      mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
     })
   })
   const setSearch = useLatestCallback((search: SearchState): void => onState({ ...state, search }))
