@@ -18,6 +18,8 @@ export interface SidebarProps {
   filter: string
   onFilterChange: (filter: string) => void
   filterRef?: React.Ref<HTMLInputElement>
+  /** A dialog or overlay is open: the sidebar can't be focused or clicked (see App). */
+  inert?: boolean
   onSelect: (target: Target) => void
   onAddTheme: () => void
   onRenameTheme: (themeId: string, currentName: string) => void
@@ -84,7 +86,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     p.selected?.itemId === itemId && p.selected?.taskId === taskId
 
   return (
-    <nav className="sidebar">
+    <nav className="sidebar" inert={p.inert}>
       <div className="sidebar-scroll">
         <input
           ref={filterRef}

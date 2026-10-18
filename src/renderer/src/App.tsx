@@ -969,6 +969,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   if (prereqs && !prereqs.ok) return <PrereqScreen result={prereqs} onRetry={checkPrereqs} />
 
+  // While a dialog or overlay is up, everything behind it is inert: Tab and Shift+Tab can't leave the modal for the
+  // sidebar or the terminal (whose textarea would send keys, Escape included, to Claude), and clicks don't land
+  // there either. The terminal also drops keys itself meanwhile.
+  const modalOpen = dialog !== null || paletteOpen || helpOpen || usageOpen
+
   const header = selected ? describeTarget(state, selected) : null
   const selectedTask = selected ? resolveTarget(state, selected)?.task : undefined
   const item = selected
@@ -1002,8 +1007,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
         onOpenSettings={openSettings}
         onOpenUsage={() => setUsageOpen(true)}
+        inert={modalOpen}
       />
-      <main className="main">
+      <main className="main" inert={modalOpen}>
         {selected && header ? (
           <>
             <TaskHeader
@@ -1049,7 +1055,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             />
             <div className="workspace">
               <div className="terminal-area">
-                <TerminalView api={api} sessionKey={targetKey(selected)} fontSize={settings.terminalFontSize} />
+                <TerminalView
+                  api={api}
+                  sessionKey={targetKey(selected)}
+                  fontSize={settings.terminalFontSize}
+                  modalOpen={modalOpen}
+                />
                 {sessionEnded && (
                   <div className="session-ended">
                     <p>Session ended.</p>

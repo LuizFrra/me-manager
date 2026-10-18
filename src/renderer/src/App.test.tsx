@@ -2639,3 +2639,48 @@ describe('App welcome and home screens', () => {
     expect(await screen.findByRole('region', { name: /^Welcome/ })).toBeInTheDocument()
   })
 })
+
+describe('App modal focus', () => {
+  const sidebar = (): Element => document.querySelector('.sidebar')!
+  const main = (): Element => document.querySelector('main')!
+  const statusBar = (): HTMLElement => screen.getByRole('group', { name: 'Status bar' })
+  const expectInert = (inert: boolean): void => {
+    for (const el of [sidebar(), main(), statusBar()]) {
+      if (inert) expect(el.closest('[inert]'), el.className).not.toBeNull()
+      else expect(el.closest('[inert]'), el.className).toBeNull()
+    }
+  }
+
+  it('makes the sidebar, the main area and the status bar inert while any dialog or overlay is open', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('group', { name: 'Status bar' })
+    expectInert(false)
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expectInert(true)
+    await user.keyboard('{Escape}')
+    expectInert(false)
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true }) // palette
+    expectInert(true)
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true }) // help replaces it
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    expectInert(true)
+    fireEvent.keyDown(window, { key: 'U', ctrlKey: true, shiftKey: true }) // usage
+    expectInert(true)
+    fireEvent.keyDown(window, { key: 'U', ctrlKey: true, shiftKey: true })
+    expectInert(false)
+
+    await user.click(screen.getByRole('button', { name: 'New task in my-api' }))
+    expectInert(true)
+    await user.keyboard('{Escape}')
+    expectInert(false)
+
+    await user.click(screen.getByRole('button', { name: 'Customize theme Client X' }))
+    expectInert(true)
+    await user.keyboard('{Escape}')
+    expectInert(false)
+  })
+})

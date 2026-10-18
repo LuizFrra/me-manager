@@ -100,6 +100,18 @@ describe('TerminalView key handler', () => {
     ]
     for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)
   })
+  it('swallows every key while a modal is open, and lets them through again after', () => {
+    const { rerender } = render(<TerminalView api={api} sessionKey="s" fontSize={13} modalOpen />)
+    const handler = handlers.at(-1)
+    const plain = new KeyboardEvent('keydown', { key: 'a' })
+    const escape = new KeyboardEvent('keydown', { key: 'Escape' })
+    expect(handler?.(plain)).toBe(false)
+    expect(handler?.(escape)).toBe(false)
+    rerender(<TerminalView api={api} sessionKey="s" fontSize={13} modalOpen={false} />)
+    expect(handlers.at(-1)).toBe(handler) // the same terminal
+    expect(handler?.(plain)).toBe(true)
+    expect(handler?.(escape)).toBe(true)
+  })
 })
 
 describe('TerminalView font size', () => {
