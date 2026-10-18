@@ -613,3 +613,71 @@ describe('App keyboard shortcuts', () => {
     expect(newTab).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('App sidebar filter', () => {
+  const filterBox = (): HTMLElement => screen.getByRole('textbox', { name: 'Filter sidebar' })
+  const hasTask = (name: string): boolean => screen.queryByRole('button', { name: `Remove task ${name}` }) !== null
+
+  async function setup(user: UserEvent, api = repoApi()): Promise<void> {
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'fix login bug', 'add tests')
+    await createTheme(user, 'Personal')
+  }
+
+  it('narrows the tree to matches and their ancestors, and Esc clears it', async () => {
+    const user = userEvent.setup()
+    await setup(user)
+    await user.type(filterBox(), 'LOGIN')
+    expect(hasTask('fix login bug')).toBe(true)
+    expect(hasTask('add tests')).toBe(false)
+    expect(screen.getByRole('button', { name: /📦 my-api$/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove theme Client X' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove theme Personal' })).not.toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    expect(filterBox()).toHaveValue('')
+    expect(hasTask('add tests')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Remove theme Personal' })).toBeInTheDocument()
+  })
+
+  it('expands collapsed groups while filtering', async () => {
+    const user = userEvent.setup()
+    await setup(user)
+    await user.click(screen.getByRole('button', { name: /📦 my-api$/ }))
+    expect(hasTask('add tests')).toBe(false)
+    await user.type(filterBox(), 'tests')
+    expect(hasTask('add tests')).toBe(true)
+    await user.keyboard('{Escape}')
+    expect(hasTask('add tests')).toBe(false) // collapsed again once the filter is gone
+  })
+
+  it('says when nothing matches', async () => {
+    const user = userEvent.setup()
+    await setup(user)
+    await user.type(filterBox(), 'zzz')
+    expect(screen.getByText('No matches')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument()
+  })
+
+  it('is focused with Ctrl+Shift+F, and Ctrl+1 counts only the filtered entries', async () => {
+    const user = userEvent.setup()
+    await setup(user)
+    await user.click(taskButton('fix login bug'))
+    expect(await screen.findByText('my-api › fix login bug')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'F', ctrlKey: true, shiftKey: true })
+    expect(filterBox()).toHaveFocus()
+    await user.type(filterBox(), 'tests')
+    fireEvent.keyDown(filterBox(), { key: '1', ctrlKey: true }) // ignored while typing in the filter
+    expect(screen.getByText('my-api › fix login bug')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '1', ctrlKey: true })
+    expect(await screen.findByText('my-api › add tests')).toBeInTheDocument()
+  })
+
+  it('lists Ctrl+Shift+F in the shortcut help', async () => {
+    render(<App api={repoApi()} />)
+    fireEvent.keyDown(window, { key: '/', ctrlKey: true })
+    const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(help).getByText('Ctrl+Shift+F')).toBeInTheDocument()
+    expect(within(help).getByText('Filter the sidebar')).toBeInTheDocument()
+  })
+})

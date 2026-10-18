@@ -67,6 +67,24 @@ button:disabled {
   color: var(--muted);
   padding: 0 12px;
 }
+.sidebar-filter {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 0 8px 10px;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+.sidebar-filter::placeholder {
+  color: var(--muted);
+}
+.sidebar-filter:focus {
+  border-color: var(--accent);
+}
 .row {
   display: flex;
   align-items: center;

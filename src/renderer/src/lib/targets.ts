@@ -1,4 +1,5 @@
 import type { AppState, Target } from '../../../shared/types'
+import type { SidebarFilter } from './sidebarFilter'
 
 export interface TargetEntry {
   target: Target
@@ -31,11 +32,20 @@ export function allTargets(state: AppState): TargetEntry[] {
 }
 
 /**
- * The tasks and folders the sidebar shows, in order: what Mod+1..9 counts. Entries inside a collapsed theme
- * or repo are hidden, so they are skipped.
+ * The tasks and folders the sidebar shows, in order: what Mod+1..9 counts. Without a filter, entries inside a
+ * collapsed theme or repo are hidden; with one, only matches show and every group is expanded.
  */
-export function visibleTargets(state: AppState, collapsed: ReadonlySet<string>): Target[] {
+export function visibleTargets(
+  state: AppState,
+  collapsed: ReadonlySet<string>,
+  filter: SidebarFilter | null = null,
+): Target[] {
+  const visible = filter
+    ? (e: TargetEntry): boolean =>
+        e.target.taskId !== undefined ? filter.tasks.has(e.target.taskId) : filter.items.has(e.target.itemId)
+    : (e: TargetEntry): boolean =>
+        !collapsed.has(e.target.themeId) && (e.kind === 'folder' || !collapsed.has(e.target.itemId))
   return allTargets(state)
-    .filter((e) => !collapsed.has(e.target.themeId) && (e.kind === 'folder' || !collapsed.has(e.target.itemId)))
+    .filter(visible)
     .map((e) => e.target)
 }

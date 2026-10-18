@@ -16,6 +16,7 @@ import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
+import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
@@ -51,6 +52,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const [sidebarFilter, setSidebarFilter] = useState('')
+  const sidebarFilterRef = useRef<HTMLInputElement>(null)
   const toggleCollapsed = useCallback(
     (id: string) =>
       setCollapsed((prev) => {
@@ -240,8 +243,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     switch (shortcut.id) {
       case 'panel':
         return togglePanel()
+      case 'filterSidebar':
+        sidebarFilterRef.current?.focus()
+        sidebarFilterRef.current?.select()
+        return
       case 'target': {
-        const target = visibleTargets(state, collapsed)[shortcut.index]
+        const target = visibleTargets(state, collapsed, filterSidebar(state, sidebarFilter))[shortcut.index]
         if (target && !sameTarget(selectedRef.current, target)) void open(target)
         return
       }
@@ -318,6 +325,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         selected={selected}
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
+        filter={sidebarFilter}
+        onFilterChange={setSidebarFilter}
+        filterRef={sidebarFilterRef}
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
         onRemoveTheme={async (themeId) => {
