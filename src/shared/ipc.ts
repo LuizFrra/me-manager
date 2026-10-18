@@ -47,3 +47,5 @@ export const PTY_WRITE = 'pty:write'
 export const PTY_RESIZE = 'pty:resize'
 export const PTY_DATA = 'pty:data'
 export const PTY_EXIT = 'pty:exit'
+/** Main → renderer: select this target (a desktop notification was clicked). */
+export const SELECT_TARGET = 'app:select-target'

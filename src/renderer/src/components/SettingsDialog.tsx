@@ -222,7 +222,7 @@ export function SettingsDialog(props: {
               Desktop notifications
             </label>
             <p id={notificationsHintId} className="settings-hint settings-checkbox-hint">
-              When a background task finishes or waits for input (coming soon).
+              When Claude finishes or needs your input in a task or folder you aren&apos;t looking at.
             </p>
           </div>
         </section>

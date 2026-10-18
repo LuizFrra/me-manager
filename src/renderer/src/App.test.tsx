@@ -1507,3 +1507,32 @@ describe('App Claude activity', () => {
     expect(taskButton('fix login bug').querySelector('.dot')).toHaveClass('running', 'waiting')
   })
 })
+
+describe('App notification clicks', () => {
+  it('selects the target main asks for, expanding its collapsed repo', async () => {
+    const user = userEvent.setup()
+    let selectTarget: (target: Target) => void = () => {}
+    const unsubscribe = vi.fn()
+    const api = repoApi({
+      onSelectTarget: (cb) => {
+        selectTarget = cb
+        return unsubscribe
+      },
+    })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const { unmount } = render(<App api={api} />)
+    await createRepoAndTask(user, 'one', 'two') // "two" is selected
+    await user.click(screen.getByRole('button', { name: /^▼ 📦 my-api$/ }))
+    expect(screen.queryByRole('button', { name: 'Remove task one' })).not.toBeInTheDocument()
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    const one = { themeId: state.themes[0].id, itemId: repo.id, taskId: repo.kind === 'repo' ? repo.tasks[0].id : '' }
+    openTarget.mockClear()
+    act(() => selectTarget(one))
+    await waitFor(() => expect(openTarget).toHaveBeenCalledWith(one))
+    expect(await screen.findByRole('button', { name: 'Remove task one' })).toBeInTheDocument()
+    expect(screen.getByText('my-api › one')).toBeInTheDocument()
+    unmount()
+    expect(unsubscribe).toHaveBeenCalled()
+  })
+})
