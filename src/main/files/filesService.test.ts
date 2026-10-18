@@ -384,6 +384,20 @@ describe('listChanges', () => {
     })
   })
 
+  it('lists a file removed from the index but kept on disk once, as D, marked as still on disk', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await git(clone, 'rm', '-q', '--cached', 'mod.txt', 'README.md')
+    await put(clone, '.gitignore', 'README.md\n')
+    await rm(join(clone, 'del.txt'))
+    const res = await svc.listChanges(clone, 'origin/main')
+    expect(res.files).toEqual([
+      { path: '.gitignore', status: 'U', added: 1, removed: 0, binary: false },
+      { path: 'README.md', status: 'D', added: 0, removed: 1, binary: false, existsOnDisk: true },
+      { path: 'del.txt', status: 'D', added: 0, removed: 2, binary: false },
+      { path: 'mod.txt', status: 'D', added: 0, removed: 3, binary: false, existsOnDisk: true },
+    ])
+  })
+
   it('caches untracked line counts by size and mtime', async () => {
     const { clone } = await makeTaskClone(SEED)
     const local = new FilesService()
@@ -454,6 +468,15 @@ describe('fileDiff', () => {
   it('diffs a deleted file with every line removed', async () => {
     const { clone } = await makeTaskClone(SEED)
     await rm(join(clone, 'del.txt'))
+    const diff = await svc.fileDiff(clone, 'origin/main', 'del.txt')
+    expect(diff).toContain('deleted file mode')
+    const body = diff.split('\n').filter((l) => /^[-+ ]/.test(l) && !/^(---|\+\+\+) /.test(l))
+    expect(body).toEqual(['-one', '-two'])
+  })
+
+  it('diffs a file removed from the index but kept on disk as a deletion, like the change list says', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await git(clone, 'rm', '-q', '--cached', 'del.txt')
     const diff = await svc.fileDiff(clone, 'origin/main', 'del.txt')
     expect(diff).toContain('deleted file mode')
     const body = diff.split('\n').filter((l) => /^[-+ ]/.test(l) && !/^(---|\+\+\+) /.test(l))

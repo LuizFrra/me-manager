@@ -142,6 +142,8 @@ export interface ChangedFile {
   added: number
   removed: number
   binary: boolean
+  /** Set on a deletion whose file is still in the work tree: removed from git only (e.g. `git rm --cached`). */
+  existsOnDisk?: true
 }
 
 export interface ChangeList {
