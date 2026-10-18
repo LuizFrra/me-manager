@@ -1,9 +1,26 @@
 import { appendFile, mkdir, open, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTempDirs, makeTempDir } from '../files/testRepos'
+
+// Wraps the real stat so tests can see how many run at once.
+const statFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  const stat = (async (...args: Parameters<typeof real.stat>) => {
+    statFlight.peak = Math.max(statFlight.peak, ++statFlight.now)
+    try {
+      return await real.stat(...args)
+    } finally {
+      statFlight.now--
+    }
+  }) as typeof real.stat
+  return { ...real, stat, default: { ...real, stat } }
+})
+
 import {
   claudeConfigDir,
+  STAT_CONCURRENCY,
   encodeProjectPath,
   parseUsageLine,
   projectDirMatches,
@@ -347,6 +364,15 @@ describe('UsageService', () => {
   it('returns empty usage when there are no transcripts at all', async () => {
     const usage = await usageOf(service(), '/p/none')
     expect(usage.all).toMatchObject({ messages: 0, cost: 0, firstSeen: null, models: [] })
+  })
+
+  it(`checks the transcripts ${STAT_CONCURRENCY} at a time, not one by one`, async () => {
+    expect(STAT_CONCURRENCY).toBe(16)
+    for (let i = 0; i < 40; i++) await put('/p/proj', `s${i}.jsonl`, line({ input: 1 }))
+    statFlight.peak = 0
+    const all = (await usageOf(service(), '/p/proj')).all
+    expect(all.messages).toBe(40)
+    expect(statFlight.peak).toBe(STAT_CONCURRENCY)
   })
 
   it('reuses the cached result while nothing changed', async () => {
