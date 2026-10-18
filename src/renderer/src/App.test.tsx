@@ -690,3 +690,79 @@ describe('App sidebar filter', () => {
     expect(within(help).getByText('Filter the sidebar')).toBeInTheDocument()
   })
 })
+
+describe('App rename', () => {
+  const nameBox = (): HTMLElement => screen.getByRole('textbox', { name: 'Name' })
+
+  it('renames a task from its row; the header updates and the branch stays', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const renameTask = vi.spyOn(api, 'renameTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    expect(await screen.findByText('my-api › fix login bug')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Rename task fix login bug' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rename task' })
+    expect(nameBox()).toHaveValue('fix login bug')
+    expect(nameBox()).toHaveAccessibleDescription('The branch and folder keep their original name.')
+    expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled() // unchanged
+    await user.clear(nameBox())
+    await user.type(nameBox(), 'Fix the login flow')
+    await user.click(within(dialog).getByRole('button', { name: 'Rename' }))
+
+    expect(await screen.findByText('my-api › Fix the login flow')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByText(/branch: claude\/client-x\/fix-login-bug/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove task Fix the login flow' })).toBeInTheDocument()
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    expect(renameTask).toHaveBeenCalledWith(
+      state.themes[0].id,
+      repo.id,
+      repo.kind === 'repo' ? repo.tasks[0].id : '',
+      'Fix the login flow',
+    )
+  })
+
+  it('renames a theme', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Rename theme Client X' }))
+    expect(screen.getByRole('dialog', { name: 'Rename theme' })).toHaveTextContent(
+      'The branch and folder keep their original name.',
+    )
+    await user.clear(nameBox())
+    await user.type(nameBox(), 'Acme{Enter}')
+    expect(await screen.findByRole('button', { name: 'Remove theme Acme' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the dialog open and shows the error for a duplicate name', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await user.click(screen.getByRole('button', { name: 'Rename task task B' }))
+    await user.clear(nameBox())
+    await user.type(nameBox(), 'TASK A{Enter}')
+    expect(await screen.findByRole('alert')).toHaveTextContent('A task named "TASK A" already exists')
+    expect(screen.getByRole('dialog', { name: 'Rename task' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Rename task' })).not.toBeInTheDocument()
+    expect(screen.getByText('my-api › task B')).toBeInTheDocument()
+  })
+
+  it('renames the current task from the palette', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    await user.type(await screen.findByRole('combobox'), 'rename current')
+    await user.keyboard('{Enter}')
+    expect(nameBox()).toHaveValue('fix login bug')
+    await user.clear(nameBox())
+    await user.type(nameBox(), 'login{Enter}')
+    expect(await screen.findByText('my-api › login')).toBeInTheDocument()
+  })
+})

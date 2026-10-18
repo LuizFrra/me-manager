@@ -11,7 +11,7 @@ import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
 import { startVisibleInterval } from './lib/visibleInterval'
 import { keepIfEqual } from './lib/keepIfEqual'
-import { describeTarget } from './lib/describe'
+import { describeTarget, resolveTarget } from './lib/describe'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
@@ -24,17 +24,30 @@ import { ShortcutHelp } from './components/ShortcutHelp'
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
 
+/** What the name dialog asks: a new name, or (with `initial`) a new display name for a theme or task. */
+interface NameAsk {
+  title: string
+  placeholder: string
+  initial?: string
+  submitLabel?: string
+  note?: string
+}
+
 type Dialog =
-  | { kind: 'name'; title: string; placeholder: string; onSubmit: (name: string) => Promise<void> }
+  | ({ kind: 'name'; onSubmit: (name: string) => Promise<void> } & NameAsk)
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
 
 type AppAction =
-  { type: 'open'; target: Target } | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'help' }
+  | { type: 'open'; target: Target }
+  | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'renameTask' | 'help' }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
 interface AppCommand extends PaletteCommand {
   action: AppAction
 }
+
+/** Renaming changes the display name only, never the slug that branches, worktrees and sessions are named by. */
+const RENAME_NOTE = 'The branch and folder keep their original name.'
 
 const EMPTY: AppState = { version: 1, themes: [] }
 const POLL_MS = 3000
@@ -177,15 +190,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }
 
   const askName = (
-    title: string,
-    placeholder: string,
+    ask: NameAsk,
     submit: (name: string) => Promise<AppState>,
     after?: (s: AppState, name: string) => void,
   ): void =>
     setDialog({
       kind: 'name',
-      title,
-      placeholder,
+      ...ask,
       onSubmit: async (name) => {
         const next = await attempt(() => submit(name))
         if (!next) return
@@ -195,7 +206,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       },
     })
 
-  const newTheme = (): void => askName('New theme', 'e.g. Client X', (name) => api.createTheme(name))
+  const newTheme = (): void =>
+    askName({ title: 'New theme', placeholder: 'e.g. Client X' }, (name) => api.createTheme(name))
+
+  const askRename = (what: 'theme' | 'task', current: string, submit: (name: string) => Promise<AppState>): void =>
+    askName(
+      { title: `Rename ${what}`, placeholder: current, initial: current, submitLabel: 'Rename', note: RENAME_NOTE },
+      submit,
+    )
+  const renameTheme = (themeId: string, current: string): void =>
+    askRename('theme', current, (name) => api.renameTheme(themeId, name))
+  const renameTask = (themeId: string, repoId: string, taskId: string, current: string): void =>
+    askRename('task', current, (name) => api.renameTask(themeId, repoId, taskId, name))
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
     const next = await attempt(fn)
@@ -296,8 +318,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('New shell tab', 'newTab', shortcutLabel('newTab'))
       action('Restart Claude', 'restartClaude')
     }
+    if (selected?.taskId) action('Rename current task', 'renameTask')
     action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
     return commands
+  }
+
+  const renameSelectedTask = (): void => {
+    const target = selectedRef.current
+    const task = target ? resolveTarget(state, target)?.task : undefined
+    if (target?.taskId && task) renameTask(target.themeId, target.itemId, target.taskId, task.name)
   }
 
   const runCommand = ({ action }: AppCommand): void => {
@@ -306,6 +335,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'togglePanel') togglePanel()
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
     else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
+    else if (action.type === 'renameTask') renameSelectedTask()
     else setHelpOpen(true)
   }
 
@@ -330,6 +360,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         filterRef={sidebarFilterRef}
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
+        onRenameTheme={renameTheme}
         onRemoveTheme={async (themeId) => {
           if (await update(() => api.removeTheme(themeId))) clearSelectionIf((t) => t.themeId === themeId)
         }}
@@ -340,8 +371,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         }}
         onAddTask={(themeId, repoId) =>
           askName(
-            'New task',
-            'e.g. fix login bug',
+            { title: 'New task', placeholder: 'e.g. fix login bug' },
             (name) => api.createTask(themeId, repoId, name),
             (next, name) => {
               const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
@@ -350,6 +380,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             },
           )
         }
+        onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
       />
       <main className="main">
@@ -412,6 +443,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         <NameDialog
           title={dialog.title}
           placeholder={dialog.placeholder}
+          initial={dialog.initial}
+          submitLabel={dialog.submitLabel}
+          note={dialog.note}
           onSubmit={dialog.onSubmit}
           onCancel={() => setDialog(null)}
         />

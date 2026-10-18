@@ -103,3 +103,60 @@ describe('tasks', () => {
     expect(() => m.getRepo(next, themeId, folderId)).toThrow(/not a repository/)
   })
 })
+
+describe('renaming', () => {
+  function withTasks(): { s: AppState; themeId: string; repoId: string } {
+    const { s, themeId, repoId } = setup()
+    return { s: m.addTask(m.addTask(s, themeId, repoId, task('fix')), themeId, repoId, task('docs')), themeId, repoId }
+  }
+
+  it('renames a theme, trimming the name, and keeps its slug', () => {
+    const { s, themeId } = setup()
+    const next = m.renameTheme(s, themeId, '  Client Y  ')
+    expect(next.themes[0]).toMatchObject({ name: 'Client Y', slug: 'client-x' })
+    expect(s.themes[0].name).toBe('Client X') // input untouched
+  })
+
+  it('rejects an empty theme name or one another theme has, ignoring case', () => {
+    const { s, themeId } = setup()
+    const two = m.addTheme(s, 'Personal')
+    expect(() => m.renameTheme(two, themeId, '   ')).toThrow("Theme name can't be empty")
+    expect(() => m.renameTheme(two, themeId, 'PERSONAL')).toThrow('A theme named "PERSONAL" already exists')
+    expect(m.renameTheme(two, themeId, 'client x').themes[0].name).toBe('client x') // its own name, new case
+    expect(() => m.renameTheme(two, 'nope', 'Y')).toThrow(/Theme not found/)
+  })
+
+  it('renames a task and keeps its slug, branch and worktree path', () => {
+    const { s, themeId, repoId } = withTasks()
+    const next = m.renameTask(s, themeId, repoId, 'task-fix', ' Fix the login flow ')
+    expect(m.getTask(next, themeId, repoId, 'task-fix')).toEqual({ ...task('fix'), name: 'Fix the login flow' })
+    expect(m.getTask(s, themeId, repoId, 'task-fix').name).toBe('fix')
+  })
+
+  it('rejects an empty task name or one another task in the repo has, ignoring case', () => {
+    const { s, themeId, repoId } = withTasks()
+    expect(() => m.renameTask(s, themeId, repoId, 'task-fix', '')).toThrow("Task name can't be empty")
+    expect(() => m.renameTask(s, themeId, repoId, 'task-fix', 'DOCS')).toThrow(
+      'A task named "DOCS" already exists in my-api',
+    )
+    expect(m.getTask(m.renameTask(s, themeId, repoId, 'task-fix', 'FIX'), themeId, repoId, 'task-fix').name).toBe('FIX')
+    expect(() => m.renameTask(s, themeId, repoId, 'nope', 'x')).toThrow(/Task not found/)
+  })
+
+  it('allows a task name used in another repo', () => {
+    const { s: base, themeId, repoId } = withTasks()
+    let s = m.addRepo(base, themeId, '/code/web')
+    const webId = s.themes[0].items[1].id
+    s = m.addTask(s, themeId, webId, { ...task('ui'), id: 'task-ui' })
+    expect(m.getTask(m.renameTask(s, themeId, webId, 'task-ui', 'fix'), themeId, webId, 'task-ui').name).toBe('fix')
+    expect(m.getRepo(s, themeId, repoId).tasks).toHaveLength(2)
+  })
+
+  it('keeps names unique when adding after a rename', () => {
+    const { s, themeId, repoId } = withTasks()
+    const renamed = m.renameTask(s, themeId, repoId, 'task-fix', 'Login')
+    expect(() => m.addTask(renamed, themeId, repoId, { ...task('login'), name: 'login' })).toThrow(/already exists/)
+    const theme = m.renameTheme(renamed, themeId, 'Acme')
+    expect(() => m.addTheme(theme, 'ACME')).toThrow(/already exists/)
+  })
+})

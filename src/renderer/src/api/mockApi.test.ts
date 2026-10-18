@@ -13,6 +13,25 @@ describe('createMockApi', () => {
     const task = s.themes[0].items[0].kind === 'repo' ? s.themes[0].items[0].tasks[0] : null
     expect(task).toMatchObject({ name: 'fix login', branch: 'claude/client-x/fix-login' })
   })
+  it('renames themes and tasks, rejecting empty and duplicate names', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('Client X')
+    const themeId = s.themes[0].id
+    await api.createTheme('Personal')
+    s = await api.addRepo(themeId, '/code/my-api')
+    const repoId = s.themes[0].items[0].id
+    s = await api.createTask(themeId, repoId, 'fix')
+    await api.createTask(themeId, repoId, 'docs')
+    const taskId = s.themes[0].items[0].kind === 'repo' ? s.themes[0].items[0].tasks[0].id : ''
+    s = await api.renameTheme(themeId, ' Client Y ')
+    expect(s.themes[0]).toMatchObject({ name: 'Client Y', slug: 'client-x' })
+    s = await api.renameTask(themeId, repoId, taskId, 'Fix login')
+    expect(s.themes[0].items[0]).toMatchObject({ tasks: [{ name: 'Fix login', slug: 'fix' }, { name: 'docs' }] })
+    await expect(api.renameTheme(themeId, 'personal')).rejects.toThrow(/already exists/)
+    await expect(api.renameTask(themeId, repoId, taskId, 'DOCS')).rejects.toThrow(/already exists/)
+    await expect(api.renameTask(themeId, repoId, taskId, '  ')).rejects.toThrow(/empty/)
+  })
+
   it('applies overrides', async () => {
     const api = createMockApi({ checkPrereqs: async () => ({ ok: false, missing: [] }) })
     await expect(api.checkPrereqs()).resolves.toEqual({ ok: false, missing: [] })

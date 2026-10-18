@@ -126,6 +126,10 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commit(m.addTheme(this.state, name)))
   }
 
+  async renameTheme(themeId: string, name: string): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.renameTheme(this.state, themeId, name)))
+  }
+
   async removeTheme(themeId: string): Promise<AppState> {
     return this.exclusive(async () => {
       const next = m.removeTheme(this.state, themeId) // throws if tasks remain
@@ -168,6 +172,7 @@ export class Orchestrator implements AppService {
       const repo = m.getRepo(this.state, themeId, repoId)
       const slug = m.requireSlug(name, 'Task')
       m.assertTaskSlugFree(repo, slug)
+      m.assertTaskNameFree(repo, name)
       const branch = branchName(theme.slug, slug)
       const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
       const session = sessionName(theme.slug, repo.slug, slug)
@@ -194,6 +199,11 @@ export class Orchestrator implements AppService {
         throw err
       }
     })
+  }
+
+  /** Display name only: the branch, worktree and tmux session keep the original slug. */
+  async renameTask(themeId: string, repoId: string, taskId: string, name: string): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.renameTask(this.state, themeId, repoId, taskId, name)))
   }
 
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {

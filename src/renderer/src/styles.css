@@ -262,6 +262,11 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+.dialog-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

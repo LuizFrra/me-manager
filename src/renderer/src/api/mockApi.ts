@@ -5,6 +5,15 @@ import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from '.
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
 const baseName = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
 
+/** The checks main makes on a new display name: trimmed, not empty, not taken (ignoring case). */
+function checkName(name: string, what: string, taken: { id: string; name: string }[], selfId: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error(`${what} name can't be empty`)
+  if (taken.some((x) => x.id !== selfId && x.name.toLowerCase() === trimmed.toLowerCase()))
+    throw new Error(`A ${what.toLowerCase()} named "${trimmed}" already exists`)
+  return trimmed
+}
+
 /** In-memory MeManagerApi for tests and for running the UI in a browser. */
 export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerApi {
   let state: AppState = { version: 1, themes: [] }
@@ -29,6 +38,10 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       state = { ...state, themes: [...state.themes, { id: id(), name, slug: slugify(name), items: [] }] }
       return state
     },
+    renameTheme: (themeId, name) =>
+      edit(themeId, (t) => {
+        t.name = checkName(name, 'Theme', state.themes, themeId)
+      }),
     removeTheme: async (themeId) => {
       state = { ...state, themes: state.themes.filter((t) => t.id !== themeId) }
       return state
@@ -60,6 +73,13 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
           baseRef: 'origin/main',
           createdAt: new Date().toISOString(),
         })
+      }),
+    renameTask: (themeId, repoId, taskId, name) =>
+      edit(themeId, (t) => {
+        const repo = t.items.find((i) => i.id === repoId)
+        const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
+        if (repo?.kind !== 'repo' || !task) throw new Error(`Task not found: ${taskId}`)
+        task.name = checkName(name, 'Task', repo.tasks, taskId)
       }),
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: (themeId, repoId, taskId) =>

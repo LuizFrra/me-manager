@@ -47,11 +47,45 @@ export function assertTaskSlugFree(repo: Repo, slug: string): void {
   }
 }
 
+/** Display names are unique (ignoring case) among themes, and among the tasks of one repo. */
+const sameName = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
+/** The trimmed display name; throws if it is empty. */
+export function requireName(name: string, what: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error(`${what} name can't be empty`)
+  return trimmed
+}
+
+/** `exceptId`: the task being renamed, which may keep its own name. */
+export function assertTaskNameFree(repo: Repo, name: string, exceptId?: string): void {
+  if (repo.tasks.some((t) => t.id !== exceptId && sameName(t.name, name))) {
+    throw new Error(`A task named "${name.trim()}" already exists in ${repo.name}`)
+  }
+}
+
+function assertThemeNameFree(state: AppState, name: string, exceptId?: string): void {
+  if (state.themes.some((t) => t.id !== exceptId && sameName(t.name, name))) {
+    throw new Error(`A theme named "${name.trim()}" already exists`)
+  }
+}
+
 export function addTheme(state: AppState, name: string): AppState {
   const slug = requireSlug(name, 'Theme')
   if (state.themes.some((t) => t.slug === slug)) throw new Error(`A theme named "${name.trim()}" already exists`)
+  assertThemeNameFree(state, name)
   const next = clone(state)
   next.themes.push({ id: randomUUID(), name: name.trim(), slug, items: [] })
+  return next
+}
+
+/** Changes the display name only: the slug, and so branches, worktree paths and sessions, stay as they are. */
+export function renameTheme(state: AppState, themeId: string, name: string): AppState {
+  getTheme(state, themeId)
+  const trimmed = requireName(name, 'Theme')
+  assertThemeNameFree(state, trimmed, themeId)
+  const next = clone(state)
+  getTheme(next, themeId).name = trimmed
   return next
 }
 
@@ -109,7 +143,9 @@ export function removeItem(state: AppState, themeId: string, itemId: string): Ap
 }
 
 export function addTask(state: AppState, themeId: string, repoId: string, task: Task): AppState {
-  assertTaskSlugFree(getRepo(state, themeId, repoId), task.slug)
+  const repo = getRepo(state, themeId, repoId)
+  assertTaskSlugFree(repo, task.slug)
+  assertTaskNameFree(repo, task.name)
   const next = clone(state)
   getRepo(next, themeId, repoId).tasks.push(task)
   return next
@@ -120,5 +156,15 @@ export function removeTask(state: AppState, themeId: string, repoId: string, tas
   const next = clone(state)
   const repo = getRepo(next, themeId, repoId)
   repo.tasks = repo.tasks.filter((t) => t.id !== taskId)
+  return next
+}
+
+/** Changes the display name only: the slug, branch, worktree path and tmux session stay as they are. */
+export function renameTask(state: AppState, themeId: string, repoId: string, taskId: string, name: string): AppState {
+  getTask(state, themeId, repoId, taskId)
+  const trimmed = requireName(name, 'Task')
+  assertTaskNameFree(getRepo(state, themeId, repoId), trimmed, taskId)
+  const next = clone(state)
+  getTask(next, themeId, repoId, taskId).name = trimmed
   return next
 }

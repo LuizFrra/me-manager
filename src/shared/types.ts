@@ -81,6 +81,8 @@ export interface MeManagerApi {
   checkPrereqs(): Promise<PrereqResult>
 
   createTheme(name: string): Promise<AppState>
+  /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */
+  renameTheme(themeId: string, name: string): Promise<AppState>
   removeTheme(themeId: string): Promise<AppState>
 
   pickDirectory(): Promise<string | null>
@@ -89,6 +91,8 @@ export interface MeManagerApi {
   removeItem(themeId: string, itemId: string): Promise<AppState>
 
   createTask(themeId: string, repoId: string, name: string): Promise<AppState>
+  /** Display name only; the slug, branch, worktree path and tmux session never change. */
+  renameTask(themeId: string, repoId: string, taskId: string, name: string): Promise<AppState>
   checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork>
   removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState>
 
