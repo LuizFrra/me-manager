@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { GitService, parseLastCommit, parseLeftRightCount } from './gitService'
+import { GitService, parseBranchRefs, parseLastCommit, parseLeftRightCount } from './gitService'
 import { commitFile, git, makeClonedRepo, makeLocalRepo } from './testRepos'
 
 const svc = new GitService()
@@ -45,6 +45,52 @@ describe('resolveBaseRef', () => {
   it('uses local main without a remote', async () => {
     const { repo } = await makeLocalRepo()
     await expect(svc.resolveBaseRef(repo)).resolves.toBe('main')
+  })
+})
+
+describe('listBranches / verifyRef', () => {
+  it("lists origin's branches without origin/HEAD, then the local ones", async () => {
+    const { root, clone } = await makeClonedRepo()
+    // Another clone pushes a feature branch; ours sees it after a fetch.
+    const other = join(root, 'other')
+    await run('git', ['clone', join(root, 'origin.git'), other])
+    await git(other, 'checkout', '-b', 'feature/login')
+    await commitFile(other, 'login.txt', 'x\n', 'login')
+    await git(other, 'push', 'origin', 'feature/login')
+    await svc.fetch(clone)
+    await git(clone, 'branch', 'local-only')
+    await expect(svc.listBranches(clone)).resolves.toEqual([
+      'origin/feature/login',
+      'origin/main',
+      'local-only',
+      'main',
+    ])
+  })
+
+  it('lists only local branches without a remote', async () => {
+    const { repo } = await makeLocalRepo()
+    await expect(svc.listBranches(repo)).resolves.toEqual(['main'])
+  })
+
+  it('verifies refs, refusing option-like ones', async () => {
+    const { clone } = await makeClonedRepo()
+    await expect(svc.verifyRef(clone, 'origin/main')).resolves.toBe(true)
+    await expect(svc.verifyRef(clone, 'main')).resolves.toBe(true)
+    await expect(svc.verifyRef(clone, 'origin/nope')).resolves.toBe(false)
+    await expect(svc.verifyRef(clone, '--all')).resolves.toBe(false)
+    await expect(svc.verifyRef(clone, '')).resolves.toBe(false)
+  })
+
+  it("parses full ref names, listing a local branch named like one of origin's only once", () => {
+    const out = [
+      'refs/remotes/origin/HEAD',
+      'refs/remotes/origin/main',
+      'refs/remotes/origin/a/b',
+      'refs/heads/origin/main',
+      'refs/heads/dev',
+      '',
+    ].join('\n')
+    expect(parseBranchRefs(out)).toEqual(['origin/a/b', 'origin/main', 'dev'])
   })
 })
 

@@ -8,8 +8,10 @@ import {
   GIT_STATUS_TTL_MS,
   claudeCommand,
   claudeContinueCommand,
+  claudePromptCommand,
+  normalizeTaskOptions,
 } from './orchestrator'
-import type { AppState, Target, Task, TaskGitStatus } from '../../shared/types'
+import { MAX_TASK_PROMPT, type AppState, type Target, type Task, type TaskGitStatus } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { makeDeps } from './fakes'
 
@@ -94,6 +96,115 @@ describe('Orchestrator: createTask', () => {
     expect(git.calls).toContain('removeWorktree /wt/client-x/my-api/fix')
     expect(git.calls).toContain('deleteBranch claude/client-x/fix')
     expect(store.saved.length).toBe(savesBefore)
+  })
+})
+
+describe('Orchestrator: new-task options', () => {
+  it('lists the branches after a fetch, the default first', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    git.calls = []
+    await expect(orch.listBranches(themeId, repoId)).resolves.toEqual({
+      default: 'origin/main',
+      branches: ['origin/main', 'origin/develop', 'main'],
+    })
+    expect(git.calls).toEqual(['fetch /code/my-api', 'listBranches /code/my-api'])
+  })
+
+  it('still lists the branches when the fetch fails, and adds a default git did not list', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    git.failFetch = true
+    git.branches = ['origin/develop']
+    await expect(orch.listBranches(themeId, repoId)).resolves.toEqual({
+      default: 'origin/main',
+      branches: ['origin/main', 'origin/develop'],
+    })
+  })
+
+  it('creates the worktree from the chosen base branch and records it', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { baseRef: 'origin/develop' }))
+    expect(task.baseRef).toBe('origin/develop')
+    expect(git.calls).toContain('addWorktree /wt/client-x/my-api/fix claude/client-x/fix origin/develop')
+  })
+
+  it('uses the default base when none is chosen', async () => {
+    const { orch, themeId, repoId } = await setup()
+    expect(taskOf(await orch.createTask(themeId, repoId, 'fix', { baseRef: ' ' })).baseRef).toBe('origin/main')
+  })
+
+  it('refuses an unlisted, unresolvable or option-like base branch before creating anything', async () => {
+    const { orch, git, tmux, store, themeId, repoId } = await setup()
+    git.unresolvable.add('main')
+    const saves = store.saved.length
+    await expect(orch.createTask(themeId, repoId, 'a', { baseRef: 'origin/nope' })).rejects.toThrow(
+      'Unknown base branch: origin/nope',
+    )
+    await expect(orch.createTask(themeId, repoId, 'a', { baseRef: '--upload-pack=evil' })).rejects.toThrow(
+      'Invalid base branch',
+    )
+    await expect(orch.createTask(themeId, repoId, 'a', { baseRef: 'main' })).rejects.toThrow(
+      'Base branch not found: main',
+    )
+    expect(git.calls.some((c) => c.startsWith('addWorktree'))).toBe(false)
+    expect(tmux.calls).toEqual([])
+    expect(store.saved.length).toBe(saves)
+  })
+
+  it('passes the initial prompt, shell-quoted, on the first start only', async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await orch.updateSettings({ claudeArgs: ['--model', 'opus'] })
+    const prompt = "Fix the login bug; don't touch $(rm -rf ~) or `id`\nthen run the tests"
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { prompt: `  ${prompt}  ` }))
+    const quoted = `'Fix the login bug; don'\\''t touch $(rm -rf ~) or \`id\`\nthen run the tests'`
+    expect(tmux.calls).toEqual([`newSession mmt_client-x_my-api_fix claude --model opus -- ${quoted}`])
+
+    // A recreated session and a restarted Claude window continue the conversation instead.
+    const target = { themeId, itemId: repoId, taskId: task.id }
+    tmux.sessions.clear()
+    await orch.openTarget(target)
+    await orch.newTab(target)
+    await orch.closeTab(target, 0)
+    await orch.restartClaude(target)
+    const later = [tmux.calls.at(-1), tmux.sessions.get('mmt_client-x_my-api_fix')?.windows.at(-1)?.command]
+    for (const command of later) {
+      expect(command).toContain('claude --model opus --continue || claude --model opus')
+      expect(command).not.toContain('Fix the login bug')
+    }
+  })
+
+  it('keeps $(…) and quotes in the prompt literal for the shell', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const prompt = `$(touch /tmp/mm-pwned) \`id\` 'single' "double" $HOME ; & | --flag`
+    const command = claudePromptCommand(['--model', 'opus'], prompt)
+    // printf stands in for claude: the shell must hand it the prompt back verbatim, as one argument.
+    const words = execFileSync('sh', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], { encoding: 'utf8' })
+    expect(words.split('\0').slice(0, -1)).toEqual(['--model', 'opus', '--', prompt])
+    expect(claudePromptCommand([], undefined)).toBe('claude')
+  })
+
+  it('validates the options it gets over IPC', () => {
+    expect(normalizeTaskOptions(undefined)).toEqual({})
+    expect(normalizeTaskOptions({ baseRef: ' origin/x ', prompt: '  hi  ' })).toEqual({
+      baseRef: 'origin/x',
+      prompt: 'hi',
+    })
+    expect(normalizeTaskOptions({ baseRef: '', prompt: '   ' })).toEqual({})
+    expect(normalizeTaskOptions({ prompt: 'x'.repeat(MAX_TASK_PROMPT) }).prompt).toHaveLength(MAX_TASK_PROMPT)
+    expect(() => normalizeTaskOptions({ prompt: 'x'.repeat(MAX_TASK_PROMPT + 1) })).toThrow(
+      'The initial prompt is limited to 10,000 characters',
+    )
+    expect(() => normalizeTaskOptions({ prompt: 42 })).toThrow('Invalid initial prompt')
+    expect(() => normalizeTaskOptions({ baseRef: 'a\0b' })).toThrow('Invalid base branch')
+    expect(() => normalizeTaskOptions('origin/main')).toThrow('Invalid task options')
+  })
+
+  it('rejects a too-long prompt before touching git', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    git.calls = []
+    await expect(orch.createTask(themeId, repoId, 'fix', { prompt: 'x'.repeat(MAX_TASK_PROMPT + 1) })).rejects.toThrow(
+      /limited to/,
+    )
+    expect(git.calls).toEqual([])
   })
 })
 

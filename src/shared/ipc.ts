@@ -16,6 +16,7 @@ export const INVOKE_METHODS = [
   'addRepo',
   'addFolder',
   'removeItem',
+  'listBranches',
   'createTask',
   'renameTask',
   'setTaskNotes',

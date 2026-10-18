@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
+import { MAX_TASK_PROMPT } from '../../shared/types'
 import type {
   AppState,
+  BranchList,
   ChangeList,
   ClaudeActivity,
   FileContent,
   FileList,
   LiveStatus,
+  NewTaskOptions,
   Settings,
   TabInfo,
   Target,
@@ -30,6 +33,13 @@ import { isRecentlyActive, looksWaiting } from '../tmux/activity'
  * it to a shell, so every argument is shell-quoted: `$(…)`, `;` or spaces in an argument stay literal.
  */
 export const claudeCommand = (args: readonly string[] = []): string => ['claude', ...args].map(shellQuote).join(' ')
+/**
+ * The first start of a task's Claude with an initial prompt: Claude's positional `[prompt]` argument, after `--`
+ * so that neither a prompt starting with '-' nor a variadic option in the user's arguments (`--add-dir a b`) can
+ * swallow or misread it. Restarts use claudeContinueCommand, which never repeats the prompt.
+ */
+export const claudePromptCommand = (args: readonly string[], prompt: string | undefined): string =>
+  claudeCommand(prompt ? [...args, '--', prompt] : args)
 /** `--continue` fails when there is no previous conversation; fall back to a fresh one. */
 export const claudeContinueCommand = (args: readonly string[] = []): string =>
   `${claudeCommand([...args, '--continue'])} || ${claudeCommand(args)}`
@@ -49,6 +59,31 @@ export const GIT_STATUS_TTL_MS = 5_000
 export const GIT_STATUS_CONCURRENCY = 4
 /** Quiet `claude` windows whose screen is captured at the same time (see getStatus). */
 export const PANE_CAPTURE_CONCURRENCY = 4
+
+/**
+ * createTask's options as sent over IPC (so not trusted to match NewTaskOptions): trimmed, with empty values
+ * dropped. Throws on wrong types, a prompt over MAX_TASK_PROMPT characters, or a NUL in either value.
+ */
+export function normalizeTaskOptions(raw: unknown): NewTaskOptions {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid task options')
+  const { baseRef, prompt } = raw as Record<string, unknown>
+  const text = (value: unknown, what: string): string | undefined => {
+    if (value === undefined || value === null) return undefined
+    if (typeof value !== 'string' || value.includes('\0')) throw new Error(`Invalid ${what}`)
+    return value.trim() || undefined
+  }
+  const options: NewTaskOptions = {}
+  const ref = text(baseRef, 'base branch')
+  if (ref !== undefined) options.baseRef = ref
+  const first = text(prompt, 'initial prompt')
+  if (first !== undefined) {
+    if (first.length > MAX_TASK_PROMPT)
+      throw new Error(`The initial prompt is limited to ${MAX_TASK_PROMPT.toLocaleString('en-US')} characters`)
+    options.prompt = first
+  }
+  return options
+}
 
 export interface OrchestratorOptions {
   /** Overrides FETCH_TIMEOUT_MS (for tests). */
@@ -316,7 +351,33 @@ export class Orchestrator implements AppService {
     })
   }
 
-  async createTask(themeId: string, repoId: string, name: string): Promise<AppState> {
+  /** The default base and every listed branch, the default first (it may be a local branch git doesn't list). */
+  private async branchList(repoPath: string): Promise<BranchList> {
+    const [defaultRef, branches] = await Promise.all([
+      this.deps.git.resolveBaseRef(repoPath),
+      this.deps.git.listBranches(repoPath),
+    ])
+    return { default: defaultRef, branches: [defaultRef, ...branches.filter((b) => b !== defaultRef)] }
+  }
+
+  /** Read-only (fetch only updates remote-tracking refs), so it doesn't wait for queued mutations. */
+  async listBranches(themeId: string, repoId: string): Promise<BranchList> {
+    const repo = m.getRepo(this.state, themeId, repoId)
+    await this.fetchWithTimeout(repo.path)
+    return this.branchList(repo.path)
+  }
+
+  /** The base a new task starts from: the chosen one once checked, or the repo's default. */
+  private async chooseBaseRef(repoPath: string, chosen: string | undefined): Promise<string> {
+    if (chosen === undefined) return this.deps.git.resolveBaseRef(repoPath)
+    if (chosen.startsWith('-')) throw new Error(`Invalid base branch: ${chosen}`)
+    const { branches } = await this.branchList(repoPath)
+    if (!branches.includes(chosen)) throw new Error(`Unknown base branch: ${chosen}`)
+    if (!(await this.deps.git.verifyRef(repoPath, chosen))) throw new Error(`Base branch not found: ${chosen}`)
+    return chosen
+  }
+
+  async createTask(themeId: string, repoId: string, name: string, options?: NewTaskOptions): Promise<AppState> {
     return this.exclusive(async () => {
       const { git, tmux } = this.deps
       const theme = m.getTheme(this.state, themeId)
@@ -324,19 +385,20 @@ export class Orchestrator implements AppService {
       const slug = m.requireSlug(name, 'Task')
       m.assertTaskSlugFree(repo, slug)
       m.assertTaskNameFree(repo, name)
+      const { baseRef: chosenBase, prompt } = normalizeTaskOptions(options)
       const branch = branchName(theme.slug, slug)
       const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
       const session = sessionName(theme.slug, repo.slug, slug)
 
       await this.fetchWithTimeout(repo.path)
-      const baseRef = await git.resolveBaseRef(repo.path)
+      const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
         await tmux.newSession(
           session,
           worktreePath,
           CLAUDE_WINDOW,
-          claudeCommand(this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)),
+          claudePromptCommand(this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`), prompt),
         )
         const task: Task = {
           id: randomUUID(),

@@ -424,6 +424,78 @@ button:disabled {
   color: var(--muted);
   font-size: 11px;
 }
+.new-task-dialog {
+  width: min(560px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  gap: 12px;
+}
+.dialog-title-context {
+  color: var(--muted);
+  font-weight: 400;
+}
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dialog-field > label {
+  font-weight: 600;
+}
+.dialog-field-optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+.dialog-field select,
+.dialog-field textarea {
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+.dialog-field select {
+  font-family: Menlo, 'DejaVu Sans Mono', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+}
+.dialog-field select:disabled {
+  color: var(--muted);
+}
+.dialog-field textarea {
+  min-height: 96px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.dialog-field select:focus,
+.dialog-field textarea:focus,
+.dialog input[aria-label='Name']:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.dialog-field textarea::placeholder {
+  color: var(--muted);
+}
+.dialog-field .notes-meta {
+  margin-top: 0;
+}
+.dialog-field-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.dialog-field-error {
+  color: #f47067;
+}
+.dialog-actions-hint {
+  margin-right: auto;
+  align-self: center;
+  color: var(--muted);
+  font-size: 11px;
+}
 .settings-dialog {
   width: min(540px, 92vw);
   max-height: 90vh;

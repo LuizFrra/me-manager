@@ -13,6 +13,18 @@ describe('createMockApi', () => {
     const task = s.themes[0].items[0].kind === 'repo' ? s.themes[0].items[0].tasks[0] : null
     expect(task).toMatchObject({ name: 'fix login', branch: 'claude/client-x/fix-login' })
   })
+  it('lists demo branches and creates tasks from a chosen one', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('T')
+    const themeId = s.themes[0].id
+    s = await api.addRepo(themeId, '/code/r')
+    const repoId = s.themes[0].items[0].id
+    const { default: base, branches } = await api.listBranches(themeId, repoId)
+    expect(branches[0]).toBe(base)
+    s = await api.createTask(themeId, repoId, 'a', { baseRef: 'origin/develop', prompt: 'go' })
+    expect(s.themes[0].items[0]).toMatchObject({ tasks: [{ baseRef: 'origin/develop' }] })
+    await expect(api.createTask(themeId, repoId, 'b', { baseRef: 'origin/nope' })).rejects.toThrow(/Unknown/)
+  })
   it('renames themes and tasks, rejecting empty and duplicate names', async () => {
     const api = createMockApi()
     let s = await api.createTheme('Client X')

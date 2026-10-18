@@ -1,5 +1,6 @@
 import {
   MAX_TASK_NOTES,
+  MAX_TASK_PROMPT,
   type AppState,
   type MeManagerApi,
   type Settings,
@@ -11,6 +12,9 @@ import { branchName, slugify, targetKey } from '../../../shared/naming'
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../../shared/settings'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS } from './demoFiles'
+
+/** The branches a demo task can start from; listBranches' default is the first. */
+const DEMO_BRANCHES = ['origin/main', 'origin/develop', 'origin/release/2.0', 'main']
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v))
 const baseName = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
@@ -101,10 +105,15 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       edit(themeId, (t) => {
         t.items = t.items.filter((i) => i.id !== itemId)
       }),
-    createTask: (themeId, repoId, name) =>
+    listBranches: async () => ({ default: 'origin/main', branches: [...DEMO_BRANCHES] }),
+    createTask: (themeId, repoId, name, options = {}) =>
       edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind !== 'repo') throw new Error('Repository not found')
+        const baseRef = options.baseRef || 'origin/main'
+        if (!DEMO_BRANCHES.includes(baseRef)) throw new Error(`Unknown base branch: ${baseRef}`)
+        if ((options.prompt ?? '').length > MAX_TASK_PROMPT)
+          throw new Error(`The initial prompt is limited to ${MAX_TASK_PROMPT} characters`)
         const slug = slugify(name)
         repo.tasks.push({
           id: id(),
@@ -112,7 +121,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
           slug,
           branch: branchName(t.slug, slug),
           worktreePath: `/home/demo/.me-manager/worktrees/${t.slug}/${repo.slug}/${slug}`,
-          baseRef: 'origin/main',
+          baseRef,
           createdAt: new Date().toISOString(),
         })
       }),

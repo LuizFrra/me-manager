@@ -72,6 +72,16 @@ export class FakeGit implements GitApi {
   async resolveBaseRef(): Promise<string> {
     return 'origin/main'
   }
+  /** What listBranches returns; verifyRef is true for these unless listed in `unresolvable`. */
+  branches = ['origin/develop', 'origin/main', 'main']
+  unresolvable = new Set<string>()
+  async listBranches(repo: string): Promise<string[]> {
+    this.calls.push(`listBranches ${repo}`)
+    return [...this.branches]
+  }
+  async verifyRef(_repo: string, ref: string): Promise<boolean> {
+    return !ref.startsWith('-') && this.branches.includes(ref) && !this.unresolvable.has(ref)
+  }
   async addWorktree(_repo: string, wt: string, branch: string, base: string): Promise<void> {
     this.calls.push(`addWorktree ${wt} ${branch} ${base}`)
   }

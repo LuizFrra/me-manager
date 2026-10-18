@@ -23,6 +23,13 @@ export interface GitApi {
   fetch(repoPath: string): Promise<void>
   /** e.g. "origin/main"; falls back to local main/master/current branch. */
   resolveBaseRef(repoPath: string): Promise<string>
+  /**
+   * origin's branches as `origin/<name>` (without `origin/HEAD`), then the local branches, each sorted by name.
+   * Read-only: no fetch.
+   */
+  listBranches(repoPath: string): Promise<string[]>
+  /** Whether `ref` names a commit in the repo (`rev-parse --verify`); false for anything starting with '-'. */
+  verifyRef(repoPath: string, ref: string): Promise<boolean>
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>
   /** Removes the worktree (forced); prunes if its folder is already gone. */
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>
