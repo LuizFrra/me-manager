@@ -87,6 +87,61 @@ describe('Orchestrator: createTask', () => {
   })
 })
 
+describe('Orchestrator: rename', () => {
+  it('renames a theme and saves, keeping slugs, branches and paths', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    const before = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const s = await orch.renameTheme(themeId, '  Client Y ')
+    expect(s.themes[0]).toMatchObject({ name: 'Client Y', slug: 'client-x' })
+    expect(taskOf(s)).toEqual(before)
+    expect(store.saved.at(-1)).toEqual(s)
+    expect(await orch.getState()).toBe(s)
+  })
+
+  it('renames a task without touching git or tmux, and the session still resolves', async () => {
+    const { orch, git, tmux, pty, store, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    git.calls = []
+    tmux.calls = []
+    const s = await orch.renameTask(themeId, repoId, task.id, 'Fix the login flow')
+    expect(taskOf(s)).toEqual({ ...task, name: 'Fix the login flow' })
+    expect(store.saved.at(-1)).toEqual(s)
+    expect(git.calls).toEqual([])
+    expect(tmux.calls).toEqual([])
+    await orch.openTarget({ themeId, itemId: repoId, taskId: task.id })
+    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+  })
+
+  it('rejects empty and duplicate names without saving', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    await orch.createTheme('Personal')
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    await orch.createTask(themeId, repoId, 'docs')
+    const saves = store.saved.length
+    await expect(orch.renameTheme(themeId, 'personal')).rejects.toThrow(/already exists/)
+    await expect(orch.renameTask(themeId, repoId, task.id, ' ')).rejects.toThrow("Task name can't be empty")
+    await expect(orch.renameTask(themeId, repoId, task.id, 'Docs')).rejects.toThrow(/already exists/)
+    expect(store.saved.length).toBe(saves)
+  })
+
+  it('rejects a new task named like a renamed one before touching git', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    await orch.renameTask(themeId, repoId, task.id, 'Login')
+    git.calls = []
+    await expect(orch.createTask(themeId, repoId, 'login')).rejects.toThrow(/already exists/)
+    expect(git.calls).toEqual([])
+  })
+
+  it('serializes renames with other mutations', async () => {
+    const { orch, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    await Promise.all([orch.renameTask(themeId, repoId, task.id, 'A'), orch.createTask(themeId, repoId, 'other')])
+    const repo = (await orch.getState()).themes[0].items[0]
+    expect(repo.kind === 'repo' && repo.tasks.map((t) => t.name)).toEqual(['A', 'other'])
+  })
+})
+
 describe('Orchestrator: removeTask', () => {
   it('detaches, kills the session, removes the worktree and optionally the branch', async () => {
     const { orch, git, tmux, pty, themeId, repoId } = await setup()

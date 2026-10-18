@@ -1,14 +1,23 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import type { UnsavedWork } from '../../../shared/types'
 
+/** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
 export function NameDialog(props: {
   title: string
   placeholder: string
+  /** The current name, when renaming. Submitting it unchanged is disabled. */
+  initial?: string
+  /** The submit button's label; "Create" by default. */
+  submitLabel?: string
+  /** A short explanation shown under the field. */
+  note?: string
   onSubmit: (name: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
-  const [name, setName] = useState('')
+  const [name, setName] = useState(props.initial ?? '')
   const [busy, setBusy] = useState(false)
+  const unchanged = props.initial !== undefined && name.trim() === props.initial
+  const noteId = useId()
   return (
     <div className="overlay">
       <form
@@ -17,7 +26,7 @@ export function NameDialog(props: {
         aria-label={props.title}
         onSubmit={async (e) => {
           e.preventDefault()
-          if (!name.trim()) return
+          if (!name.trim() || unchanged) return
           setBusy(true)
           try {
             await props.onSubmit(name.trim())
@@ -30,17 +39,24 @@ export function NameDialog(props: {
         <input
           autoFocus
           aria-label="Name"
+          aria-describedby={props.note ? noteId : undefined}
           placeholder={props.placeholder}
           value={name}
+          onFocus={(e) => props.initial !== undefined && e.currentTarget.select()}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
         />
+        {props.note && (
+          <p id={noteId} className="dialog-note">
+            {props.note}
+          </p>
+        )}
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || !name.trim()}>
-            {busy ? 'Working…' : 'Create'}
+          <button type="submit" disabled={busy || !name.trim() || unchanged}>
+            {busy ? 'Working…' : (props.submitLabel ?? 'Create')}
           </button>
         </div>
       </form>

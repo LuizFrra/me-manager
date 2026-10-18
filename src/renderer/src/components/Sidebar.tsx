@@ -15,11 +15,13 @@ export interface SidebarProps {
   filterRef?: React.Ref<HTMLInputElement>
   onSelect: (target: Target) => void
   onAddTheme: () => void
+  onRenameTheme: (themeId: string, currentName: string) => void
   onRemoveTheme: (themeId: string) => void
   onAddRepo: (themeId: string) => void
   onAddFolder: (themeId: string) => void
   onRemoveItem: (themeId: string, itemId: string) => void
   onAddTask: (themeId: string, repoId: string) => void
+  onRenameTask: (themeId: string, repoId: string, taskId: string, currentName: string) => void
   onRemoveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
 }
 
@@ -101,6 +103,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                   📁+
                 </button>
                 <button
+                  aria-label={`Rename theme ${theme.name}`}
+                  title="Rename theme"
+                  onClick={() => p.onRenameTheme(theme.id, theme.name)}
+                >
+                  ✎
+                </button>
+                <button
                   aria-label={`Remove theme ${theme.name}`}
                   title="Remove theme"
                   onClick={() => p.onRemoveTheme(theme.id)}
@@ -166,6 +175,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 {dot(task.id)} {task.name}
                               </button>
                               <span className="row-actions">
+                                <button
+                                  aria-label={`Rename task ${task.name}`}
+                                  title="Rename task"
+                                  onClick={() => p.onRenameTask(theme.id, item.id, task.id, task.name)}
+                                >
+                                  ✎
+                                </button>
                                 <button
                                   aria-label={`Remove task ${task.name}`}
                                   title="Remove task"
