@@ -44,6 +44,31 @@ export function parseLastCommit(out: string): TaskGitStatus['lastCommit'] {
   return sha && subject !== undefined && relativeDate !== undefined ? { sha, subject, relativeDate } : undefined
 }
 
+const ORIGIN_PREFIX = 'refs/remotes/origin/'
+const HEADS_PREFIX = 'refs/heads/'
+
+/**
+ * `git for-each-ref --format=%(refname)` output for refs/remotes/origin and refs/heads, as base-branch names:
+ * `origin/<name>` for origin's branches (but not `origin/HEAD`, which only points at one of them), then the local
+ * branch names. Full ref names are read, since git's short names can be ambiguous; a local branch named like one
+ * of origin's (`origin/main`) is left out, as the name can only be listed once.
+ */
+export function parseBranchRefs(out: string): string[] {
+  const remote: string[] = []
+  const local: string[] = []
+  for (const ref of out.split('\n')) {
+    if (ref.startsWith(ORIGIN_PREFIX)) {
+      const name = ref.slice(ORIGIN_PREFIX.length)
+      if (name && name !== 'HEAD') remote.push(`origin/${name}`)
+    } else if (ref.startsWith(HEADS_PREFIX) && ref.length > HEADS_PREFIX.length) {
+      local.push(ref.slice(HEADS_PREFIX.length))
+    }
+  }
+  const byName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+  const remoteNames = new Set(remote)
+  return [...remote.sort(byName), ...local.filter((name) => !remoteNames.has(name)).sort(byName)]
+}
+
 export class GitService implements GitApi {
   private git(cwd: string, args: string[]): Promise<string> {
     return run('git', ['-C', cwd, ...args])
@@ -121,6 +146,27 @@ export class GitService implements GitApi {
     const current = (await this.git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
     if (current && current !== 'HEAD') return current
     throw new Error(`Could not find a base branch in ${repoPath}`)
+  }
+
+  async listBranches(repoPath: string): Promise<string[]> {
+    const out = await this.inspect(repoPath, [
+      'for-each-ref',
+      '--format=%(refname)',
+      'refs/remotes/origin',
+      'refs/heads',
+    ])
+    return parseBranchRefs(out)
+  }
+
+  async verifyRef(repoPath: string, ref: string): Promise<boolean> {
+    // A ref starting with '-' would be read as an option.
+    if (!ref || ref.startsWith('-')) return false
+    try {
+      await this.inspect(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+      return true
+    } catch {
+      return false
+    }
   }
 
   async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {

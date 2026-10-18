@@ -1536,3 +1536,82 @@ describe('App notification clicks', () => {
     expect(unsubscribe).toHaveBeenCalled()
   })
 })
+
+describe('App new task options', () => {
+  const openNewTask = async (user: UserEvent): Promise<HTMLElement> => {
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await user.click(await screen.findByRole('button', { name: 'New task in my-api' }))
+    return screen.getByRole('dialog', { name: 'New task in my-api' })
+  }
+
+  it('starts from the chosen base branch with an initial prompt, and opens the task', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const listBranches = vi.spyOn(api, 'listBranches')
+    const createTask = vi.spyOn(api, 'createTask')
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    const dialog = within(await openNewTask(user))
+    const base = dialog.getByRole('combobox', { name: 'Base branch' })
+    await waitFor(() => expect(base).toBeEnabled())
+    expect(base).toHaveValue('origin/main')
+    expect(dialog.getByRole('option', { name: 'origin/main (default)' })).toBeInTheDocument()
+    expect(dialog.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'origin/main (default)',
+      'origin/develop',
+      'origin/release/2.0',
+      'main',
+    ])
+    await user.type(dialog.getByRole('textbox', { name: 'Name' }), 'fix login')
+    await user.selectOptions(base, 'origin/develop')
+    const prompt = dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })
+    expect(prompt).toHaveAttribute('maxLength', '10000')
+    await user.type(prompt, "Fix it; don't run $(rm -rf ~)")
+    expect(dialog.getByText('29 / 10000')).toBeInTheDocument()
+    await user.click(dialog.getByRole('button', { name: 'Create' }))
+
+    await screen.findByRole('button', { name: 'Remove task fix login' })
+    expect(createTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'fix login', {
+      baseRef: 'origin/develop',
+      prompt: "Fix it; don't run $(rm -rf ~)",
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(openTarget).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) })),
+    )
+    expect(await screen.findByLabelText('Git status')).toHaveTextContent('vs origin/develop')
+    expect(listBranches).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the default base when the branches cannot be listed', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({ listBranches: async () => Promise.reject(new Error('git fetch failed: no network')) })
+    const createTask = vi.spyOn(api, 'createTask')
+    render(<App api={api} />)
+    const dialog = within(await openNewTask(user))
+    expect(await dialog.findByRole('alert')).toHaveTextContent(
+      'Could not list the branches: git fetch failed: no network. The task will start from the default branch.',
+    )
+    expect(dialog.getByRole('combobox', { name: 'Base branch' })).toBeDisabled()
+    await user.type(dialog.getByRole('textbox', { name: 'Name' }), 'fix{Control>}{Enter}{/Control}')
+    await screen.findByRole('button', { name: 'Remove task fix' })
+    expect(createTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'fix', {})
+  })
+
+  it('keeps the dialog and its fields when creating fails, and Esc cancels', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      createTask: async () => Promise.reject(new Error('Branch "claude/client-x/fix" already exists')),
+    })
+    render(<App api={api} />)
+    const dialog = within(await openNewTask(user))
+    await user.type(dialog.getByRole('textbox', { name: 'Name' }), 'fix')
+    await user.type(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' }), 'hello')
+    await user.click(dialog.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText(/already exists/)).toBeInTheDocument()
+    expect(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })).toHaveValue('hello')
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})

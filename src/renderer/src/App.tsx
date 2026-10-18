@@ -3,6 +3,7 @@ import type {
   AppState,
   LiveStatus,
   MeManagerApi,
+  NewTaskOptions,
   PrereqResult,
   Settings,
   TabInfo,
@@ -18,7 +19,7 @@ import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
-import { NameDialog, NotesDialog, RemoveTaskDialog } from './components/Dialogs'
+import { NameDialog, NewTaskDialog, NotesDialog, RemoveTaskDialog } from './components/Dialogs'
 import { TaskHeader } from './components/TaskHeader'
 import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
@@ -54,6 +55,7 @@ type Dialog =
   | ({ kind: 'name'; onSubmit: (name: string) => Promise<void> } & NameAsk)
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
+  | { kind: 'newTask'; themeId: string; repoId: string; repoName: string }
   | { kind: 'settings' }
 
 type AppAction =
@@ -297,11 +299,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
   }
 
-  const askName = (
-    ask: NameAsk,
-    submit: (name: string) => Promise<AppState>,
-    after?: (s: AppState, name: string) => void,
-  ): void =>
+  const askName = (ask: NameAsk, submit: (name: string) => Promise<AppState>): void =>
     setDialog({
       kind: 'name',
       ...ask,
@@ -310,7 +308,6 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         if (!next) return
         setState(next)
         setDialog(null)
-        after?.(next, name)
       },
     })
 
@@ -353,6 +350,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }
 
   const openSettings = (): void => setDialog({ kind: 'settings' })
+
+  const newTask = (themeId: string, repoId: string): void => {
+    const repo = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    if (repo?.kind === 'repo') setDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name })
+  }
+
+  const createTask = async (themeId: string, repoId: string, name: string, options: NewTaskOptions): Promise<void> => {
+    const next = await update(() => api.createTask(themeId, repoId, name, options))
+    if (!next) return
+    setDialog(null)
+    const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    const task = repo?.kind === 'repo' ? repo.tasks.find((t) => t.name === name) : undefined
+    if (task) void open({ themeId, itemId: repoId, taskId: task.id })
+  }
 
   // Terminal zoom applies at once and is saved debounced; a size still waiting is saved if the App unmounts.
   const zoomSave = useRef<{ timer: ReturnType<typeof setTimeout>; size: number } | null>(null)
@@ -576,17 +587,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onRemoveItem={async (themeId, itemId) => {
           if (await update(() => api.removeItem(themeId, itemId))) clearSelectionIf((t) => t.itemId === itemId)
         }}
-        onAddTask={(themeId, repoId) =>
-          askName(
-            { title: 'New task', placeholder: 'e.g. fix login bug' },
-            (name) => api.createTask(themeId, repoId, name),
-            (next, name) => {
-              const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
-              const task = repo?.kind === 'repo' ? repo.tasks.find((t) => t.name === name) : undefined
-              if (task) void open({ themeId, itemId: repoId, taskId: task.id })
-            },
-          )
-        }
+        onAddTask={newTask}
         onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
         onOpenSettings={openSettings}
@@ -670,6 +671,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           submitLabel={dialog.submitLabel}
           note={dialog.note}
           onSubmit={dialog.onSubmit}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'newTask' && (
+        <NewTaskDialog
+          repoName={dialog.repoName}
+          loadBranches={() => api.listBranches(dialog.themeId, dialog.repoId)}
+          onSubmit={(name, options) => createTask(dialog.themeId, dialog.repoId, name, options)}
           onCancel={() => setDialog(null)}
         />
       )}

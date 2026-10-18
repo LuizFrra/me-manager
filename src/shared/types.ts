@@ -12,6 +12,25 @@ export interface Task {
 
 export const MAX_TASK_NOTES = 2000
 
+/** The longest initial prompt a new task's Claude can be started with. */
+export const MAX_TASK_PROMPT = 10_000
+
+/** Choices for a new task, all optional (see MeManagerApi.createTask). */
+export interface NewTaskOptions {
+  /** The branch to start from: one of listBranches' `branches`. Omitted: the repo's default (`resolveBaseRef`). */
+  baseRef?: string
+  /** The first message for Claude, up to MAX_TASK_PROMPT characters. Sent on the first start only. */
+  prompt?: string
+}
+
+/** The branches a new task can start from. */
+export interface BranchList {
+  /** The base a task gets when none is chosen, e.g. "origin/main". Always one of `branches`. */
+  default: string
+  /** `default` first, then origin's branches (`origin/…`, without `origin/HEAD`), then local ones. */
+  branches: string[]
+}
+
 export interface Repo {
   id: string
   kind: 'repo'
@@ -146,7 +165,16 @@ export interface MeManagerApi {
   addFolder(themeId: string, path: string): Promise<AppState>
   removeItem(themeId: string, itemId: string): Promise<AppState>
 
-  createTask(themeId: string, repoId: string, name: string): Promise<AppState>
+  /**
+   * Fetches origin (giving up after a timeout, like createTask), then lists the branches a new task in the repo can
+   * start from, with the default one.
+   */
+  listBranches(themeId: string, repoId: string): Promise<BranchList>
+  /**
+   * Creates the task's worktree from `options.baseRef` (checked against listBranches) or the default base, and
+   * starts Claude in it, with `options.prompt` as its first message.
+   */
+  createTask(themeId: string, repoId: string, name: string, options?: NewTaskOptions): Promise<AppState>
   /** Display name only; the slug, branch, worktree path and tmux session never change. */
   renameTask(themeId: string, repoId: string, taskId: string, name: string): Promise<AppState>
   /** Up to MAX_TASK_NOTES characters; an empty string removes the notes. */

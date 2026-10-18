@@ -1,5 +1,12 @@
-import { useId, useRef, useState } from 'react'
-import { MAX_TASK_NOTES, type UnsavedWork } from '../../../shared/types'
+import { useEffect, useId, useRef, useState } from 'react'
+import {
+  MAX_TASK_NOTES,
+  MAX_TASK_PROMPT,
+  type BranchList,
+  type NewTaskOptions,
+  type UnsavedWork,
+} from '../../../shared/types'
+import { cleanError } from '../lib/toasts'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
@@ -200,6 +207,154 @@ export function NotesDialog(props: {
           </button>
           <button type="submit" disabled={busy || unchanged}>
             {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+type BranchLoad = { kind: 'loading' } | { kind: 'ready'; list: BranchList } | { kind: 'failed'; error: string }
+
+/**
+ * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
+ * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
+ * default base. Mod+Enter creates from anywhere in the form, Esc cancels.
+ */
+export function NewTaskDialog(props: {
+  repoName: string
+  loadBranches: () => Promise<BranchList>
+  onSubmit: (name: string, options: NewTaskOptions) => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  // The loader the dialog opened with: App re-renders (and passes a new function) on every status poll.
+  const [loadBranches] = useState(() => props.loadBranches)
+  const [name, setName] = useState('')
+  const [prompt, setPrompt] = useState('')
+  const [branches, setBranches] = useState<BranchLoad>({ kind: 'loading' })
+  const [baseRef, setBaseRef] = useState('')
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const baseId = useId()
+  const baseHintId = useId()
+  const promptId = useId()
+  const promptHintId = useId()
+
+  useEffect(() => {
+    let alive = true
+    loadBranches().then(
+      (list) => {
+        if (!alive) return
+        setBranches({ kind: 'ready', list })
+        setBaseRef(list.default)
+      },
+      (err: unknown) => alive && setBranches({ kind: 'failed', error: cleanError(err) }),
+    )
+    return () => {
+      alive = false
+    }
+  }, [loadBranches])
+
+  const submit = async (): Promise<void> => {
+    if (busyRef.current || !name.trim()) return
+    busyRef.current = true
+    setBusy(true)
+    const options: NewTaskOptions = {}
+    if (branches.kind === 'ready' && baseRef) options.baseRef = baseRef
+    if (prompt.trim()) options.prompt = prompt.trim()
+    try {
+      await props.onSubmit(name.trim(), options)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="overlay">
+      <form
+        className="dialog new-task-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`New task in ${props.repoName}`}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            props.onCancel()
+          } else if (isModEnter(e.nativeEvent)) {
+            e.preventDefault()
+            void submit()
+          }
+        }}
+      >
+        <h2>
+          New task <span className="dialog-title-context">in {props.repoName}</span>
+        </h2>
+        <input
+          autoFocus
+          aria-label="Name"
+          placeholder="e.g. fix login bug"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <div className="dialog-field">
+          <label htmlFor={baseId}>Base branch</label>
+          <select
+            id={baseId}
+            aria-describedby={baseHintId}
+            disabled={branches.kind !== 'ready'}
+            value={branches.kind === 'ready' ? baseRef : ''}
+            onChange={(e) => setBaseRef(e.target.value)}
+          >
+            {branches.kind === 'ready' ? (
+              branches.list.branches.map((b) => (
+                <option key={b} value={b}>
+                  {b === branches.list.default ? `${b} (default)` : b}
+                </option>
+              ))
+            ) : (
+              <option value="">{branches.kind === 'loading' ? 'Fetching branches…' : 'Default branch'}</option>
+            )}
+          </select>
+          {branches.kind === 'failed' ? (
+            <p id={baseHintId} className="dialog-field-hint dialog-field-error" role="alert">
+              Could not list the branches: {branches.error}. The task will start from the default branch.
+            </p>
+          ) : (
+            <p id={baseHintId} className="dialog-field-hint">
+              The task&apos;s branch starts here; ahead/behind and changes are counted against it.
+            </p>
+          )}
+        </div>
+        <div className="dialog-field">
+          <label htmlFor={promptId}>
+            Initial prompt <span className="dialog-field-optional">(optional)</span>
+          </label>
+          <textarea
+            id={promptId}
+            aria-describedby={promptHintId}
+            rows={5}
+            maxLength={MAX_TASK_PROMPT}
+            placeholder="What should Claude start with?"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+          <div id={promptHintId} className="notes-meta">
+            <span>Sent to Claude when the task starts, not on restarts.</span>
+            <span>{`${prompt.length} / ${MAX_TASK_PROMPT}`}</span>
+          </div>
+        </div>
+        <div className="dialog-actions">
+          <span className="dialog-actions-hint">{MOD_ENTER_LABEL} to create</span>
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={busy || !name.trim()}>
+            {busy ? 'Creating…' : 'Create'}
           </button>
         </div>
       </form>
