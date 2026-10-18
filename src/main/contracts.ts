@@ -63,7 +63,14 @@ export interface FilesApi {
 /** What the orchestrator implements: everything except renderer/pty-only calls. */
 export type AppService = Omit<
   MeManagerApi,
-  'checkPrereqs' | 'pickDirectory' | 'ptyWrite' | 'ptyResize' | 'onPtyData' | 'onPtyExit' | 'openExternal'
+  | 'checkPrereqs'
+  | 'getTmuxSocket'
+  | 'pickDirectory'
+  | 'ptyWrite'
+  | 'ptyResize'
+  | 'onPtyData'
+  | 'onPtyExit'
+  | 'openExternal'
 >
 
 export interface OrchestratorDeps {

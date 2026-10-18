@@ -4,7 +4,7 @@ export function Toasts({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id:
   return (
     <div className="toasts">
       {toasts.map((t) => (
-        <div key={t.id} className="toast" role="alert">
+        <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === 'error' ? 'alert' : 'status'}>
           <span>{t.message}</span>
           <button aria-label="Dismiss" onClick={() => onDismiss(t.id)}>
             ×

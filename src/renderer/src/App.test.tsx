@@ -844,3 +844,78 @@ describe('App task notes', () => {
     expect(within(header()).queryByRole('button', { name: 'Edit notes' })).not.toBeInTheDocument()
   })
 })
+
+describe('App copy actions', () => {
+  /** Installed after userEvent.setup(), which puts its own clipboard stub on navigator. */
+  type WriteText = (text: string) => Promise<void>
+  function mockClipboard(writeText = vi.fn<WriteText>(async () => {})): typeof writeText {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    return writeText
+  }
+  const header = (): HTMLElement => screen.getByRole('banner')
+
+  it("copies the task's branch, worktree path and attach command, and confirms", async () => {
+    const user = userEvent.setup()
+    const writeText = mockClipboard()
+    render(<App api={repoApi({ getTmuxSocket: async () => 'test-sock' })} />)
+    await createRepoAndTask(user)
+    const copy = within(header()).getByRole('group', { name: 'Copy' })
+
+    await user.click(within(copy).getByRole('button', { name: 'Copy branch name' }))
+    expect(writeText).toHaveBeenLastCalledWith('claude/client-x/fix-login-bug')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied branch name')
+
+    await user.click(within(copy).getByRole('button', { name: 'Copy worktree path' }))
+    expect(writeText).toHaveBeenLastCalledWith('/home/demo/.me-manager/worktrees/client-x/my-api/fix-login-bug')
+
+    await user.click(await within(copy).findByRole('button', { name: 'Copy attach command' }))
+    expect(writeText).toHaveBeenLastCalledWith('tmux -L test-sock attach -t mmt_client-x_my-api_fix-login-bug')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied attach command')
+    expect(screen.getAllByRole('status')).toHaveLength(1) // confirmations replace each other
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it("copies a folder's path and attach command", async () => {
+    const user = userEvent.setup()
+    const writeText = mockClipboard()
+    render(<App api={createMockApi({ pickDirectory: async () => '/home/me/notes' })} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
+    expect(within(header()).queryByRole('button', { name: 'Copy branch name' })).not.toBeInTheDocument()
+    await user.click(within(header()).getByRole('button', { name: 'Copy folder path' }))
+    expect(writeText).toHaveBeenLastCalledWith('/home/me/notes')
+    await user.click(within(header()).getByRole('button', { name: 'Copy attach command' }))
+    expect(writeText).toHaveBeenLastCalledWith('tmux -L me-manager attach -t mmf_client-x_notes')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied attach command')
+  })
+
+  it('copies from the palette', async () => {
+    const user = userEvent.setup()
+    const writeText = mockClipboard()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    for (const [label, text] of [
+      ['Copy branch name', 'claude/client-x/fix-login-bug'],
+      ['Copy worktree path', '/home/demo/.me-manager/worktrees/client-x/my-api/fix-login-bug'],
+      ['Copy attach command', 'tmux -L me-manager attach -t mmt_client-x_my-api_fix-login-bug'],
+    ]) {
+      fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+      await user.type(await screen.findByRole('combobox'), label)
+      expect(screen.getAllByRole('option')[0]).toHaveAccessibleName(label)
+      await user.keyboard('{Enter}')
+      expect(writeText).toHaveBeenLastCalledWith(text)
+    }
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied attach command')
+  })
+
+  it('shows an error when the clipboard refuses', async () => {
+    const user = userEvent.setup()
+    mockClipboard(vi.fn<WriteText>(async () => Promise.reject(new Error('denied'))))
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await user.click(within(header()).getByRole('button', { name: 'Copy branch name' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not copy the branch name to the clipboard')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+})

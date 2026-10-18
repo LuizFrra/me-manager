@@ -13,6 +13,7 @@ import { PrereqScreen } from './components/PrereqScreen'
 import { startVisibleInterval } from './lib/visibleInterval'
 import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget, resolveTarget } from './lib/describe'
+import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { useToasts } from './lib/toasts'
 import { DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
@@ -42,6 +43,7 @@ type Dialog =
 type AppAction =
   | { type: 'open'; target: Target }
   | { type: 'newTheme' | 'togglePanel' | 'newTab' | 'restartClaude' | 'renameTask' | 'help' }
+  | { type: 'copy'; kind: CopyKind }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
 interface AppCommand extends PaletteCommand {
@@ -79,7 +81,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       }),
     [],
   )
-  const { toasts, showError, dismiss } = useToasts()
+  const { toasts, showError, showInfo, dismiss } = useToasts()
+  // The tmux socket name, for "copy attach command"; null until main has told us.
+  const [tmuxSocket, setTmuxSocket] = useState<string | null>(null)
   // Mirrors `selected` synchronously, so async responses can check whether their target is still selected.
   const selectedRef = useRef<Target | null>(null)
   // Side panel state per target (by targetKey); `panel` mirrors the selected target's entry.
@@ -141,6 +145,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   useEffect(() => {
     checkPrereqs()
     void attempt(async () => setState(await api.getState()))
+    api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
   }, [api, attempt, checkPrereqs])
 
   useEffect(() => {
@@ -311,7 +316,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       label: entry.label,
       action: { type: 'open', target: entry.target },
     }))
-    const action = (label: string, type: Exclude<AppAction['type'], 'open'>, shortcut?: string): void => {
+    const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
       commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
     }
     action('New theme', 'newTheme')
@@ -321,6 +326,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       action('Restart Claude', 'restartClaude')
     }
     if (selected?.taskId) action('Rename current task', 'renameTask')
+    for (const { kind, label } of copiesFor(selected))
+      commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
     action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
     return commands
   }
@@ -339,6 +346,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     })
   }
 
+  const copiesFor = (target: Target | null): CopyEntry[] => {
+    const found = target && resolveTarget(state, target)
+    return found ? copyEntries(found, tmuxSocket) : []
+  }
+
+  const copy = async (entry: CopyEntry): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(entry.text)
+      showInfo(`Copied ${entry.what}`)
+    } catch {
+      showError(`Could not copy the ${entry.what} to the clipboard`)
+    }
+  }
+
   const renameSelectedTask = (): void => {
     const target = selectedRef.current
     const task = target ? resolveTarget(state, target)?.task : undefined
@@ -352,7 +373,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
     else if (action.type === 'restartClaude') void tabAction((t) => api.restartClaude(t))
     else if (action.type === 'renameTask') renameSelectedTask()
-    else setHelpOpen(true)
+    else if (action.type === 'copy') {
+      const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
+      if (entry) void copy(entry)
+    } else setHelpOpen(true)
   }
 
   if (prereqs && !prereqs.ok) return <PrereqScreen result={prereqs} onRetry={checkPrereqs} />
@@ -409,6 +433,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               subtitle={header.subtitle}
               notes={selectedTask?.notes}
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
+              copies={copiesFor(selected)}
+              onCopy={(entry) => void copy(entry)}
             />
             <TabBar
               tabs={tabs}
