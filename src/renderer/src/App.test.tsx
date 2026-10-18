@@ -392,7 +392,7 @@ describe('App side panel', () => {
 
 describe('App command palette', () => {
   const openPalette = async (): Promise<HTMLElement> => {
-    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
     return screen.findByRole('dialog', { name: 'Command palette' })
   }
   const search = (): HTMLElement => screen.getByRole('combobox', { name: 'Search tasks, files and actions' })
@@ -401,7 +401,7 @@ describe('App command palette', () => {
       .getAllByRole('option')
       .map((o) => o.getAttribute('aria-label'))
 
-  it('opens with Ctrl+K, focuses the search, and closes with Esc or Ctrl+K', async () => {
+  it('opens with Ctrl+Shift+P, focuses the search, and closes with Esc or Ctrl+Shift+P', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
     await createRepoAndTask(user, 'task A', 'task B')
@@ -415,8 +415,17 @@ describe('App command palette', () => {
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
 
     await openPalette()
-    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
+  })
+
+  it('leaves Ctrl+K and Ctrl+/ to the terminal on Linux', async () => {
+    render(<App api={repoApi()} />)
+    const k = fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    const slash = fireEvent.keyDown(window, { key: '/', ctrlKey: true })
+    expect(k).toBe(true) // not prevented
+    expect(slash).toBe(true)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('filters tasks fuzzily', async () => {
@@ -554,23 +563,23 @@ describe('App keyboard shortcuts', () => {
     expect(closeTab).toHaveBeenCalledWith(expect.anything(), 0)
   })
 
-  it('shows the shortcut help with Ctrl+/ and closes it with Esc', async () => {
+  it('shows the shortcut help with Ctrl+Shift+/ and closes it with Esc', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
-    press('/')
+    press('?', { shiftKey: true })
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
-    for (const keys of ['Ctrl+K', 'Ctrl+/', 'Ctrl+Shift+E', 'Ctrl+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
+    for (const keys of ['Ctrl+Shift+P', 'Ctrl+Shift+/', 'Ctrl+Shift+E', 'Ctrl+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
       expect(within(help).getByText(keys)).toBeInTheDocument()
     expect(within(help).getByText('New shell tab')).toBeInTheDocument()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
 
-    press('/')
+    press('?', { shiftKey: true })
     expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
-    press('k') // the palette replaces the help
+    press('P', { shiftKey: true }) // the palette replaces the help
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
     expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
-    press('/')
+    press('?', { shiftKey: true })
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
     expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
   })
@@ -590,7 +599,7 @@ describe('App keyboard shortcuts', () => {
     expect(newTab).not.toHaveBeenCalled()
     expect(openTarget).not.toHaveBeenCalled()
 
-    press('k', {}, filter) // the palette works anywhere
+    press('P', { shiftKey: true }, filter) // the palette works anywhere
     const search = screen.getByRole('combobox', { name: 'Search tasks, files and actions' })
     press('T', { shiftKey: true }, search)
     press('E', { shiftKey: true }, search)
@@ -675,7 +684,7 @@ describe('App sidebar filter', () => {
 
   it('lists Ctrl+Shift+F in the shortcut help', async () => {
     render(<App api={repoApi()} />)
-    fireEvent.keyDown(window, { key: '/', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true })
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
     expect(within(help).getByText('Ctrl+Shift+F')).toBeInTheDocument()
     expect(within(help).getByText('Filter the sidebar')).toBeInTheDocument()

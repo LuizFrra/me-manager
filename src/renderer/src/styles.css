@@ -1163,4 +1163,18 @@ kbd {
 }
 .help-row dd {
   margin: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.help-chord {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.help-or {
+  color: var(--muted);
+  font-size: 11px;
 }

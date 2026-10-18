@@ -52,8 +52,8 @@ describe('TerminalView key handler', () => {
     const handler = handlers.at(-1)
     expect(handler).toBeDefined()
     const shortcuts = [
-      key({ key: 'k' }),
-      key({ key: '/' }),
+      key({ key: 'P', shiftKey: true }),
+      key({ key: '?', shiftKey: true }),
       key({ key: 'E', shiftKey: true }),
       key({ key: '1' }),
       key({ key: '9' }),
@@ -63,7 +63,15 @@ describe('TerminalView key handler', () => {
       key({ key: '}', shiftKey: true, code: 'BracketRight' }),
     ]
     for (const e of shortcuts) expect(handler?.(e), `${e.key} goes to tmux`).toBe(false)
-    for (const e of [key({ key: 'c' }), key({ key: 't' }), key({ key: 'w' }), key({ key: 'a', ctrlKey: false })])
-      expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)
+    const terminalKeys = [
+      key({ key: 'k' }), // readline / Claude Code: kill to the end of the line
+      key({ key: '/' }), // undo
+      key({ key: 'c' }),
+      key({ key: 't' }),
+      key({ key: 'w' }),
+      key({ key: 'p' }),
+      key({ key: 'a', ctrlKey: false }),
+    ]
+    for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)
   })
 })

@@ -14,9 +14,10 @@ export interface KeyLike {
 /**
  * The app's keyboard shortcuts. "Mod" is Ctrl on Linux and Cmd on macOS.
  *
- * They avoid keys a terminal needs: new/close tab use Mod+Shift+T / Mod+Shift+W, because Ctrl+T and Ctrl+W
- * mean something to shells and editors running in the terminal. The help overlay is Mod+/ rather than `?`,
- * which would fire while typing.
+ * They avoid keys a terminal needs. On Linux, Ctrl+<letter> and Ctrl+/ reach the shell and Claude Code (Ctrl+K
+ * kills to the end of the line, Ctrl+/ is undo, Ctrl+T and Ctrl+W mean something to shells and editors), so the
+ * app uses Ctrl+Shift chords there. macOS terminals use Ctrl, not Cmd, so Cmd+K and Cmd+/ are free and work as
+ * extra, familiar chords for the palette and the help overlay.
  */
 export type ShortcutId =
   'palette' | 'help' | 'panel' | 'filterSidebar' | 'target' | 'newTab' | 'closeTab' | 'prevTab' | 'nextTab'
@@ -24,41 +25,71 @@ export type ShortcutId =
 /** `target` carries the 0-based position of the task or folder to select (Mod+1 is index 0). */
 export type Shortcut = { id: Exclude<ShortcutId, 'target'> } | { id: 'target'; index: number }
 
-interface Binding {
-  id: ShortcutId
-  /** Whether Shift must be held; 'any' for keys that need Shift on some layouts (e.g. '/' on German). */
-  shift: boolean | 'any'
+/** One key combination that triggers a shortcut, on top of Mod. */
+interface Chord {
+  /** Whether Shift must be held. */
+  shift: boolean
   /** Lowercased `KeyboardEvent.key` values that trigger it. */
   keys: string[]
   /** `KeyboardEvent.code` values that also trigger it. */
   codes?: string[]
   /** The key as shown in labels. */
   display: string
+  /** Only on macOS, where Cmd chords don't collide with the terminal's Ctrl keys. */
+  macOnly?: true
+}
+
+interface ShortcutDef {
+  id: ShortcutId
   description: string
+  /** The first chord available on the platform is the one shown in hints and tooltips. */
+  chords: Chord[]
 }
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
-// Letters match on `key` only, so they follow the user's layout. Digits and brackets also match on `code`,
-// for layouts where those keys type something else (AZERTY digits, brackets behind Shift on US: '{').
-const BINDINGS: Binding[] = [
-  { id: 'palette', shift: false, keys: ['k'], display: 'K', description: 'Command palette' },
-  { id: 'help', shift: 'any', keys: ['/', '?'], display: '/', description: 'Keyboard shortcuts' },
-  { id: 'panel', shift: true, keys: ['e'], display: 'E', description: 'Toggle files panel' },
-  { id: 'filterSidebar', shift: true, keys: ['f'], display: 'F', description: 'Filter the sidebar' },
+/** A Mod(+Shift)+letter chord, matched on `key` only so it follows the user's layout. */
+const letter = (shift: boolean, display: string): Chord => ({ shift, keys: [display.toLowerCase()], display })
+
+// Digits and brackets also match on `code`, for layouts where those keys type something else (AZERTY digits,
+// brackets behind Shift on US: '{'). Mod+Shift+/ matches both '/' and '?': with Shift, US layouts report '?',
+// and layouts where '/' itself needs Shift (German: Shift+7) report '/'.
+const SHORTCUTS: ShortcutDef[] = [
+  {
+    id: 'palette',
+    description: 'Command palette',
+    chords: [{ ...letter(false, 'K'), macOnly: true }, letter(true, 'P')],
+  },
+  {
+    id: 'help',
+    description: 'Keyboard shortcuts',
+    chords: [
+      { shift: false, keys: ['/'], display: '/', macOnly: true },
+      { shift: true, keys: ['/', '?'], display: '/' },
+    ],
+  },
+  { id: 'panel', description: 'Toggle files panel', chords: [letter(true, 'E')] },
+  { id: 'filterSidebar', description: 'Filter the sidebar', chords: [letter(true, 'F')] },
   {
     id: 'target',
-    shift: false,
-    keys: DIGITS,
-    codes: DIGITS.map((d) => `Digit${d}`),
-    display: '1…9',
     description: 'Go to the 1st…9th task or folder in the sidebar',
+    chords: [{ shift: false, keys: DIGITS, codes: DIGITS.map((d) => `Digit${d}`), display: '1…9' }],
   },
-  { id: 'newTab', shift: true, keys: ['t'], display: 'T', description: 'New shell tab' },
-  { id: 'closeTab', shift: true, keys: ['w'], display: 'W', description: 'Close the active tab' },
-  { id: 'prevTab', shift: true, keys: ['[', '{'], codes: ['BracketLeft'], display: '[', description: 'Previous tab' },
-  { id: 'nextTab', shift: true, keys: [']', '}'], codes: ['BracketRight'], display: ']', description: 'Next tab' },
+  { id: 'newTab', description: 'New shell tab', chords: [letter(true, 'T')] },
+  { id: 'closeTab', description: 'Close the active tab', chords: [letter(true, 'W')] },
+  {
+    id: 'prevTab',
+    description: 'Previous tab',
+    chords: [{ shift: true, keys: ['[', '{'], codes: ['BracketLeft'], display: '[' }],
+  },
+  {
+    id: 'nextTab',
+    description: 'Next tab',
+    chords: [{ shift: true, keys: [']', '}'], codes: ['BracketRight'], display: ']' }],
+  },
 ]
+
+const chordsFor = (def: ShortcutDef, mac: boolean): Chord[] => def.chords.filter((c) => mac || !c.macOnly)
 
 /**
  * Shortcuts that work while a text field has focus: they don't collide with text editing. All others are
@@ -88,13 +119,15 @@ export function matchShortcut(e: KeyLike, mac = isMac): Shortcut | null {
   if (e.type !== undefined && e.type !== 'keydown') return null
   if (!hasMod(e, mac) || e.altKey) return null
   const key = e.key.toLowerCase()
-  for (const b of BINDINGS) {
-    if (b.shift !== 'any' && b.shift !== e.shiftKey) continue
-    const byKey = b.keys.indexOf(key)
-    const byCode = e.code === undefined || !b.codes ? -1 : b.codes.indexOf(e.code)
-    if (byKey === -1 && byCode === -1) continue
-    if (b.id === 'target') return { id: 'target', index: byKey !== -1 ? byKey : byCode }
-    return { id: b.id as Exclude<ShortcutId, 'target'> }
+  for (const def of SHORTCUTS) {
+    for (const c of chordsFor(def, mac)) {
+      if (c.shift !== e.shiftKey) continue
+      const byKey = c.keys.indexOf(key)
+      const byCode = e.code === undefined || !c.codes ? -1 : c.codes.indexOf(e.code)
+      if (byKey === -1 && byCode === -1) continue
+      if (def.id === 'target') return { id: 'target', index: byKey !== -1 ? byKey : byCode }
+      return { id: def.id as Exclude<ShortcutId, 'target'> }
+    }
   }
   return null
 }
@@ -105,24 +138,29 @@ export function isPanelShortcut(e: KeyLike, mac = isMac): boolean {
 }
 
 /** "Ctrl+Shift+E" on Linux, "⌘⇧E" on macOS. */
-export function formatKeys(display: string, shift: boolean | 'any', mac = isMac): string {
-  const withShift = shift === true
-  return mac ? `⌘${withShift ? '⇧' : ''}${display}` : `Ctrl+${withShift ? 'Shift+' : ''}${display}`
+export function formatKeys(display: string, shift: boolean, mac = isMac): string {
+  return mac ? `⌘${shift ? '⇧' : ''}${display}` : `Ctrl+${shift ? 'Shift+' : ''}${display}`
 }
 
+/** The shortcut's main chord on this platform, for hints and tooltips. */
 export function shortcutLabel(id: ShortcutId, mac = isMac): string {
-  const b = BINDINGS.find((x) => x.id === id)
-  return b ? formatKeys(b.display, b.shift, mac) : ''
+  const def = SHORTCUTS.find((x) => x.id === id)
+  const first = def && chordsFor(def, mac)[0]
+  return first ? formatKeys(first.display, first.shift, mac) : ''
 }
 
 export interface ShortcutHelpEntry {
-  keys: string
+  /** Every chord that triggers it on this platform, main one first. */
+  keys: string[]
   description: string
 }
 
 /** Every shortcut, as listed in the help overlay. */
 export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
-  return BINDINGS.map((b) => ({ keys: formatKeys(b.display, b.shift, mac), description: b.description }))
+  return SHORTCUTS.map((def) => ({
+    keys: chordsFor(def, mac).map((c) => formatKeys(c.display, c.shift, mac)),
+    description: def.description,
+  }))
 }
 
 export const PANEL_SHORTCUT_LABEL = shortcutLabel('panel')

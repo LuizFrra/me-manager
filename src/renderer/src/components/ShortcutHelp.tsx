@@ -33,7 +33,12 @@ export function ShortcutHelp({ onClose }: { onClose: () => void }): React.JSX.El
             <div key={entry.description} className="help-row">
               <dt>{entry.description}</dt>
               <dd>
-                <kbd>{entry.keys}</kbd>
+                {entry.keys.map((keys, i) => (
+                  <span key={keys} className="help-chord">
+                    {i > 0 && <span className="help-or">or</span>}
+                    <kbd>{keys}</kbd>
+                  </span>
+                ))}
               </dd>
             </div>
           ))}
