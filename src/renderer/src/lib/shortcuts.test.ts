@@ -98,7 +98,7 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+Shift+S'], description: 'Search in files' },
       { keys: ['Ctrl+Shift+O'], description: 'Open in editor' },
       { keys: ['Ctrl+Shift+U'], description: 'Claude usage and cost' },
-      { keys: ['Ctrl+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
+      { keys: ['Alt+1…9'], description: 'Go to the 1st…9th task or folder in the sidebar' },
       { keys: ['Ctrl+Shift+T'], description: 'New shell tab' },
       { keys: ['Ctrl+Shift+W'], description: 'Close the active tab' },
       { keys: ['Ctrl+Shift+['], description: 'Previous tab' },
@@ -129,9 +129,15 @@ describe('shortcut labels', () => {
 })
 
 describe.each([
-  { platform: 'Linux', mac: false, mod: { ctrlKey: true }, wrongMod: { metaKey: true } },
-  { platform: 'macOS', mac: true, mod: { metaKey: true }, wrongMod: { ctrlKey: true } },
-])('matchShortcut on $platform', ({ mac, mod, wrongMod }) => {
+  {
+    platform: 'Linux',
+    mac: false,
+    mod: { ctrlKey: true },
+    wrongMod: { metaKey: true },
+    digitMod: { altKey: true },
+  },
+  { platform: 'macOS', mac: true, mod: { metaKey: true }, wrongMod: { ctrlKey: true }, digitMod: { metaKey: true } },
+])('matchShortcut on $platform', ({ mac, mod, wrongMod, digitMod }) => {
   const press = (
     k: string,
     over: Partial<Parameters<typeof matchShortcut>[0]> = {},
@@ -141,17 +147,47 @@ describe.each([
     over: Partial<Parameters<typeof matchShortcut>[0]> = {},
   ): ReturnType<typeof matchShortcut> => press(k, { shiftKey: true, ...over })
 
-  it('selects the Nth target with Mod+1..9', () => {
-    expect(press('1')).toEqual({ id: 'target', index: 0 })
-    expect(press('2')).toEqual({ id: 'target', index: 1 })
-    expect(press('9')).toEqual({ id: 'target', index: 8 })
-    expect(press('0')).toEqual({ id: 'zoomReset' }) // not a target
-    expect(shifted('!', { code: 'Digit1' })).toBeNull()
+  /** A digit chord: Alt+digit on Linux, Cmd+digit on macOS. */
+  const digit = (
+    k: string,
+    over: Partial<Parameters<typeof matchShortcut>[0]> = {},
+  ): ReturnType<typeof matchShortcut> => matchShortcut(key({ key: k, shiftKey: false, ...digitMod, ...over }), mac)
+
+  it('selects the Nth target with Alt+1..9 on Linux and Cmd+1..9 on macOS', () => {
+    expect(digit('1')).toEqual({ id: 'target', index: 0 })
+    expect(digit('2')).toEqual({ id: 'target', index: 1 })
+    expect(digit('9')).toEqual({ id: 'target', index: 8 })
+    expect(digit('0')).toEqual(mac ? { id: 'zoomReset' } : null) // not a target
+    expect(digit('!', { shiftKey: true, code: 'Digit1' })).toBeNull()
+    expect(shortcutLabel('target', mac)).toBe(mac ? '⌘1…9' : 'Alt+1…9')
+  })
+
+  it('leaves Ctrl+1..9 to the terminal on Linux: Ctrl+3…8 are ESC, FS, GS, RS, ^_ and DEL there', () => {
+    for (const d of ['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+      expect(press(d, { code: `Digit${d}` })).toEqual(mac ? { id: 'target', index: Number(d) - 1 } : null)
   })
 
   it('reads the digit from the physical key on layouts where it types a symbol (AZERTY)', () => {
-    expect(press('&', { code: 'Digit1' })).toEqual({ id: 'target', index: 0 })
-    expect(press('é', { code: 'Digit2' })).toEqual({ id: 'target', index: 1 })
+    expect(digit('&', { code: 'Digit1' })).toEqual({ id: 'target', index: 0 })
+    expect(digit('é', { code: 'Digit2' })).toEqual({ id: 'target', index: 1 })
+  })
+
+  it('zooms out with Mod+- on AZERTY, where "-" is on the 6 key, instead of going to the 6th target', () => {
+    expect(press('-', { code: 'Digit6' })).toEqual({ id: 'zoomOut' })
+    expect(press('=', { code: 'Digit6' })).toEqual({ id: 'zoomIn' })
+    // With the digit chord's modifier, a zoom character on a digit key is not a digit either.
+    expect(digit('-', { code: 'Digit6' })).toEqual(mac ? { id: 'zoomOut' } : null)
+  })
+
+  it('falls back to the physical letter key on non-Latin layouts, and follows the layout otherwise', () => {
+    expect(shifted('З', { code: 'KeyP' })).toEqual({ id: 'palette' }) // Russian
+    expect(shifted('Ε', { code: 'KeyE' })).toEqual({ id: 'panel' }) // Greek
+    expect(shifted('ש', { code: 'KeyT' })).toEqual({ id: 'newTab' }) // Hebrew
+    expect(press('л', { code: 'KeyK' })).toEqual(mac ? { id: 'palette' } : null)
+    expect(press('ф', { code: 'KeyA' })).toBeNull()
+    // Dvorak: the key typed counts, not where it sits.
+    expect(shifted('P', { code: 'KeyR' })).toEqual({ id: 'palette' })
+    expect(shifted('R', { code: 'KeyP' })).toBeNull()
   })
 
   it('uses the Shift variants for tabs, never plain Mod+T / Mod+W', () => {

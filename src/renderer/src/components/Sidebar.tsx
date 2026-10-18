@@ -11,7 +11,7 @@ export interface SidebarProps {
   /** Git status of the visible tasks, by task id; a task without one shows no badges. */
   gitStatus?: Readonly<Record<string, TaskGitStatus>>
   selected: Target | null
-  /** Ids of collapsed themes and repos. App owns this, since Mod+1..9 counts only visible entries. */
+  /** Ids of collapsed themes and repos. App owns this, since Alt+1..9 (Cmd+1..9 on macOS) counts only visible entries. */
   collapsed: ReadonlySet<string>
   onToggleCollapsed: (id: string) => void
   /** The filter box's text; App owns it too, for the same reason. */

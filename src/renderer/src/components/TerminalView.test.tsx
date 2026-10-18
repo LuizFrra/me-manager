@@ -77,8 +77,8 @@ describe('TerminalView key handler', () => {
       key({ key: '-' }),
       key({ key: '0' }),
       key({ key: 'E', shiftKey: true }),
-      key({ key: '1' }),
-      key({ key: '9' }),
+      key({ key: '1', ctrlKey: false, altKey: true }),
+      key({ key: '9', ctrlKey: false, altKey: true }),
       key({ key: 'T', shiftKey: true }),
       key({ key: 'W', shiftKey: true }),
       key({ key: '{', shiftKey: true, code: 'BracketLeft' }),
@@ -97,6 +97,8 @@ describe('TerminalView key handler', () => {
       key({ key: 'u' }), // readline: kill to the start of the line
       key({ key: 's' }), // flow control / readline forward search
       key({ key: 'a', ctrlKey: false }),
+      // Ctrl+3…8 are control codes in a terminal (ESC, FS/SIGQUIT, GS, RS, ^_ undo, DEL)
+      ...['1', '3', '4', '5', '6', '7', '8', '9'].map((d) => key({ key: d, code: `Digit${d}` })),
     ]
     for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)
   })

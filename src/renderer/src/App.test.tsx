@@ -547,29 +547,33 @@ describe('App keyboard shortcuts', () => {
   const press = (key: string, over: Partial<KeyboardEventInit> = {}, target: Element | Window = window): void => {
     fireEvent.keyDown(target, { key, ctrlKey: true, ...over })
   }
+  const alt = { ctrlKey: false, altKey: true }
   const twoTabs: TabInfo[] = [
     { index: 0, name: 'claude', active: true },
     { index: 1, name: 'bash', active: false },
   ]
 
-  it('selects the Nth visible task with Ctrl+1..9, skipping collapsed groups', async () => {
+  it('selects the Nth visible task with Alt+1..9, skipping collapsed groups', async () => {
     const user = userEvent.setup()
     const api = repoApi()
     const openTarget = vi.spyOn(api, 'openTarget')
     render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B') // task B is selected
-    press('1')
+    press('1', alt)
     expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
-    press('2')
+    press('2', alt)
     expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
 
     openTarget.mockClear()
-    press('2') // already selected: nothing to do
-    press('3') // there is no third target
+    press('2', alt) // already selected: nothing to do
+    press('3', alt) // there is no third target
+    // Ctrl+digits stay with the terminal (Ctrl+3 is ESC, Ctrl+4 SIGQUIT, …): not handled, not prevented
+    expect(fireEvent.keyDown(window, { key: '1', code: 'Digit1', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(window, { key: '3', code: 'Digit3', ctrlKey: true })).toBe(true)
     expect(openTarget).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('button', { name: /📦 my-api$/ })) // collapse the repo
-    press('1')
+    press('1', alt)
     expect(openTarget).not.toHaveBeenCalled()
     expect(screen.getByText('my-api › task B')).toBeInTheDocument()
   })
@@ -608,7 +612,7 @@ describe('App keyboard shortcuts', () => {
     render(<App api={repoApi()} />)
     press('?', { shiftKey: true })
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
-    for (const keys of ['Ctrl+Shift+P', 'Ctrl+Shift+/', 'Ctrl+Shift+E', 'Ctrl+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
+    for (const keys of ['Ctrl+Shift+P', 'Ctrl+Shift+/', 'Ctrl+Shift+E', 'Alt+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
       expect(within(help).getByText(keys)).toBeInTheDocument()
     expect(within(help).getByText('New shell tab')).toBeInTheDocument()
     await user.keyboard('{Escape}')
@@ -635,7 +639,7 @@ describe('App keyboard shortcuts', () => {
     await user.click(screen.getByRole('button', { name: 'Toggle files panel' }))
     const filter = await screen.findByRole('textbox', { name: 'Filter files' })
     press('T', { shiftKey: true }, filter)
-    press('1', {}, filter)
+    press('1', alt, filter)
     expect(newTab).not.toHaveBeenCalled()
     expect(openTarget).not.toHaveBeenCalled()
 
@@ -708,7 +712,7 @@ describe('App sidebar filter', () => {
     expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument()
   })
 
-  it('is focused with Ctrl+Shift+F, and Ctrl+1 counts only the filtered entries', async () => {
+  it('is focused with Ctrl+Shift+F, and Alt+1 counts only the filtered entries', async () => {
     const user = userEvent.setup()
     await setup(user)
     await user.click(taskButton('fix login bug'))
@@ -716,9 +720,9 @@ describe('App sidebar filter', () => {
     fireEvent.keyDown(window, { key: 'F', ctrlKey: true, shiftKey: true })
     expect(filterBox()).toHaveFocus()
     await user.type(filterBox(), 'tests')
-    fireEvent.keyDown(filterBox(), { key: '1', ctrlKey: true }) // ignored while typing in the filter
+    fireEvent.keyDown(filterBox(), { key: '1', altKey: true }) // ignored while typing in the filter
     expect(screen.getByText('my-api › fix login bug')).toBeInTheDocument()
-    fireEvent.keyDown(window, { key: '1', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '1', altKey: true })
     expect(await screen.findByText('my-api › add tests')).toBeInTheDocument()
   })
 
