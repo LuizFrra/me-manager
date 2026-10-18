@@ -128,8 +128,8 @@ export class FakeFiles implements FilesApi {
     this.calls.push(`listChanges ${worktree} ${baseRef}`)
     return { files: [] }
   }
-  async fileDiff(worktree: string, baseRef: string, relPath: string): Promise<string> {
-    this.calls.push(`fileDiff ${worktree} ${baseRef} ${relPath}`)
+  async fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string> {
+    this.calls.push(`fileDiff ${worktree} ${baseRef} ${relPath}${oldPath === undefined ? '' : ` (from ${oldPath})`}`)
     return ''
   }
 }

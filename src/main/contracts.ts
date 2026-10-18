@@ -53,7 +53,8 @@ export interface FilesApi {
   readFile(root: string, relPath: string): Promise<FileContent>
   readImage(root: string, relPath: string): Promise<string | null>
   listChanges(worktree: string, baseRef: string): Promise<ChangeList>
-  fileDiff(worktree: string, baseRef: string, relPath: string): Promise<string>
+  /** `oldPath`: the rename source from the change list, so the rename doesn't have to be looked up again. */
+  fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string>
 }
 
 /** What the orchestrator implements: everything except renderer/pty-only calls. */

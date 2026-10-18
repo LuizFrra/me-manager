@@ -313,8 +313,8 @@ export class Orchestrator implements AppService {
     return this.deps.files.listChanges(root, baseRef)
   }
 
-  async fileDiff(target: Target, path: string): Promise<string> {
+  async fileDiff(target: Target, path: string, oldPath?: string): Promise<string> {
     const { root, baseRef } = this.resolveTask(target)
-    return this.deps.files.fileDiff(root, baseRef, path)
+    return this.deps.files.fileDiff(root, baseRef, path, oldPath)
   }
 }

@@ -105,8 +105,11 @@ export interface MeManagerApi {
   readImage(target: Target, path: string): Promise<string | null>
   /** Repo tasks only; rejects for folders. */
   listChanges(target: Target): Promise<ChangeList>
-  /** Unified diff text for one changed file; '' if unchanged. Repo tasks only. */
-  fileDiff(target: Target, path: string): Promise<string>
+  /**
+   * Unified diff text for one changed file; '' if unchanged. Repo tasks only.
+   * Pass the change's `oldPath` for a rename, which spares a whole-tree rename lookup.
+   */
+  fileDiff(target: Target, path: string, oldPath?: string): Promise<string>
   /** Opens an http(s) URL in the system browser; rejects other schemes. */
   openExternal(url: string): Promise<void>
 

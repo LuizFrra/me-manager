@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs'
 import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ChangedFile, ChangeList, ChangeStatus, FileContent } from '../../shared/types'
@@ -8,6 +9,10 @@ export const MAX_TEXT_BYTES = 1_000_000
 export const BINARY_SNIFF_BYTES = 8_192
 export const MAX_IMAGE_BYTES = 5_000_000
 export const MAX_WALK_ENTRIES = 20_000
+/** Untracked files up to this size get a line count in the change list; larger ones report `added: 0`. */
+export const MAX_COUNT_BYTES = 256 * 1024
+/** Untracked-file stats remembered between polls. */
+const UNTRACKED_CACHE_MAX = 5_000
 
 const OUTSIDE = 'Path is outside the folder'
 const GIT_TIMEOUT_MS = 30_000
@@ -216,8 +221,18 @@ function parseNumstat(out: string): Map<string, { added: number; removed: number
   return res
 }
 
+interface UntrackedStats {
+  size: number
+  mtimeMs: number
+  added: number
+  binary: boolean
+}
+
 /** Read-only file access for the side panel. Every path is confined to its root. */
 export class FilesService implements FilesApi {
+  /** Untracked-file stats by `worktree\0path`, so polls don't re-read unchanged files. Insertion order = LRU order. */
+  private readonly untrackedCache = new Map<string, UntrackedStats>()
+
   async listFiles(root: string, isRepo: boolean): Promise<string[]> {
     if (!isRepo) return walk(root)
     const out = await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
@@ -267,18 +282,26 @@ export class FilesService implements FilesApi {
       const c = counts.get(ns.path) ?? { added: 0, removed: 0, binary: false }
       byPath.set(ns.path, { ...ns, ...c })
     }
-    const untracked = await keepFilesAndLinks(worktree, [...new Set(splitZ(others))])
-    for (const path of untracked) {
-      if (!byPath.has(path)) byPath.set(path, await this.untrackedEntry(worktree, path))
+    const untracked = [...new Set(splitZ(others))].filter((path) => !byPath.has(path))
+    for (let i = 0; i < untracked.length; i += LSTAT_BATCH) {
+      const batch = untracked.slice(i, i + LSTAT_BATCH)
+      const entries = await Promise.all(batch.map((path) => this.untrackedEntry(worktree, path)))
+      for (const entry of entries) if (entry) byPath.set(entry.path, entry)
     }
     const files = [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     return fallback ? { files, fallback } : { files }
   }
 
-  async fileDiff(worktree: string, baseRef: string, relPath: string): Promise<string> {
+  async fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string> {
     const p = await safePath(worktree, relPath)
     const rel = p.rel
     if (!p.missing && (await stat(p.abs)).isDirectory()) throw new Error('Path is a directory')
+    if (oldPath !== undefined) {
+      // A rename from the change list: diff the pair directly instead of looking the rename up again.
+      const old = await safePath(worktree, oldPath)
+      const { base } = await this.resolveBase(worktree, baseRef)
+      return git(worktree, ['diff', ...DIFF_FLAGS, '-M', base, '--', old.rel, rel])
+    }
     if (!p.missing && !(await this.isTracked(worktree, rel))) {
       return git(worktree, ['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', rel], [1])
     }
@@ -314,21 +337,46 @@ export class FilesService implements FilesApi {
     }
   }
 
-  private async untrackedEntry(worktree: string, path: string): Promise<ChangedFile> {
+  /** Line count and binary flag of an untracked file, cached by size and mtime (LRU, bounded). */
+  private async untrackedStats(abs: string, key: string, s: Stats): Promise<UntrackedStats> {
+    const hit = this.untrackedCache.get(key)
+    this.untrackedCache.delete(key) // re-inserted below as the most recently used
+    let value = hit && hit.size === s.size && hit.mtimeMs === s.mtimeMs ? hit : undefined
+    if (!value) {
+      const counted = s.size <= MAX_COUNT_BYTES
+      const head = await readHead(abs, counted ? s.size : BINARY_SNIFF_BYTES)
+      const binary = looksBinary(head)
+      value = { size: s.size, mtimeMs: s.mtimeMs, binary, added: counted && !binary ? countLines(head) : 0 }
+    }
+    this.untrackedCache.set(key, value)
+    if (this.untrackedCache.size > UNTRACKED_CACHE_MAX) {
+      this.untrackedCache.delete(this.untrackedCache.keys().next().value as string)
+    }
+    return value
+  }
+
+  /** A change-list entry for an untracked file or symlink; null for anything else (e.g. a nested repo's folder). */
+  private async untrackedEntry(worktree: string, path: string): Promise<ChangedFile | null> {
     const entry: ChangedFile = { path, status: 'U', added: 0, removed: 0, binary: false }
     const abs = join(worktree, path)
+    let s
     try {
-      const s = await lstat(abs)
+      s = await lstat(abs)
+    } catch {
+      return null // vanished since ls-files
+    }
+    if (!s.isFile() && !s.isSymbolicLink()) return null
+    try {
       if (s.isSymbolicLink()) {
         // git diffs a symlink as its target text; never follow it.
         entry.added = (await readlink(abs)) === '' ? 0 : 1
         return entry
       }
-      const head = await readHead(abs, s.size <= MAX_TEXT_BYTES ? s.size : BINARY_SNIFF_BYTES)
-      entry.binary = looksBinary(head)
-      if (!entry.binary && s.size <= MAX_TEXT_BYTES) entry.added = countLines(head)
+      const stats = await this.untrackedStats(abs, `${worktree}\0${path}`, s)
+      entry.added = stats.added
+      entry.binary = stats.binary
     } catch {
-      // vanished or unreadable: report it with zero counts
+      // unreadable: report it with zero counts
     }
     return entry
   }

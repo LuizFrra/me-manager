@@ -57,6 +57,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const inChanges = Boolean(changes?.files.some((f) => f.path === state.selected))
   const shownPath = tab === 'changes' && !inChanges ? undefined : state.selected
   const viewKey = shownPath ? `${tab}:${shownPath}` : ''
+  // For a rename, the diff is taken between the pair, so the backend doesn't have to find the rename again.
+  const oldPath = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath)?.oldPath : undefined
 
   const fetchFiles = useCallback(
     async (alive: Alive): Promise<void> => {
@@ -81,12 +83,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const fetchView = useCallback(
     async (alive: Alive): Promise<void> => {
       if (!shownPath) return
-      const value = tab === 'changes' ? await api.fileDiff(target, shownPath) : await api.readFile(target, shownPath)
+      const value =
+        tab === 'files'
+          ? await api.readFile(target, shownPath)
+          : oldPath === undefined
+            ? await api.fileDiff(target, shownPath)
+            : await api.fileDiff(target, shownPath, oldPath)
       if (!alive()) return
       if (changed(lastJson.current, 'view', { key: viewKey, value })) setView({ key: viewKey, value })
       if (typeof value === 'object' && value.kind === 'missing') await fetchFiles(alive)
     },
-    [api, target, tab, shownPath, viewKey, fetchFiles],
+    [api, target, tab, shownPath, oldPath, viewKey, fetchFiles],
   )
 
   // Initial load, and again on ⟳.

@@ -1,7 +1,8 @@
-import { mkdir, rm, symlink, unlink } from 'node:fs/promises'
+import { mkdir, rm, symlink, unlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { FilesService, MAX_IMAGE_BYTES, MAX_TEXT_BYTES, safePath } from './filesService'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as exec from '../exec'
+import { FilesService, MAX_COUNT_BYTES, MAX_IMAGE_BYTES, MAX_TEXT_BYTES, safePath } from './filesService'
 import { cleanupTempDirs, commitAll, git, makeRepo, makeTaskClone, makeTempDir, put } from './testRepos'
 
 const svc = new FilesService()
@@ -9,6 +10,21 @@ const svc = new FilesService()
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52])
 const LINES = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') + '\n'
 
+// Wraps the real `run` in a spy, so tests can check which git commands a call makes.
+vi.mock('../exec', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../exec')>()
+  return { ...real, run: vi.fn(real.run) }
+})
+const runSpy = vi.mocked(exec.run)
+/** The git subcommands (and flags) run since the last reset, one string per call. */
+const gitCalls = (): string[] =>
+  runSpy.mock.calls
+    .filter(([file]) => file === 'git')
+    .map(([, args]) => args.slice(args.indexOf('--literal-pathspecs') + 1).join(' '))
+
+beforeEach(() => {
+  runSpy.mockClear()
+})
 afterEach(cleanupTempDirs)
 
 describe('safePath', () => {
@@ -311,6 +327,40 @@ describe('listChanges', () => {
     })
   })
 
+  it('caches untracked line counts by size and mtime', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    const local = new FilesService()
+    // A whole-second mtime, so restoring it later reproduces the exact same stat (no sub-millisecond part).
+    const t = new Date('2024-01-01T00:00:00Z')
+    await put(clone, 'new.txt', 'a\nb\n')
+    await utimes(join(clone, 'new.txt'), t, t)
+    const count = async (): Promise<number | undefined> =>
+      (await local.listChanges(clone, 'origin/main')).files.find((f) => f.path === 'new.txt')?.added
+    expect(await count()).toBe(2)
+
+    // Same size and mtime: the cached count is reused, so the file is not read again.
+    await put(clone, 'new.txt', 'abc\n')
+    await utimes(join(clone, 'new.txt'), t, t)
+    expect(await count()).toBe(2)
+
+    // A new mtime invalidates the entry.
+    await utimes(join(clone, 'new.txt'), t, new Date(t.getTime() + 5_000))
+    expect(await count()).toBe(1)
+  })
+
+  it('only counts lines of untracked files up to MAX_COUNT_BYTES', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await put(clone, 'small.txt', 'x\n'.repeat(MAX_COUNT_BYTES / 2))
+    await put(clone, 'large.txt', 'x\n'.repeat(MAX_COUNT_BYTES / 2) + 'y\n')
+    await put(clone, 'large.bin', Uint8Array.from([0, ...new Uint8Array(MAX_COUNT_BYTES + 1).fill(65)]))
+    const res = await svc.listChanges(clone, 'origin/main')
+    expect(res.files).toEqual([
+      { path: 'large.bin', status: 'U', added: 0, removed: 0, binary: true },
+      { path: 'large.txt', status: 'U', added: 0, removed: 0, binary: false },
+      { path: 'small.txt', status: 'U', added: MAX_COUNT_BYTES / 2, removed: 0, binary: false },
+    ])
+  })
+
   it('treats an option-like base ref as missing instead of passing it to git', async () => {
     const { clone } = await makeTaskClone(SEED)
     await expect(svc.listChanges(clone, '--output=/tmp/pwned')).resolves.toEqual({
@@ -360,6 +410,36 @@ describe('fileDiff', () => {
     const diff = await svc.fileDiff(clone, 'origin/main', 'renamed.txt')
     expect(diff).toContain('rename from ren.txt')
     expect(diff).toContain('rename to renamed.txt')
+  })
+
+  it('diffs a rename from the given oldPath without a whole-tree name-status', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await git(clone, 'mv', 'ren.txt', 'renamed.txt')
+    await put(clone, 'renamed.txt', LINES + 'extra\n')
+    runSpy.mockClear()
+    const diff = await svc.fileDiff(clone, 'origin/main', 'renamed.txt', 'ren.txt')
+    expect(diff).toContain('rename from ren.txt')
+    expect(diff).toContain('rename to renamed.txt')
+    expect(diff).toContain('+extra')
+    expect(gitCalls().filter((c) => c.includes('--name-status'))).toEqual([])
+  })
+
+  it('still finds the rename itself when no oldPath is given', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await git(clone, 'mv', 'ren.txt', 'renamed.txt')
+    const diff = await svc.fileDiff(clone, 'origin/main', 'renamed.txt')
+    expect(diff).toContain('rename from ren.txt')
+  })
+
+  it('rejects an escaping oldPath', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await git(clone, 'mv', 'ren.txt', 'renamed.txt')
+    await expect(svc.fileDiff(clone, 'origin/main', 'renamed.txt', '../x')).rejects.toThrow(
+      'Path is outside the folder',
+    )
+    await expect(svc.fileDiff(clone, 'origin/main', 'renamed.txt', '/etc/passwd')).rejects.toThrow(
+      'Path is outside the folder',
+    )
   })
 
   it('returns an empty string for an unchanged file', async () => {
