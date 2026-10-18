@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { TaskGitStatus, UsageSummary } from '../../../shared/types'
 import type { CopyEntry } from '../lib/copy'
 import { baseSummary, plural } from '../lib/gitStatus'
+import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
 import { UsageBadge } from './UsageBadge'
 
@@ -73,6 +74,8 @@ export function TaskHeader(props: {
   /** A task's git status, once loaded, and the base ref it is compared with. */
   git?: TaskGitStatus
   baseRef?: string
+  /** The session's state: whether Claude is working, waiting for the user or idle. */
+  session?: SessionState
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -81,6 +84,18 @@ export function TaskHeader(props: {
         <div className="task-header-text">
           <div className="task-title">
             {props.title}
+            {props.session && (
+              <span
+                className={`session-state ${props.session}`}
+                title={SESSION_STATE_INFO[props.session].title}
+                aria-label={`Session: ${SESSION_STATE_INFO[props.session].label}`}
+              >
+                <span className="session-state-dot" aria-hidden="true">
+                  {SESSION_STATE_INFO[props.session].glyph}
+                </span>
+                {SESSION_STATE_INFO[props.session].label}
+              </span>
+            )}
             {props.sessionFlags?.remoteControl && (
               <span className="session-badge" title="New Claude sessions start with --remote-control">
                 Remote

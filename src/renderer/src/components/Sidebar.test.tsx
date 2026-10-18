@@ -7,7 +7,7 @@ import { Sidebar, type SidebarProps } from './Sidebar'
 const state = appState(theme('Client', [repo('api', [task('fix'), task('docs')]), folder('notes')]))
 
 function renderSidebar(patch: Partial<SidebarProps> = {}): void {
-  const status: LiveStatus = { running: [], missing: [] }
+  const status: LiveStatus = { running: [], missing: [], activity: {} }
   render(
     <Sidebar
       state={state}
@@ -65,5 +65,44 @@ describe('Sidebar git badges', () => {
     expect(screen.getByTitle('1 uncommitted file')).toBeInTheDocument()
     expect(screen.queryByText(/↑|↓/)).not.toBeInTheDocument()
     expect(screen.getAllByRole('img')).toHaveLength(1)
+  })
+})
+
+describe('Sidebar status dot', () => {
+  /** The dot of a task or folder row: its button is named "<dot> [📁 ]<name>". */
+  const dotOf = (name: string): HTMLElement => {
+    const dot = screen.getByRole('button', { name: new RegExp(`^\\S (📁 )?${name}$`, 'u') }).querySelector('.dot')
+    if (!(dot instanceof HTMLElement)) throw new Error('no dot')
+    return dot
+  }
+
+  it('shows Claude busy, waiting and idle, and a session without its claude window', () => {
+    renderSidebar({
+      state: appState(
+        theme('Client', [repo('api', [task('fix'), task('docs'), task('ship'), task('shell')]), folder('notes')]),
+      ),
+      status: {
+        running: ['fix', 'docs', 'ship', 'shell'],
+        missing: [],
+        activity: { fix: 'busy', docs: 'waiting', ship: 'idle' },
+      },
+    })
+    expect(dotOf('fix')).toHaveClass('dot', 'running', 'busy')
+    expect(dotOf('fix')).toHaveAttribute('title', 'Claude is working')
+    expect(dotOf('docs')).toHaveClass('running', 'waiting')
+    expect(dotOf('docs').title).toMatch(/^Waiting for you/)
+    expect(dotOf('ship')).toHaveClass('running', 'idle')
+    expect(dotOf('ship')).toHaveAttribute('title', 'Claude is idle')
+    expect(dotOf('shell').className).toBe('dot running')
+    for (const name of ['fix', 'docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
+  })
+
+  it('keeps ○ for no session and ⚠ for a missing path', () => {
+    renderSidebar({ status: { running: ['docs'], missing: ['docs', 'notes'], activity: { docs: 'busy' } } })
+    expect(dotOf('fix').className).toBe('dot none')
+    expect(dotOf('fix')).toHaveTextContent('○')
+    expect(dotOf('docs').className).toBe('dot missing')
+    expect(dotOf('docs')).toHaveTextContent('⚠')
+    expect(dotOf('notes')).toHaveAttribute('title', 'Path missing')
   })
 })

@@ -307,11 +307,11 @@ describe('Orchestrator: sessions and tabs', () => {
   it('reports running sessions and missing paths', async () => {
     const ctx = await withTask()
     let status = await ctx.orch.getStatus()
-    expect(status).toEqual({ running: [ctx.task.id], missing: [] })
+    expect(status).toEqual({ running: [ctx.task.id], missing: [], activity: {} })
     ctx.tmux.sessions.clear()
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
-    expect(status).toEqual({ running: [], missing: [ctx.task.id] })
+    expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {} })
   })
 })
 
@@ -789,5 +789,88 @@ describe('Orchestrator: git status', () => {
   it('ignores a non-array argument', async () => {
     const { orch } = await withTasks(['a'])
     await expect(orch.getGitStatus(null as unknown as Target[])).resolves.toEqual({})
+  })
+})
+
+describe('Orchestrator: Claude activity', () => {
+  const PROMPT = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No, and tell Claude what to do differently (esc)\n'
+  const INPUT = '⏺ Done.\n────────────────────────────────────────\n❯ \n────────────────────────────────────────\n'
+
+  async function withSessions(): Promise<
+    Ctx & { clock: { now: number }; task: Task; folderId: string; taskSession: string; folderSession: string }
+  > {
+    const ctx = makeDeps()
+    ctx.git.roots.set('/code/my-api', '/code/my-api')
+    const clock = { now: 1_700_000_000_500 }
+    const orch = new Orchestrator(ctx.deps, { now: () => clock.now })
+    await orch.init()
+    const themeId = (await orch.createTheme('Client X')).themes[0].id
+    const repoId = (await orch.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const folderId = (await orch.addFolder(themeId, '/docs/notes')).themes[0].items[1].id
+    await orch.openTarget({ themeId, itemId: folderId }) // starts the folder session
+    return {
+      ...ctx,
+      orch,
+      themeId,
+      repoId,
+      clock,
+      task,
+      folderId,
+      taskSession: 'mmt_client-x_my-api_fix',
+      folderSession: 'mmf_client-x_notes',
+    }
+  }
+  const secondsAgo = (clock: { now: number }, s: number): number => Math.floor(clock.now / 1000) - s
+
+  it('is busy after recent output, without capturing the screen', async () => {
+    const { orch, tmux, clock, task, taskSession } = await withSessions()
+    tmux.activity.set(taskSession, secondsAgo(clock, 1))
+    tmux.panes.set(taskSession, PROMPT)
+    expect((await orch.getStatus()).activity).toEqual({ [task.id]: 'busy' })
+    expect(tmux.captureCalls).toEqual([])
+  })
+
+  it('is waiting or idle from the screen of a quiet session, for tasks and folders', async () => {
+    const { orch, tmux, clock, task, folderId, taskSession, folderSession } = await withSessions()
+    tmux.activity.set(taskSession, secondsAgo(clock, 30))
+    tmux.activity.set(folderSession, secondsAgo(clock, 30))
+    tmux.panes.set(taskSession, PROMPT)
+    tmux.panes.set(folderSession, INPUT)
+    expect((await orch.getStatus()).activity).toEqual({ [task.id]: 'waiting', [folderId]: 'idle' })
+    expect(tmux.captureCalls.sort()).toEqual([`${folderSession}:claude`, `${taskSession}:claude`])
+  })
+
+  it('captures a quiet screen again only after new activity', async () => {
+    const { orch, tmux, clock, task, taskSession } = await withSessions()
+    tmux.activity.set(taskSession, secondsAgo(clock, 30))
+    tmux.panes.set(taskSession, PROMPT)
+    await orch.getStatus()
+    clock.now += 3000
+    tmux.panes.set(taskSession, INPUT) // can't really change without activity; proves the cache is used
+    expect((await orch.getStatus()).activity[task.id]).toBe('waiting')
+    expect(tmux.captureCalls).toHaveLength(1)
+
+    tmux.activity.set(taskSession, secondsAgo(clock, 5)) // the user answered; Claude printed, then went quiet
+    expect((await orch.getStatus()).activity[task.id]).toBe('idle')
+    expect(tmux.captureCalls).toHaveLength(2)
+  })
+
+  it('leaves out sessions without a claude window or not running, and treats a failed capture as idle', async () => {
+    const { orch, tmux, clock, task, taskSession, folderSession } = await withSessions()
+    tmux.sessions.get(folderSession)!.windows[0].name = 'shell' // claude window closed
+    tmux.activity.set(folderSession, secondsAgo(clock, 1))
+    tmux.activity.set(taskSession, secondsAgo(clock, 30)) // no pane text: capture fails
+    expect((await orch.getStatus()).activity).toEqual({ [task.id]: 'idle' })
+    tmux.sessions.delete(taskSession)
+    expect((await orch.getStatus()).activity).toEqual({})
+  })
+
+  it('still reports sessions when the activity call fails', async () => {
+    const { orch, tmux, task } = await withSessions()
+    tmux.windowActivity = async () => Promise.reject(new Error('tmux died'))
+    const status = await orch.getStatus()
+    expect(status.running).toContain(task.id)
+    expect(status.activity).toEqual({})
   })
 })

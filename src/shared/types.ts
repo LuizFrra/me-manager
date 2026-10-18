@@ -50,10 +50,18 @@ export interface Target {
   taskId?: string
 }
 
+/**
+ * What Claude is doing in a session, best-effort (see main/tmux/activity.ts): `busy` printed output in the last
+ * few seconds, `waiting` shows a permission prompt or question, `idle` is quiet at its prompt.
+ */
+export type ClaudeActivity = 'busy' | 'waiting' | 'idle'
+
 /** Ids (task ids for tasks, item ids for folders/repos). */
 export interface LiveStatus {
   running: string[]
   missing: string[]
+  /** For running sessions that still have their `claude` window, by id. */
+  activity: Record<string, ClaudeActivity>
 }
 
 /** A repo task's git state, read from its worktree (see GitApi.taskStatus). */
