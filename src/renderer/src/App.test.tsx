@@ -2429,6 +2429,18 @@ describe('App status bar', () => {
     expect(bar.getByText('⚠ skip-perms')).toBeInTheDocument() // on by default
   })
 
+  it("doesn't claim permissions are skipped when the claude arguments choose a permission mode", async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.updateSettings({ claudeArgs: ['--permission-mode', 'plan'], skipPermissions: true })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('group', { name: 'Status bar' })
+    expect(screen.getByText('Remote')).toBeInTheDocument() // the other flag still shows
+    expect(screen.queryByText('⚠ permissions skipped')).not.toBeInTheDocument()
+    expect(screen.queryByText('⚠ skip-perms')).not.toBeInTheDocument()
+  })
+
   it('copies the branch, opens the Changes tab and the usage view from its segments', async () => {
     const user = userEvent.setup()
     const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})

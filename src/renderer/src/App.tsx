@@ -53,6 +53,7 @@ import { allTargets, visibleTargets } from './lib/targets'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
+import { effectiveSessionFlags } from './lib/sessionFlags'
 import { sessionState } from './lib/sessionState'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
@@ -1093,6 +1094,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     ? state.themes.find((t) => t.id === selected.themeId)?.items.find((i) => i.id === selected.itemId)
     : undefined
   const isRepo = item?.kind === 'repo' && selected?.taskId !== undefined
+  const sessionFlags = effectiveSessionFlags(settings)
 
   return (
     <div className="app">
@@ -1135,7 +1137,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
               onRevealInFileManager={() => openExternally('fileManager')}
-              sessionFlags={settings}
+              sessionFlags={sessionFlags}
               usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
               onOpenUsage={() => setUsageOpen(true)}
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
@@ -1224,7 +1226,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 session={sessionState(status, targetKey(selected))}
                 tabs={tabs.length}
                 todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
-                skipPermissions={settings.skipPermissions}
+                skipPermissions={sessionFlags.skipPermissions}
                 onCopyBranch={copyBranch}
                 onOpenChanges={() => updatePanel({ open: true, tab: 'changes' })}
                 onOpenUsage={() => setUsageOpen(true)}
