@@ -459,6 +459,9 @@ export class FilesService implements FilesApi {
           found.map((f) => f.text),
           found.length,
         )
+      } catch (err) {
+        // git has found them already: show them where git says, just without the highlight's length.
+        if (!(err instanceof SearchTimeoutError)) throw err
       } finally {
         matcher.close()
       }
