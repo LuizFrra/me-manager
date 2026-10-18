@@ -2484,3 +2484,158 @@ describe('App theme colours and icons', () => {
     expect(customize).not.toHaveBeenCalled()
   })
 })
+
+describe('App welcome and home screens', () => {
+  const welcome = (): HTMLElement => screen.getByRole('region', { name: 'Welcome to me-manager' })
+  const home = (): HTMLElement => screen.getByRole('region', { name: 'Home' })
+
+  it('welcomes a first run with an explanation and creates a theme from it', async () => {
+    const user = userEvent.setup()
+    render(<App api={createMockApi()} />)
+    const w = within(await screen.findByRole('region', { name: 'Welcome to me-manager' }))
+    expect(
+      w.getByText(/Each one is its own git worktree and branch, with its own\s+Claude session/),
+    ).toBeInTheDocument()
+    await user.click(w.getByRole('button', { name: /^Create a theme/ }))
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByRole('button', { name: 'Remove theme Client X' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Welcome to me-manager' })).not.toBeInTheDocument()
+    expect(home()).toHaveTextContent('Select a task or folder, or create one from the sidebar.')
+  })
+
+  it('adds a repository from the welcome screen, asking for a theme first', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const addRepo = vi.spyOn(api, 'addRepo')
+    render(<App api={api} />)
+    await user.click(
+      within(await screen.findByRole('region', { name: /^Welcome/ })).getByRole('button', {
+        name: /^Add a repository/,
+      }),
+    )
+    const dialog = screen.getByRole('dialog', { name: 'New theme' })
+    expect(dialog).toHaveTextContent('Repositories go into a theme')
+    await user.type(within(dialog).getByRole('textbox', { name: 'Name' }), 'Work')
+    await user.click(within(dialog).getByRole('button', { name: 'Create and continue' }))
+    const themeId = (await api.getState()).themes[0].id
+    await waitFor(() => expect(addRepo).toHaveBeenCalledWith(themeId, '/home/me/code/my-api'))
+    expect(await screen.findByRole('button', { name: /📦 my-api$/ })).toBeInTheDocument()
+  })
+
+  it('clones into the only theme, or asks which theme when there are several', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.createTheme('Work')
+    render(<App api={api} />)
+    await user.click(
+      within(await screen.findByRole('region', { name: 'Home' })).getByRole('button', { name: /^Clone a repository/ }),
+    )
+    expect(screen.getByRole('dialog', { name: 'Clone repository into Work' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await user.click(screen.getByRole('button', { name: 'New theme' }))
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Side')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await screen.findByRole('button', { name: 'Remove theme Side' })
+    await user.click(within(home()).getByRole('button', { name: /^Clone a repository/ }))
+    const choose = screen.getByRole('dialog', { name: 'Clone a repository' })
+    await user.click(within(choose).getByRole('button', { name: 'Side' }))
+    expect(screen.getByRole('dialog', { name: 'Clone repository into Side' })).toBeInTheDocument()
+  })
+
+  it('asks which theme a repository goes into, and Cancel adds nothing', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.createTheme('Work')
+    await api.createTheme('Side')
+    const addRepo = vi.spyOn(api, 'addRepo')
+    render(<App api={api} />)
+    await user.click(
+      within(await screen.findByRole('region', { name: 'Home' })).getByRole('button', { name: /^Add a repository/ }),
+    )
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Add a repository' })).getByRole('button', { name: 'Cancel' }),
+    )
+    expect(addRepo).not.toHaveBeenCalled()
+    await user.click(within(home()).getByRole('button', { name: /^Add a repository/ }))
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Add a repository' })).getByRole('button', { name: 'Side' }),
+    )
+    const sideId = (await api.getState()).themes[1].id
+    await waitFor(() => expect(addRepo).toHaveBeenCalledWith(sideId, '/home/me/code/my-api'))
+  })
+
+  it('opens the keyboard shortcuts from the welcome screen', async () => {
+    const user = userEvent.setup()
+    render(<App api={createMockApi()} />)
+    await screen.findByRole('region', { name: /^Welcome/ })
+    await user.click(within(welcome()).getByRole('button', { name: 'Keyboard shortcuts' }))
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+  })
+
+  it('lists the 5 newest tasks when nothing is selected, and opens one', async () => {
+    const api = repoApi()
+    let s = await api.createTheme('Work')
+    s = await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    const themeId = s.themes[0].id
+    const repoId = s.themes[0].items[0].id
+    for (const name of ['one', 'two', 'three', 'four', 'five', 'six']) s = await api.createTask(themeId, repoId, name)
+    // Created in that order, a minute apart.
+    const repo = s.themes[0].items[0]
+    if (repo.kind === 'repo')
+      repo.tasks.forEach((t, i) => (t.createdAt = new Date(Date.UTC(2026, 9, 1, 10, i)).toISOString()))
+    api.getState = async () => s
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const user = userEvent.setup()
+    render(<App api={api} />)
+    const list = within(await screen.findByRole('region', { name: 'Home' })).getByRole('list')
+    const buttons = within(list).getAllByRole('button')
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Open six (Work › my-api)',
+      'Open five (Work › my-api)',
+      'Open four (Work › my-api)',
+      'Open three (Work › my-api)',
+      'Open two (Work › my-api)',
+    ])
+    await user.click(buttons[2])
+    const four = repo.kind === 'repo' ? repo.tasks.find((t) => t.name === 'four') : undefined
+    expect(openTarget).toHaveBeenCalledWith({ themeId, itemId: repoId, taskId: four?.id })
+    expect(await screen.findByText('my-api › four')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Home' })).not.toBeInTheDocument()
+  })
+
+  it('shows a tip that rotates, and opens the palette from the quick actions', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = createMockApi()
+      await api.createTheme('Work')
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      render(<App api={api} />)
+      const tip = (): string => within(home()).getByText(/^Press |opens|searches|filters|shows|lists/).textContent ?? ''
+      await screen.findByRole('region', { name: 'Home' })
+      expect(tip()).toBe('Press Ctrl+Shift+P to jump to any task, folder, file or action.')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(8_000)
+      })
+      expect(tip()).toContain('Ctrl+Shift+E')
+      await user.click(within(home()).getByRole('button', { name: 'Next tip' }))
+      expect(tip()).toContain('Ctrl+Shift+S')
+      await user.click(within(home()).getByRole('button', { name: /^Command palette/ }))
+      expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows neither screen before the state has loaded', async () => {
+    let resolve: (s: Awaited<ReturnType<MeManagerApi['getState']>>) => void = () => {}
+    const api = createMockApi({ getState: () => new Promise((r) => (resolve = r)) })
+    render(<App api={api} />)
+    await act(() => new Promise((r) => setTimeout(r, 20)))
+    expect(screen.queryByRole('region', { name: /^Welcome/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Home' })).not.toBeInTheDocument()
+    await act(async () => resolve({ version: 1, themes: [] }))
+    expect(await screen.findByRole('region', { name: /^Welcome/ })).toBeInTheDocument()
+  })
+})

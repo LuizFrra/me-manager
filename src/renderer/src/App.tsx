@@ -26,6 +26,7 @@ import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
 import {
+  ChooseThemeDialog,
   CloneRepoDialog,
   CommitDialog,
   ConfirmRemoveDialog,
@@ -58,6 +59,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { UsageView } from './components/UsageView'
 import { StatusBar } from './components/StatusBar'
 import { ThemeStyleDialog } from './components/ThemeStyleDialog'
+import { Home, Welcome } from './components/Welcome'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -81,6 +83,7 @@ type Dialog =
   | { kind: 'settings' }
   | { kind: 'clone'; themeId: string; themeName: string }
   | { kind: 'themeStyle'; themeId: string; themeName: string; style: ThemeStyle }
+  | { kind: 'chooseTheme'; title: string; onChoose: (themeId: string) => void }
   | {
       kind: 'confirmRemove'
       what: RemovalKind
@@ -136,6 +139,8 @@ const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targe
 export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
+  // Whether the first getState has answered: until then "no themes" may just mean "not loaded yet".
+  const [stateLoaded, setStateLoaded] = useState(false)
   const [status, setStatus] = useState<LiveStatus>({ running: [], missing: [], activity: {} })
   // Git status of the visible tasks (and the selected one), by task id.
   const [gitStatus, setGitStatus] = useState<Record<string, TaskGitStatus>>({})
@@ -390,6 +395,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     void (async () => {
       const loaded = await attempt(() => api.getState())
       if (loaded) setState(loaded)
+      setStateLoaded(true)
       await restoreUi(loaded)
     })()
   }, [api, attempt, restoreUi])
@@ -514,6 +520,45 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const theme = next.themes.find((t) => t.id === themeId)
     showInfo(`Cloned ${name}${theme ? ` into ${theme.name}` : ''}`)
   }
+
+  /**
+   * Runs `then` with the theme a new repository goes into: the only theme; the one the user picks when there are
+   * several; or, when there are none yet, a new one the user names first.
+   */
+  const withTheme = (title: string, then: (theme: { id: string; name: string }) => void): void => {
+    const { themes } = state
+    if (themes.length === 1) return then(themes[0])
+    if (themes.length > 1) {
+      setDialog({
+        kind: 'chooseTheme',
+        title,
+        onChoose: (themeId) => {
+          setDialog(null)
+          const theme = themes.find((t) => t.id === themeId)
+          if (theme) then(theme)
+        },
+      })
+      return
+    }
+    setDialog({
+      kind: 'name',
+      title: 'New theme',
+      placeholder: 'e.g. Client X',
+      note: 'Repositories go into a theme: name one first. You can rename it later.',
+      submitLabel: 'Create and continue',
+      onSubmit: async (name) => {
+        const next = await attempt(() => api.createTheme(name))
+        if (!next) return
+        setState(next)
+        setDialog(null)
+        const theme = next.themes.find((t) => t.name === name) ?? next.themes.at(-1)
+        if (theme) then(theme)
+      },
+    })
+  }
+  const startAddRepo = (): void => withTheme('Add a repository', (theme) => void addPath(theme.id, api.addRepo))
+  const startClone = (): void =>
+    withTheme('Clone a repository', (theme) => setDialog({ kind: 'clone', themeId: theme.id, themeName: theme.name }))
 
   const removeTask = async (themeId: string, repoId: string, taskId: string, taskName: string): Promise<void> => {
     const work = await attempt(() => api.checkTaskRemoval(themeId, repoId, taskId))
@@ -1062,8 +1107,23 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               />
             )}
           </>
+        ) : !stateLoaded ? null : state.themes.length === 0 ? (
+          <Welcome
+            onCreateTheme={newTheme}
+            onAddRepo={startAddRepo}
+            onCloneRepo={startClone}
+            onShowShortcuts={() => setHelpOpen(true)}
+          />
         ) : (
-          <div className="empty">Select a task or folder, or create one from the sidebar.</div>
+          <Home
+            state={state}
+            status={status}
+            onOpen={(target) => void open(target)}
+            onCreateTheme={newTheme}
+            onAddRepo={startAddRepo}
+            onCloneRepo={startClone}
+            onOpenPalette={() => setPaletteOpen(true)}
+          />
         )}
       </main>
       {dialog?.kind === 'name' && (
@@ -1099,6 +1159,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           initialParent={settings.cloneDirectory}
           pickDirectory={() => api.pickDirectory()}
           onClone={(url, parentDir, name) => doClone(dialog.themeId, url, parentDir, name)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'chooseTheme' && (
+        <ChooseThemeDialog
+          title={dialog.title}
+          themes={state.themes}
+          onChoose={dialog.onChoose}
           onCancel={() => setDialog(null)}
         />
       )}
