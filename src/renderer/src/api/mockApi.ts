@@ -4,6 +4,7 @@ import {
   type MeManagerApi,
   type Settings,
   type TabInfo,
+  type TaskGitStatus,
   type Theme,
 } from '../../../shared/types'
 import { branchName, slugify, targetKey } from '../../../shared/naming'
@@ -21,6 +22,22 @@ function checkName(name: string, what: string, taken: { id: string; name: string
   if (taken.some((x) => x.id !== selfId && x.name.toLowerCase() === trimmed.toLowerCase()))
     throw new Error(`A ${what.toLowerCase()} named "${trimmed}" already exists`)
   return trimmed
+}
+
+/** A plausible git status for the browser demo, varied by task name so the badges differ between rows. */
+export function demoGitStatus(name: string, branch: string): TaskGitStatus {
+  const n = [...name].reduce((sum, c) => sum + c.charCodeAt(0), 0)
+  return {
+    ahead: n % 4,
+    behind: n % 3 === 0 ? 1 : 0,
+    uncommitted: n % 5,
+    branch,
+    lastCommit: {
+      sha: (n * 2654435761).toString(16).slice(-7).padStart(7, '0'),
+      subject: `Work on ${name}`,
+      relativeDate: `${(n % 50) + 1} minutes ago`,
+    },
+  }
 }
 
 /** In-memory MeManagerApi for tests and for running the UI in a browser. */
@@ -43,6 +60,15 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
   const api: MeManagerApi = {
     getState: async () => state,
     getStatus: async () => ({ running: [], missing: [] }),
+    getGitStatus: async (targets) => {
+      const out: Record<string, TaskGitStatus> = {}
+      for (const target of targets) {
+        const item = state.themes.find((t) => t.id === target.themeId)?.items.find((i) => i.id === target.itemId)
+        const task = item?.kind === 'repo' ? item.tasks.find((t) => t.id === target.taskId) : undefined
+        if (task) out[task.id] = demoGitStatus(task.name, task.branch)
+      }
+      return out
+    },
     checkPrereqs: async () => ({ ok: true, missing: [] }),
     getTmuxSocket: async () => 'me-manager',
     getSettings: async () => clone(settings),

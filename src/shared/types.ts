@@ -56,6 +56,22 @@ export interface LiveStatus {
   missing: string[]
 }
 
+/** A repo task's git state, read from its worktree (see GitApi.taskStatus). */
+export interface TaskGitStatus {
+  /** Commits on HEAD that the base ref doesn't have; 0 when the base ref is missing. */
+  ahead: number
+  /** Commits on the base ref that HEAD doesn't have; 0 when the base ref is missing. */
+  behind: number
+  /** Changed, staged and untracked files: one per `git status --porcelain` entry. */
+  uncommitted: number
+  /** The branch checked out in the worktree; 'HEAD' when detached. */
+  branch: string
+  /** Set when the base ref could not be resolved (deleted, never fetched, or unsafe); ahead/behind are then 0. */
+  baseMissing?: true
+  /** HEAD's commit: short sha, subject and committer date relative to now ("2 hours ago"). */
+  lastCommit?: { sha: string; subject: string; relativeDate: string }
+}
+
 export interface TabInfo {
   index: number
   name: string
@@ -99,6 +115,11 @@ export function hasUnsavedWork(work: UnsavedWork): boolean {
 export interface MeManagerApi {
   getState(): Promise<AppState>
   getStatus(): Promise<LiveStatus>
+  /**
+   * Git status of the given repo tasks, by targetKey. Folders, unknown targets, missing worktrees and failed
+   * checks are left out. Cheap to poll: each worktree is read at most once every few seconds.
+   */
+  getGitStatus(targets: Target[]): Promise<Record<string, TaskGitStatus>>
   checkPrereqs(): Promise<PrereqResult>
   /** The `tmux -L` socket name the app's sessions live on, for "copy attach command". */
   getTmuxSocket(): Promise<string>

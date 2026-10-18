@@ -1,8 +1,53 @@
 import { useState } from 'react'
-import type { UsageSummary } from '../../../shared/types'
+import type { TaskGitStatus, UsageSummary } from '../../../shared/types'
 import type { CopyEntry } from '../lib/copy'
+import { baseSummary, plural } from '../lib/gitStatus'
 import { shortcutLabel } from '../lib/shortcuts'
 import { UsageBadge } from './UsageBadge'
+
+/** The header's git line: checked-out branch, standing against the base, uncommitted files and the last commit. */
+function GitLine({ git, baseRef }: { git: TaskGitStatus; baseRef: string }): React.JSX.Element {
+  const standing = baseSummary(git, baseRef)
+  return (
+    <div className="task-git" aria-label="Git status">
+      <span className="task-git-branch" title={`Checked-out branch: ${git.branch}`}>
+        <span aria-hidden="true">⎇</span> {git.branch}
+      </span>
+      <span
+        className={`task-git-base${git.baseMissing ? ' warn' : ''}`}
+        title={
+          git.baseMissing
+            ? `${baseRef} could not be found (deleted or not fetched), so commits ahead/behind are unknown`
+            : standing
+        }
+      >
+        {git.baseMissing ? (
+          <>⚠ {standing}</>
+        ) : (
+          <>
+            <span className={git.ahead > 0 ? 'git-ahead' : undefined}>↑{git.ahead}</span>{' '}
+            <span className={git.behind > 0 ? 'git-behind' : undefined}>↓{git.behind}</span>
+            <span className="task-git-vs"> vs {baseRef}</span>
+          </>
+        )}
+      </span>
+      {git.uncommitted > 0 && (
+        <span className="git-dirty" title={plural(git.uncommitted, 'uncommitted file')}>
+          ●{git.uncommitted} uncommitted
+        </span>
+      )}
+      {git.lastCommit && (
+        <span
+          className="task-git-commit"
+          title={`Last commit ${git.lastCommit.sha}, ${git.lastCommit.relativeDate}: ${git.lastCommit.subject}`}
+        >
+          <code>{git.lastCommit.sha}</code> {git.lastCommit.subject}
+          <span className="task-git-when"> · {git.lastCommit.relativeDate}</span>
+        </span>
+      )}
+    </div>
+  )
+}
 
 /**
  * The selected task's or folder's header: title, path line, and the task's notes, collapsed to one line until
@@ -25,6 +70,9 @@ export function TaskHeader(props: {
   /** The target's Claude usage, once loaded: shown as a badge that opens the usage view. */
   usage?: UsageSummary
   onOpenUsage?: () => void
+  /** A task's git status, once loaded, and the base ref it is compared with. */
+  git?: TaskGitStatus
+  baseRef?: string
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -48,6 +96,7 @@ export function TaskHeader(props: {
             )}
           </div>
           <div className="task-subtitle">{props.subtitle}</div>
+          {props.git && props.baseRef !== undefined && <GitLine git={props.git} baseRef={props.baseRef} />}
         </div>
         <div className="task-header-actions">
           {props.usage && props.onOpenUsage && <UsageBadge usage={props.usage} onOpen={props.onOpenUsage} />}

@@ -9,14 +9,16 @@ import type {
   TabInfo,
   Target,
   Task,
+  TaskGitStatus,
   UnsavedWork,
   UsageReport,
   UsageSummary,
   UsageTargetReport,
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
-import { branchName, sessionName } from '../../shared/naming'
+import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
+import { mapLimit } from '../concurrency'
 import type { AppService, OrchestratorDeps } from '../contracts'
 import { taskWorktreePath } from '../paths'
 import * as m from '../store/mutations'
@@ -36,9 +38,26 @@ const CLAUDE_WINDOW = 'claude'
 /** How long createTask waits for `git fetch` before branching from the last fetched refs. */
 export const FETCH_TIMEOUT_MS = 20_000
 
+/**
+ * A worktree's git status is read at most this often, however fast the UI polls: each read runs a few git
+ * commands, which add up in big repos.
+ */
+export const GIT_STATUS_TTL_MS = 5_000
+/** Worktrees whose git status is read at the same time. */
+export const GIT_STATUS_CONCURRENCY = 4
+
 export interface OrchestratorOptions {
   /** Overrides FETCH_TIMEOUT_MS (for tests). */
   fetchTimeoutMs?: number
+  /** The clock, in ms (for tests). */
+  now?: () => number
+}
+
+interface GitStatusEntry {
+  at: number
+  baseRef: string
+  /** null when the read failed; kept for the TTL too, so a broken worktree isn't retried on every poll. */
+  status: Promise<TaskGitStatus | null>
 }
 
 export class Orchestrator implements AppService {
@@ -49,12 +68,16 @@ export class Orchestrator implements AppService {
   private readonly fetchTimeoutMs: number
   /** Bumped by every openTarget call, so only the latest one attaches the terminal. */
   private openSeq = 0
+  private readonly now: () => number
+  /** Git status per worktree path, shared by overlapping calls and reused for GIT_STATUS_TTL_MS. */
+  private readonly gitStatusCache = new Map<string, GitStatusEntry>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
     options: OrchestratorOptions = {},
   ) {
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS
+    this.now = options.now ?? Date.now
   }
 
   async init(): Promise<void> {
@@ -167,6 +190,31 @@ export class Orchestrator implements AppService {
       }
     }
     return { running, missing }
+  }
+
+  async getGitStatus(targets: Target[]): Promise<Record<string, TaskGitStatus>> {
+    const now = this.now()
+    for (const [path, entry] of this.gitStatusCache) {
+      if (now - entry.at >= GIT_STATUS_TTL_MS) this.gitStatusCache.delete(path)
+    }
+    const tasks = new Map<string, { root: string; baseRef: string }>()
+    for (const target of Array.isArray(targets) ? targets : []) {
+      if (!target?.taskId) continue
+      const resolved = this.tryTargetRoot(target) // null: removed meanwhile
+      if (resolved?.baseRef === undefined || !this.deps.pathExists(resolved.root)) continue
+      tasks.set(targetKey(target), { root: resolved.root, baseRef: resolved.baseRef })
+    }
+    const results = await mapLimit([...tasks], GIT_STATUS_CONCURRENCY, async ([key, { root, baseRef }]) => {
+      let entry = this.gitStatusCache.get(root)
+      if (!entry || entry.baseRef !== baseRef) {
+        entry = { at: now, baseRef, status: this.deps.git.taskStatus(root, baseRef).catch(() => null) }
+        this.gitStatusCache.set(root, entry)
+      }
+      return [key, await entry.status] as const
+    })
+    const out: Record<string, TaskGitStatus> = {}
+    for (const [key, status] of results) if (status) out[key] = status
+    return out
   }
 
   async createTheme(name: string): Promise<AppState> {
@@ -345,6 +393,14 @@ export class Orchestrator implements AppService {
     if (!target.taskId) throw new Error('Choose a task to open')
     const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
     return { root: task.worktreePath, isRepo: true, baseRef: task.baseRef }
+  }
+
+  private tryTargetRoot(target: Target): { root: string; isRepo: boolean; baseRef?: string } | null {
+    try {
+      return this.targetRoot(target)
+    } catch {
+      return null
+    }
   }
 
   /** The folder the file viewer shows for a target; throws if it is gone from disk. */

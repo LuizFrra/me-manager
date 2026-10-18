@@ -4,6 +4,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ChangedFile, ChangeList, ChangeStatus, FileContent, FileList } from '../../shared/types'
 import type { FilesApi } from '../contracts'
 import { run, streamNul } from '../exec'
+import { GIT_ENV } from '../git/gitEnv'
 
 export const MAX_TEXT_BYTES = 1_000_000
 export const BINARY_SNIFF_BYTES = 8_192
@@ -29,22 +30,6 @@ const IMAGE_MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
-}
-
-/**
- * Git variables that would redirect git to another repository (they are set inside git hooks and
- * some terminals). Setting them to undefined removes them from the child's environment.
- */
-const GIT_ENV: NodeJS.ProcessEnv = {
-  GIT_DIR: undefined,
-  GIT_WORK_TREE: undefined,
-  GIT_INDEX_FILE: undefined,
-  GIT_COMMON_DIR: undefined,
-  GIT_PREFIX: undefined,
-  GIT_OBJECT_DIRECTORY: undefined,
-  GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
-  GIT_NAMESPACE: undefined,
-  GIT_EXTERNAL_DIFF: undefined,
 }
 
 /** Flags that pin diff output to the plain format the renderer parses, whatever the user's git config says. */
