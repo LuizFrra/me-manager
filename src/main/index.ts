@@ -12,7 +12,8 @@ import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
 import { NotificationWatcher } from './notify/watcher'
-import { settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, uiStateFile, worktreesRoot } from './paths'
+import { promptsDir, settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, uiStateFile, worktreesRoot } from './paths'
+import { PromptFiles } from './promptFiles'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
@@ -99,6 +100,8 @@ async function bootstrap(): Promise<void> {
 
   const tmux = new TmuxService(TMUX_SOCKET, tmuxConfFile())
   await tmux.ensureConfig()
+  const promptFiles = new PromptFiles(promptsDir())
+  await promptFiles.sweep()
   ptyService = new PtyService(nodePty.spawn)
   const settings = new SettingsService(new SettingsStore(settingsFile()))
   await settings.init()
@@ -113,6 +116,7 @@ async function bootstrap(): Promise<void> {
     ui: new UiStateStore(uiStateFile()),
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
     usage: new UsageService(), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
+    promptFiles,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
   })
