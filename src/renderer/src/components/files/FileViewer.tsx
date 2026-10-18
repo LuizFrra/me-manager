@@ -43,6 +43,8 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   }
 
   const path = p.path
+  // A deletion can still be opened when only git forgot the file (`git rm --cached`).
+  const gone = p.change?.status === 'D' && !p.change.existsOnDisk
   const md = p.tab === 'files' && isMarkdown(path) && p.content?.kind === 'text'
 
   let body: React.ReactNode
@@ -102,8 +104,14 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
         {p.tab === 'changes' && (
           <button
             className="viewer-btn"
-            disabled={p.change?.status === 'D'}
-            title={p.change?.status === 'D' ? 'The file was deleted' : 'Show the whole file'}
+            disabled={gone}
+            title={
+              gone
+                ? 'The file was deleted'
+                : p.change?.status === 'D'
+                  ? 'Removed from git, but still on disk: show the file'
+                  : 'Show the whole file'
+            }
             onClick={() => p.onOpenFile(path)}
           >
             Open file

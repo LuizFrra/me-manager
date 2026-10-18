@@ -218,6 +218,26 @@ describe('SidePanel', () => {
     await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
   })
 
+  it('allows Open file for a deletion whose file is still on disk', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({
+      listChanges: async () => ({
+        files: [
+          { path: 'src/app.ts', status: 'D', added: 0, removed: 3, binary: false, existsOnDisk: true },
+          { path: 'src/legacy.ts', status: 'D', added: 0, removed: 3, binary: false },
+        ],
+      }),
+    })
+    render(<Harness api={api} />)
+    await user.click(await screen.findByRole('tab', { name: 'Changes 2' }))
+    await user.click(screen.getByRole('button', { name: /src\/legacy\.ts/ }))
+    expect(await screen.findByRole('button', { name: 'Open file' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: /src\/app\.ts/ }))
+    expect(screen.getByRole('button', { name: 'Open file' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Open file' }))
+    await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+  })
+
   it("passes a rename's oldPath to fileDiff", async () => {
     const user = userEvent.setup()
     const api = createMockApi({

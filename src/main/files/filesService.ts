@@ -336,7 +336,26 @@ export class FilesService implements FilesApi {
       const c = counts.get(ns.path) ?? { added: 0, removed: 0, binary: false }
       byPath.set(ns.path, { ...ns, ...c })
     }
-    const untracked = [...new Set(splitZ(others))].filter((path) => !byPath.has(path))
+    const othersSet = new Set(splitZ(others))
+    // A file removed from the index but kept on disk (`git rm --cached`) is a deletion, not an untracked file.
+    const deletions = [...byPath.values()].filter((f) => f.status === 'D')
+    for (let i = 0; i < deletions.length; i += LSTAT_BATCH) {
+      const batch = deletions.slice(i, i + LSTAT_BATCH)
+      const onDisk = await Promise.all(
+        batch.map(
+          (f) =>
+            othersSet.has(f.path) ||
+            lstat(join(worktree, f.path)).then(
+              (s) => s.isFile() || s.isSymbolicLink(),
+              () => false,
+            ),
+        ),
+      )
+      batch.forEach((f, j) => {
+        if (onDisk[j]) f.existsOnDisk = true
+      })
+    }
+    const untracked = [...othersSet].filter((path) => !byPath.has(path))
     for (let i = 0; i < untracked.length; i += LSTAT_BATCH) {
       const batch = untracked.slice(i, i + LSTAT_BATCH)
       const entries = await Promise.all(batch.map((path) => this.untrackedEntry(worktree, path)))
@@ -357,6 +376,12 @@ export class FilesService implements FilesApi {
       return git(worktree, ['diff', ...DIFF_FLAGS, '-M', base, '--', old.rel, rel])
     }
     if (!p.missing && !(await this.isTracked(worktree, rel))) {
+      // Untracked, unless it was removed from git but kept on disk: listChanges reports that as a deletion.
+      const { base } = await this.resolveBase(worktree, baseRef)
+      const own = await git(worktree, ['diff', ...DIFF_FLAGS, '-z', '--name-status', base, '--', rel])
+      if (parseNameStatus(own).some((ns) => ns.path === rel && ns.status === 'D')) {
+        return git(worktree, ['diff', ...DIFF_FLAGS, base, '--', rel])
+      }
       return git(worktree, ['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', rel], [1])
     }
     const { base } = await this.resolveBase(worktree, baseRef)
