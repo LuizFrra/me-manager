@@ -41,6 +41,7 @@ export const INVOKE_METHODS = [
   'startRun',
   'restartRun',
   'stopRun',
+  'getDevUrls',
   'copyTranscript',
   'saveTranscript',
   'listFiles',

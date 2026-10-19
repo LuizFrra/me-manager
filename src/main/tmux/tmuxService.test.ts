@@ -301,7 +301,7 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
       () => tailOf(session, 'run'),
       (t) => t?.includes('Local:') ?? false,
     )
-    expect(text).toMatch(/^built$/m) // the first run's output is still there, above
+    expect(text).not.toMatch(/Pane is dead/) // the screen starts afresh: only what scrolled off it stays
     expect(text).toMatch(/^ {2}Local: {3}http:\/\/localhost:5173\/$/m)
     expect((await runTab(session))?.dead).toBeUndefined()
     // Ctrl-C, even from copy mode (the user scrolled back), where tmux would take the key itself.

@@ -286,6 +286,11 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     restartClaude: async () => clone(tabs),
     startRun: async (target) => run(target, false),
     restartRun: async (target) => run(target, true),
+    // The demo's run tab "prints" Vite's address while it runs.
+    getDevUrls: async () => {
+      const tab = tabs.find((t) => t.name === RUN_WINDOW)
+      return tab && !tab.dead ? [{ url: 'http://localhost:5173/', index: tab.index, tab: tab.name }] : []
+    },
     stopRun: async () => {
       const tab = tabs.find((t) => t.name === RUN_WINDOW)
       if (tab) tab.dead = true

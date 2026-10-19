@@ -184,6 +184,15 @@ export interface TabInfo {
   dead?: true
 }
 
+/** A dev-server URL printed in one of a session's tabs (see MeManagerApi.getDevUrls). */
+export interface DevUrl {
+  /** Normalized for opening (`http://localhost:5173/`): loopback, http or https, with a port. */
+  url: string
+  /** The tab it was printed in, as a TabInfo has it. */
+  index: number
+  tab: string
+}
+
 /** The most of a tab's scrollback a transcript holds: beyond it, only the most recent lines are kept. */
 export const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024
 
@@ -440,6 +449,13 @@ export interface MeManagerApi {
   restartRun(target: Target): Promise<TabInfo[]>
   /** Ctrl-C in the `run` tab, if its command is running; the tab stays open with the output. */
   stopRun(target: Target): Promise<TabInfo[]>
+  /**
+   * Dev-server URLs (see shared/devUrls.ts: loopback http(s) with a port) printed on the screen or in the last few
+   * hundred lines of the target's open tabs: from the tab that printed last first, newest first within a tab, once
+   * each, at most MAX_DEV_URLS. [] when the session isn't running. Cheap to poll: a tab is captured again only
+   * after it printed something, and at most every few seconds.
+   */
+  getDevUrls(target: Target): Promise<DevUrl[]>
   /**
    * The scrollback of the tab at `index` (a TabInfo.index of the target's session) as plain text, for the renderer
    * to put on the clipboard. Rejects when the session isn't running or has no tab at `index`.

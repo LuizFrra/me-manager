@@ -108,7 +108,8 @@ export interface TmuxApi {
   ): Promise<void>
   /**
    * Restarts the window named `windowName` (exactly) with `command` in `cwd` (`respawn-window -k`): a command
-   * still running is killed, the output so far stays above, and the window's options (remain-on-exit) are kept.
+   * still running is killed and the screen cleared (what scrolled off it stays in the scrollback), and the window's
+   * options (remain-on-exit) are kept.
    */
   respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void>
   /** Presses Ctrl-C in the window named `windowName` (exactly), after leaving copy mode if it is in it. */

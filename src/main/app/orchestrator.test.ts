@@ -20,6 +20,8 @@ import {
   resolvePrompt,
   RUN_RESTART_GRACE_MS,
   runWindowCommand,
+  DEV_URL_RESCAN_MS,
+  DEV_URL_SCROLLBACK_LINES,
 } from './orchestrator'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import {
@@ -2084,6 +2086,121 @@ describe('Orchestrator: run command', () => {
     expect(run('echo $((1 + 1))')).toBe('$ echo $((1 + 1))\n2\n')
     expect(run(`printf '%s\\n' "it's" ok`)).toBe(`$ printf '%s\\n' "it's" ok\nit's\nok\n`)
     expect(run('echo `echo hi` $(echo there) %s')).toBe('$ echo `echo hi` $(echo there) %s\nhi there %s\n')
+  })
+})
+
+describe('Orchestrator: dev-server URLs', () => {
+  const SESSION = 'mmt_client-x_my-api_fix'
+  /** A clock the tests move by hand, in ms; starts at second 1000. */
+  async function withTask(): Promise<Ctx & { target: Target; clock: { ms: number } }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    const clock = { ms: 1_000_000 }
+    const orch = new Orchestrator(ctx.deps, { now: () => clock.ms })
+    await orch.init()
+    const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
+    await orch.newTab(target) // shell
+    await orch.newTab(target) // shell 2
+    return { ...ctx, orch, target, clock }
+  }
+  /** What a tab printed, and when (Unix seconds). */
+  const print = (ctx: Ctx, tab: string, text: string, atSec: number): void => {
+    ctx.tmux.tails.set(`${SESSION}:${tab}`, text)
+    ctx.tmux.windowActivitySec.set(`${SESSION}:${tab}`, atSec)
+  }
+
+  it("lists the URLs printed in the target's tabs with their tab, the tab that printed last first", async () => {
+    const ctx = await withTask()
+    print(ctx, 'shell', '  ➜  Local:   http://localhost:5173/\n', 990)
+    print(ctx, 'shell 2', '* Listening on http://127.0.0.1:3000\n* Listening on http://[::1]:3000\n', 995)
+    print(ctx, 'claude', 'Started the server: http://localhost:5173/ (already listed)', 900)
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([
+      { url: 'http://[::1]:3000/', index: 2, tab: 'shell 2' },
+      { url: 'http://127.0.0.1:3000/', index: 2, tab: 'shell 2' },
+      { url: 'http://localhost:5173/', index: 1, tab: 'shell' },
+    ])
+    expect(ctx.tmux.tailCalls.sort()).toEqual(
+      [`${SESSION}:claude`, `${SESSION}:shell`, `${SESSION}:shell 2`]
+        .map((w) => `${w} ${DEV_URL_SCROLLBACK_LINES}`)
+        .sort(),
+    )
+    expect(DEV_URL_SCROLLBACK_LINES).toBe(200)
+  })
+
+  it('reports at most 5, the newest', async () => {
+    const ctx = await withTask()
+    print(ctx, 'shell', [3000, 3001, 3002, 3003, 3004, 3005, 3006].map((p) => `http://localhost:${p}`).join('\n'), 990)
+    const urls = await ctx.orch.getDevUrls(ctx.target)
+    expect(urls.map((u) => u.url)).toEqual([3006, 3005, 3004, 3003, 3002].map((p) => `http://localhost:${p}/`))
+  })
+
+  it('captures a tab again only once it printed something, and at most every few seconds', async () => {
+    const ctx = await withTask()
+    print(ctx, 'shell', 'starting…', 990)
+    await ctx.orch.getDevUrls(ctx.target)
+    expect(ctx.tmux.tailCalls).toHaveLength(3)
+    ctx.tmux.tailCalls = []
+    ctx.clock.ms += 60_000
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([]) // nothing printed since: no capture
+    expect(ctx.tmux.tailCalls).toEqual([])
+
+    print(ctx, 'shell', 'starting…\nLocal: http://localhost:4000', 1061)
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([
+      { url: 'http://localhost:4000/', index: 1, tab: 'shell' },
+    ])
+    expect(ctx.tmux.tailCalls).toEqual([`${SESSION}:shell 200`])
+
+    // It keeps printing (a busy log): captured again only once DEV_URL_RESCAN_MS have passed.
+    ctx.tmux.tailCalls = []
+    print(ctx, 'shell', 'Local: http://localhost:4001', 1062)
+    ctx.clock.ms += DEV_URL_RESCAN_MS - 1
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([
+      { url: 'http://localhost:4000/', index: 1, tab: 'shell' },
+    ])
+    ctx.clock.ms += 1
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([
+      { url: 'http://localhost:4001/', index: 1, tab: 'shell' },
+    ])
+    expect(ctx.tmux.tailCalls).toEqual([`${SESSION}:shell 200`])
+  })
+
+  it('captures again a tab that printed in the second it was captured, which may have missed the end', async () => {
+    const ctx = await withTask()
+    print(ctx, 'shell', 'VITE v5 ready', 1000) // the clock is at second 1000 too
+    await ctx.orch.getDevUrls(ctx.target)
+    print(ctx, 'shell', 'VITE v5 ready\n  Local: http://localhost:5173/', 1000) // same second
+    ctx.clock.ms += DEV_URL_RESCAN_MS
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([
+      { url: 'http://localhost:5173/', index: 1, tab: 'shell' },
+    ])
+    ctx.tmux.tailCalls = []
+    ctx.clock.ms += DEV_URL_RESCAN_MS
+    await ctx.orch.getDevUrls(ctx.target) // captured after that second: settled
+    expect(ctx.tmux.tailCalls).toEqual([])
+  })
+
+  it('drops the URLs of a tab once it is closed', async () => {
+    const ctx = await withTask()
+    print(ctx, 'shell 2', 'http://localhost:8000/', 990)
+    expect(await ctx.orch.getDevUrls(ctx.target)).toHaveLength(1)
+    await ctx.orch.closeTab(ctx.target, 2)
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([])
+  })
+
+  it('works for folders, is empty without a session, and never touches an archived task', async () => {
+    const ctx = await withTask()
+    const folderId = (await ctx.orch.addFolder(ctx.themeId, '/docs/site')).themes[0].items[1].id
+    const folder = { themeId: ctx.themeId, itemId: folderId }
+    await expect(ctx.orch.getDevUrls(folder)).resolves.toEqual([]) // not opened yet
+    await ctx.orch.openTarget(folder)
+    ctx.tmux.tails.set('mmf_client-x_site:claude', 'Web Server is available at http://localhost:1313/')
+    await expect(ctx.orch.getDevUrls(folder)).resolves.toEqual([
+      { url: 'http://localhost:1313/', index: 0, tab: 'claude' },
+    ])
+    await ctx.orch.archiveTask(ctx.themeId, ctx.repoId, ctx.target.taskId!)
+    ctx.tmux.tailCalls = []
+    await expect(ctx.orch.getDevUrls(ctx.target)).rejects.toThrow('"fix" is archived: restore it first')
+    expect(ctx.tmux.tailCalls).toEqual([])
   })
 })
 
