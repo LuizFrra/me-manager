@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeTheme, shell, type MenuItemConstructorOptions } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as nodePty from 'node-pty'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { followAppearance } from './appearance'
 import { Orchestrator } from './app/orchestrator'
 import { FilesService } from './files/filesService'
 import { GhService } from './git/gh'
@@ -39,6 +40,8 @@ let mainWindow: BrowserWindow | null = null
 let ptyService: PtyService | null = null
 let notificationWatcher: NotificationWatcher | null = null
 let budgetWatcher: BudgetWatcher | null = null
+/** The window colour for the current appearance (see followAppearance); dark until the settings are loaded. */
+let windowBackground = (): string => '#1e1e1e'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -47,7 +50,7 @@ function createWindow(): BrowserWindow {
     minWidth: 800,
     minHeight: 500,
     show: false,
-    backgroundColor: '#1e1e1e',
+    backgroundColor: windowBackground(),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -118,6 +121,8 @@ async function bootstrap(): Promise<void> {
   ptyService = new PtyService(nodePty.spawn)
   const settings = new SettingsService(new SettingsStore(settingsFile()))
   await settings.init()
+  // Before the window exists, so its first frame and the page's prefers-color-scheme already match the setting.
+  windowBackground = followAppearance({ theme: nativeTheme, settings, getWindow: () => mainWindow })
   const orchestrator = new Orchestrator({
     store: new FileStore(stateFile()),
     git: new GitService(),
