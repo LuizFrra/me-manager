@@ -168,6 +168,31 @@ button:disabled {
 .row:focus-within .row-actions {
   display: flex;
 }
+/* Reordering: the row being dragged, and a line between rows where it would go. */
+.dragging {
+  opacity: 0.5;
+}
+.drop-before,
+.drop-after {
+  position: relative;
+}
+.drop-before::after,
+.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.drop-before::after {
+  top: -1px;
+}
+.drop-after::after {
+  bottom: -1px;
+}
 .dot {
   display: inline-block;
   min-width: 0.9em;

@@ -60,6 +60,7 @@ import { allTargets, visibleTargets } from './lib/targets'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
+import { applyMove, moveAnnouncement, sendMove, stepMove, type Move, type MoveEntry } from './lib/reorder'
 import { effectiveSessionFlags } from './lib/sessionFlags'
 import { sessionState } from './lib/sessionState'
 import { runLabel, runState, type RunState } from './lib/run'
@@ -162,6 +163,8 @@ type AppAction =
         | 'restartRun'
         | 'stopRun'
         | 'editRunCommand'
+        | 'moveTaskUp'
+        | 'moveTaskDown'
     }
   | { type: 'copy'; kind: CopyKind }
   | { type: 'newTaskFromTemplate'; themeId: string; repoId: string; template: string }
@@ -216,6 +219,10 @@ interface PaletteLive {
   /** Dev-server URLs printed in its tabs. */
   urls: readonly DevUrl[]
 }
+
+/** The selected task, as something the sidebar can move; undefined for a folder. */
+const taskEntry = (target: Target | null): MoveEntry | undefined =>
+  target?.taskId ? { kind: 'task', themeId: target.themeId, repoId: target.itemId, taskId: target.taskId } : undefined
 
 /** The repo or folder of `target`. */
 const itemOf = (state: AppState, target: Target | null): Item | undefined =>
@@ -272,8 +279,12 @@ function buildPaletteCommands(
     action('Toggle status bar', 'toggleStatusBar')
     action('Customize theme…', 'customizeTheme')
   }
-  if (selected?.taskId && !isArchivedTarget(state, selected)) {
+  const movable = taskEntry(selected)
+  if (movable && !isArchivedTarget(state, selected)) {
     action('Rename current task', 'renameTask')
+    // Only the moves there is room for: none up for the first task in its repo, none down for the last.
+    if (stepMove(state, movable, -1)) action('Move task up', 'moveTaskUp')
+    if (stepMove(state, movable, 1)) action('Move task down', 'moveTaskDown')
     action('Git: Commit all…', 'commit')
     action('Git: Push branch', 'push')
     action(ghAvailable ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
@@ -381,6 +392,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [],
   )
   const { toasts, showError, showInfo, dismiss } = useToasts()
+  // What the live region tells screen readers: the last move ("Moved fix-login to position 2 of 5").
+  const [announcement, setAnnouncement] = useState('')
+  // Counts moves, so only the latest one's answer is shown (see move).
+  const moveSeq = useRef(0)
   // Review comments by targetKey, in the order they were made; kept for the session only (never saved).
   const [reviews, setReviews] = useState<Record<string, ReviewComment[]>>({})
   const reviewIds = useRef(0)
@@ -1030,6 +1045,38 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     )
   }
 
+  /**
+   * Moves a theme, repo, folder or task (see MeManagerApi.moveTheme, moveItem and moveTask): shown at once, and
+   * announced to screen readers, then shown as main has it. Only the latest move's answer is shown, as an earlier
+   * one lacks the moves made since. When it fails, the error shows and the order goes back to main's, unless a
+   * later move is on its way, whose answer brings it.
+   */
+  const move = async (next: Move): Promise<void> => {
+    const before = stateRef.current
+    const moved = applyMove(before, next)
+    if (moved === before) return
+    const seq = ++moveSeq.current
+    stateRef.current = moved // a second key press before the next render moves on from here
+    setState(moved)
+    setAnnouncement(moveAnnouncement(moved, next) ?? '')
+    try {
+      const saved = await sendMove(api, next)
+      if (seq === moveSeq.current) setState(saved)
+    } catch (err) {
+      showError(err)
+      if (seq !== moveSeq.current) return
+      const current = await api.getState().catch(() => before) // main's order: the move changed nothing there
+      if (seq === moveSeq.current) setState(current)
+    }
+  }
+
+  /** The palette's "Move task up / down": one step among the active tasks of its repo. */
+  const moveSelectedTask = (step: -1 | 1): void => {
+    const entry = taskEntry(selectedRef.current)
+    const next = entry && stepMove(stateRef.current, entry, step)
+    if (next) void move(next)
+  }
+
   const openSettings = (): void => void openDialog({ kind: 'settings' })
 
   /** `template`: the task template to start on; the one last used in the repo when not given. */
@@ -1475,6 +1522,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'run') runTab('start')
     else if (action.type === 'restartRun') runTab('restart')
     else if (action.type === 'stopRun') runTab('stop')
+    else if (action.type === 'moveTaskUp') moveSelectedTask(-1)
+    else if (action.type === 'moveTaskDown') moveSelectedTask(1)
     else if (action.type === 'editRunCommand') {
       if (selectedRef.current) editRunCommand(selectedRef.current.themeId, selectedRef.current.itemId)
     } else if (action.type === 'customizeTheme') {
@@ -1532,6 +1581,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onDeleteArchivedTask={(themeId, repoId, taskId, taskName) =>
           void deleteArchivedTask(themeId, repoId, taskId, taskName)
         }
+        onMove={(next) => void move(next)}
+        onAnnounce={setAnnouncement}
         onOpenSettings={openSettings}
         onOpenUsage={() => setUsageOpen(true)}
         inert={modalOpen}
@@ -1865,6 +1916,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         />
       )}
       <Toasts toasts={toasts} onDismiss={dismiss} />
+      {/* Outside the sidebar, which is inert (so unheard) while a dialog or overlay is up. */}
+      <div className="sr-only" aria-live="polite" data-testid="announcer">
+        {announcement}
+      </div>
     </div>
   )
 }

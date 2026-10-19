@@ -367,6 +367,12 @@ export interface MeManagerApi {
    */
   restoreTheme(theme: Theme, index?: number): Promise<AppState>
 
+  /**
+   * Moves the theme to index `toIndex` among the themes, clamped to the list. Resolves with the state unchanged,
+   * saving nothing, when it is already there. Rejects an unknown theme or a position that is not an integer.
+   */
+  moveTheme(themeId: string, toIndex: number): Promise<AppState>
+
   pickDirectory(): Promise<string | null>
   addRepo(themeId: string, path: string): Promise<AppState>
   /**
@@ -389,6 +395,12 @@ export interface MeManagerApi {
    * `index` when given. Rejects it when its id, path or slug is in use meanwhile. A folder's session isn't restarted.
    */
   restoreItem(themeId: string, item: Item, index?: number): Promise<AppState>
+
+  /**
+   * Moves a repo or folder to index `toIndex` within its theme, clamped, like moveTheme. Never to another theme: its
+   * tasks' branches and worktree paths hold the theme's slug.
+   */
+  moveItem(themeId: string, itemId: string, toIndex: number): Promise<AppState>
 
   /**
    * Fetches origin (giving up after a timeout, like createTask), then lists the branches a new task in the repo can
@@ -427,6 +439,12 @@ export interface MeManagerApi {
    * no longer exists or something is at the worktree path.
    */
   unarchiveTask(themeId: string, repoId: string, taskId: string): Promise<AppState>
+
+  /**
+   * Moves an active task to position `toIndex` among its repo's active tasks (the order the sidebar lists them and
+   * Alt+1..9 counts), clamped, like moveTheme; archived tasks keep their places. Refused for an archived task.
+   */
+  moveTask(themeId: string, repoId: string, taskId: string, toIndex: number): Promise<AppState>
 
   openTarget(target: Target): Promise<TabInfo[]>
   /** Detaches the terminal (an archived task is selected): no session is shown, so none counts as selected. */

@@ -414,3 +414,85 @@ describe('run commands', () => {
     expect(m.restoreTheme(m.removeTheme(s, themeId), theme).themes[0]).toEqual(theme)
   })
 })
+
+describe('reordering', () => {
+  /** Themes A, B and C; A has the repo my-api (tasks one, old (archived), two, three) and the folder notes. */
+  function three(): { s: AppState; themeId: string; repoId: string; folderId: string } {
+    let s = m.addTheme(m.addTheme(m.addTheme(m.emptyState(), 'A'), 'B'), 'C')
+    const themeId = s.themes[0].id
+    s = m.addFolder(m.addRepo(s, themeId, '/code/my-api'), themeId, '/docs/notes')
+    const [repoId, folderId] = s.themes[0].items.map((i) => i.id)
+    for (const slug of ['one', 'old', 'two', 'three']) s = m.addTask(s, themeId, repoId, task(slug))
+    s = m.archiveTask(s, themeId, repoId, 'task-old', '2026-02-01T10:00:00.000Z')
+    return { s, themeId, repoId, folderId }
+  }
+  const themeNames = (s: AppState): string[] => s.themes.map((t) => t.name)
+  const taskNames = (s: AppState, themeId: string, repoId: string): string[] =>
+    m.getRepo(s, themeId, repoId).tasks.map((t) => t.name)
+
+  it('moves a theme, without touching the input', () => {
+    const { s, themeId } = three()
+    expect(themeNames(m.moveTheme(s, themeId, 2))).toEqual(['B', 'C', 'A'])
+    expect(themeNames(m.moveTheme(s, s.themes[2].id, 0))).toEqual(['C', 'A', 'B'])
+    expect(themeNames(s)).toEqual(['A', 'B', 'C'])
+  })
+
+  it('moves an item within its theme', () => {
+    const { s, themeId, folderId } = three()
+    const moved = m.moveItem(s, themeId, folderId, 0)
+    expect(moved.themes[0].items.map((i) => i.name)).toEqual(['notes', 'my-api'])
+    expect(s.themes[0].items.map((i) => i.name)).toEqual(['my-api', 'notes'])
+  })
+
+  it('moves a task among the active tasks, archived ones keeping their slots', () => {
+    const { s, themeId, repoId } = three()
+    expect(taskNames(m.moveTask(s, themeId, repoId, 'task-three', 0), themeId, repoId)).toEqual([
+      'three',
+      'old',
+      'one',
+      'two',
+    ])
+    expect(taskNames(m.moveTask(s, themeId, repoId, 'task-one', 1), themeId, repoId)).toEqual([
+      'two',
+      'old',
+      'one',
+      'three',
+    ])
+  })
+
+  it('clamps the index', () => {
+    const { s, themeId, repoId, folderId } = three()
+    expect(themeNames(m.moveTheme(s, themeId, 99))).toEqual(['B', 'C', 'A'])
+    expect(themeNames(m.moveTheme(s, s.themes[1].id, -4))).toEqual(['B', 'A', 'C'])
+    expect(m.moveItem(s, themeId, folderId, -1).themes[0].items[0].name).toBe('notes')
+    expect(taskNames(m.moveTask(s, themeId, repoId, 'task-one', 50), themeId, repoId)).toEqual([
+      'two',
+      'old',
+      'three',
+      'one',
+    ])
+  })
+
+  it('hands back the same state when nothing moves', () => {
+    const { s, themeId, repoId, folderId } = three()
+    expect(m.moveTheme(s, themeId, 0)).toBe(s)
+    expect(m.moveTheme(s, themeId, -1)).toBe(s)
+    expect(m.moveItem(s, themeId, folderId, 1)).toBe(s)
+    expect(m.moveItem(s, themeId, folderId, 5)).toBe(s)
+    expect(m.moveTask(s, themeId, repoId, 'task-two', 1)).toBe(s)
+    expect(m.moveTask(s, themeId, repoId, 'task-three', 9)).toBe(s)
+  })
+
+  it('rejects unknown ids, archived tasks, folders as repos and invalid positions', () => {
+    const { s, themeId, repoId, folderId } = three()
+    expect(() => m.moveTheme(s, 'nope', 0)).toThrow('Theme not found: nope')
+    expect(() => m.moveItem(s, 'nope', folderId, 0)).toThrow('Theme not found: nope')
+    expect(() => m.moveItem(s, s.themes[1].id, folderId, 0)).toThrow(`Item not found: ${folderId}`)
+    expect(() => m.moveTask(s, themeId, 'nope', 'task-one', 0)).toThrow('Item not found: nope')
+    expect(() => m.moveTask(s, themeId, folderId, 'task-one', 0)).toThrow('"notes" is not a repository')
+    expect(() => m.moveTask(s, themeId, repoId, 'nope', 0)).toThrow('Task not found: nope')
+    expect(() => m.moveTask(s, themeId, repoId, 'task-old', 0)).toThrow('"old" is archived: restore it first')
+    for (const bad of [1.5, Number.NaN, Number.POSITIVE_INFINITY, '1', null, undefined])
+      expect(() => m.moveTheme(s, themeId, bad as number)).toThrow('Invalid position to move to')
+  })
+})
