@@ -533,6 +533,235 @@ describe('Orchestrator: removeTask', () => {
   })
 })
 
+describe('Orchestrator: archiving tasks', () => {
+  const WT = '/wt/client-x/my-api/fix'
+  const BRANCH = 'claude/client-x/fix'
+  const SESSION = 'mmt_client-x_my-api_fix'
+
+  async function withTask(): Promise<Ctx & { clock: { now: number }; target: Target; task: Task }> {
+    const ctx = makeDeps()
+    ctx.git.roots.set('/code/my-api', '/code/my-api')
+    const clock = { now: Date.parse('2026-02-01T10:00:00.000Z') }
+    const orch = new Orchestrator(ctx.deps, { now: () => clock.now })
+    await orch.init()
+    const themeId = (await orch.createTheme('Client X')).themes[0].id
+    const repoId = (await orch.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const task = taskOf(
+      await orch.setTaskNotes(themeId, repoId, taskOf(await orch.createTask(themeId, repoId, 'fix')).id, 'wip'),
+    )
+    const target = { themeId, itemId: repoId, taskId: task.id }
+    await orch.openTarget(target)
+    ctx.git.calls = []
+    ctx.tmux.calls = []
+    return { ...ctx, orch, themeId, repoId, clock, target, task }
+  }
+
+  /** withTask, archived, with the worktree folder gone as archiving leaves it. */
+  async function withArchived(): Promise<Awaited<ReturnType<typeof withTask>>> {
+    const ctx = await withTask()
+    await ctx.orch.archiveTask(ctx.themeId, ctx.repoId, ctx.task.id)
+    ctx.deps.pathExists = (p) => p !== WT
+    ctx.git.calls = []
+    ctx.tmux.calls = []
+    return ctx
+  }
+
+  it('kills the session, detaches, removes the worktree and keeps the task with its branch, base and notes', async () => {
+    const { orch, git, tmux, pty, store, themeId, repoId, task } = await withTask()
+    const s = await orch.archiveTask(themeId, repoId, task.id)
+    expect(pty.attached).toBeNull()
+    expect(tmux.sessions.has(SESSION)).toBe(false)
+    expect(git.calls).toEqual([`getUnsavedWork ${WT}`, `removeWorktree ${WT}`])
+    expect(git.calls.some((c) => c.startsWith('deleteBranch'))).toBe(false)
+    expect(taskOf(s)).toEqual({ ...task, archivedAt: '2026-02-01T10:00:00.000Z' })
+    expect(taskOf(s).notes).toBe('wip')
+    expect(store.saved.at(-1)).toEqual(s)
+    expect(orch.currentTarget()).toBeNull()
+  })
+
+  it('refuses a worktree with uncommitted or untracked files, touching nothing', async () => {
+    const { orch, git, tmux, store, themeId, repoId, task } = await withTask()
+    git.unsaved = { uncommittedFiles: ['src/a.ts', 'new.txt'], unpushedCommits: [] }
+    const saves = store.saved.length
+    await expect(orch.archiveTask(themeId, repoId, task.id)).rejects.toThrow(
+      '"fix" has 2 uncommitted or untracked files. Commit or discard the changes first',
+    )
+    expect(git.calls).toEqual([`getUnsavedWork ${WT}`])
+    expect(tmux.sessions.has(SESSION)).toBe(true)
+    expect(store.saved).toHaveLength(saves)
+    expect(taskOf(await orch.getState()).archivedAt).toBeUndefined()
+  })
+
+  it('refuses when the worktree could not be checked, saying why', async () => {
+    const { orch, git, themeId, repoId, task } = await withTask()
+    git.unsaved = { uncommittedFiles: [], unpushedCommits: [], warning: `git status failed in ${WT}.` }
+    await expect(orch.archiveTask(themeId, repoId, task.id)).rejects.toThrow(
+      `git status failed in ${WT}. Commit or discard the changes first`,
+    )
+  })
+
+  it('archives anyway with force, without checking, discarding the changes', async () => {
+    const { orch, git, themeId, repoId, task } = await withTask()
+    git.unsaved = { uncommittedFiles: ['src/a.ts'], unpushedCommits: [] }
+    const s = await orch.archiveTask(themeId, repoId, task.id, true)
+    expect(git.calls).toEqual([`removeWorktree ${WT}`])
+    expect(taskOf(s).archivedAt).toBe('2026-02-01T10:00:00.000Z')
+  })
+
+  it('does not count unpushed commits against archiving: the branch keeps them', async () => {
+    const { orch, git, themeId, repoId, task } = await withTask()
+    git.unsaved = { uncommittedFiles: [], unpushedCommits: ['abc1234 wip'] }
+    await expect(orch.archiveTask(themeId, repoId, task.id)).resolves.toBeDefined()
+  })
+
+  it('refuses when the original repository is gone, since its branch went with it', async () => {
+    const { orch, git, deps, themeId, repoId, task } = await withTask()
+    deps.pathExists = (p) => p !== '/code/my-api'
+    await expect(orch.archiveTask(themeId, repoId, task.id, true)).rejects.toThrow(
+      "The repository was not found at /code/my-api, so the branch can't be kept: remove the task instead",
+    )
+    expect(git.calls).toEqual([])
+  })
+
+  it('refuses to archive a task twice', async () => {
+    const { orch, git, themeId, repoId, task } = await withArchived()
+    await expect(orch.archiveTask(themeId, repoId, task.id, true)).rejects.toThrow('"fix" is already archived')
+    expect(git.calls).toEqual([])
+  })
+
+  it('archives only after the git action running on the task', async () => {
+    const { orch, git, themeId, repoId, target, task } = await withTask()
+    let release = (): void => {}
+    git.actionGate = new Promise<void>((r) => (release = r))
+    const push = orch.pushTask(target)
+    const archive = orch.archiveTask(themeId, repoId, task.id)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.calls).toEqual([`push ${WT} ${BRANCH}`])
+    release()
+    await Promise.all([push, archive])
+    expect(git.calls.at(-1)).toBe(`removeWorktree ${WT}`)
+  })
+
+  it('runs concurrent archive and restore calls one at a time, so only one archive takes effect', async () => {
+    const { orch, git, themeId, repoId, task } = await withTask()
+    const results = await Promise.allSettled([
+      orch.archiveTask(themeId, repoId, task.id),
+      orch.archiveTask(themeId, repoId, task.id),
+    ])
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected'])
+    expect(git.calls.filter((c) => c.startsWith('removeWorktree'))).toHaveLength(1)
+  })
+
+  it('restores the worktree from the kept branch, without starting a session, then opens it lazily', async () => {
+    const { orch, git, tmux, store, deps, themeId, repoId, target, task } = await withArchived()
+    const s = await orch.unarchiveTask(themeId, repoId, task.id)
+    expect(git.calls).toEqual([`restoreWorktree ${WT} ${BRANCH}`])
+    expect(git.calls.some((c) => c.startsWith('addWorktree'))).toBe(false)
+    expect(taskOf(s)).toEqual(task)
+    expect(store.saved.at(-1)).toEqual(s)
+    expect(tmux.calls).toEqual([])
+    deps.pathExists = () => true
+    await orch.openTarget(target)
+    expect(tmux.calls).toEqual([`newSession ${SESSION} ${CLAUDE_CONTINUE_CMD}`])
+  })
+
+  it('refuses to restore when the branch no longer exists, keeping the task archived', async () => {
+    const { orch, git, store, themeId, repoId, task } = await withArchived()
+    git.failRestore = `The branch "${BRANCH}" no longer exists, so the task can't be restored`
+    const saves = store.saved.length
+    await expect(orch.unarchiveTask(themeId, repoId, task.id)).rejects.toThrow(git.failRestore)
+    expect(store.saved).toHaveLength(saves)
+    expect(taskOf(await orch.getState()).archivedAt).toBeDefined()
+  })
+
+  it('refuses to restore onto a taken path, or an active task, or when the repository is gone', async () => {
+    const { orch, git, deps, themeId, repoId, task } = await withArchived()
+    deps.pathExists = () => true
+    await expect(orch.unarchiveTask(themeId, repoId, task.id)).rejects.toThrow(
+      `${WT} is already taken; move it away, then restore the task`,
+    )
+    deps.pathExists = (p) => p !== WT && p !== '/code/my-api'
+    await expect(orch.unarchiveTask(themeId, repoId, task.id)).rejects.toThrow('Repository not found: /code/my-api')
+    expect(git.calls).toEqual([])
+    deps.pathExists = (p) => p !== WT
+    await orch.unarchiveTask(themeId, repoId, task.id)
+    await expect(orch.unarchiveTask(themeId, repoId, task.id)).rejects.toThrow('"fix" is not archived')
+  })
+
+  it('deletes an archived task with its branch, without touching its (gone) worktree or session', async () => {
+    const { orch, git, tmux, themeId, repoId, task } = await withArchived()
+    git.unsaved = { uncommittedFiles: [], unpushedCommits: ['abc1234 wip'] }
+    await expect(orch.checkTaskRemoval(themeId, repoId, task.id)).resolves.toEqual(git.unsaved)
+    git.calls = []
+    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    expect(git.calls).toEqual([`deleteBranch ${BRANCH}`])
+    expect(tmux.calls).toEqual([])
+    expect(taskOf(s)).toBeUndefined()
+  })
+
+  it('leaves archived tasks out of the status, activity and git status polls', async () => {
+    const { orch, git, tmux, themeId, repoId, target, task } = await withArchived()
+    // Even a session left over under the task's name (started by hand) is not reported.
+    await tmux.newSession(SESSION, WT, 'claude', 'claude')
+    tmux.activity.set(SESSION, 1_700_000_000)
+    expect(await orch.getStatus()).toEqual({ running: [], missing: [], activity: {} })
+    expect(tmux.captureCalls).toEqual([])
+    git.statuses.set(WT, { ahead: 0, behind: 0, uncommitted: 0, branch: BRANCH })
+    expect(await orch.getGitStatus([target])).toEqual({})
+    expect(git.statusCalls).toEqual([])
+    // An active task next to it still is.
+    const repo = (await orch.createTask(themeId, repoId, 'other')).themes[0].items[0]
+    const other = repo.kind === 'repo' ? repo.tasks.find((t) => t.id !== task.id) : undefined
+    expect((await orch.getStatus()).running).toEqual([other?.id])
+  })
+
+  it('refuses to open, attach, or run tab, file, git or editor actions on an archived task', async () => {
+    const { orch, tmux, pty, files, launcher, git, target } = await withArchived()
+    const refusal = '"fix" is archived: restore it first'
+    for (const call of [
+      () => orch.openTarget(target),
+      () => orch.listTabs(target),
+      () => orch.newTab(target),
+      () => orch.selectTab(target, 0),
+      () => orch.closeTab(target, 0),
+      () => orch.restartClaude(target),
+      () => orch.askClaudeToResolve(target, 'rebase', ['a.ts']),
+      () => orch.copyTranscript(target, 0),
+      () => orch.captureTranscript(target, 0),
+      () => orch.listFiles(target),
+      () => orch.readFile(target, 'a.ts'),
+      () => orch.searchFiles(target, 'x'),
+      () => orch.listChanges(target),
+      () => orch.fileDiff(target, 'a.ts'),
+      () => orch.openInEditor(target),
+      () => orch.openInFileManager(target),
+      () => orch.commitAll(target, 'msg'),
+      () => orch.pushTask(target),
+      () => orch.updateFromBase(target),
+      () => orch.createPullRequest(target),
+    ])
+      await expect(call()).rejects.toThrow(refusal)
+    expect(tmux.calls).toEqual([])
+    expect(pty.attached).toBeNull()
+    expect(files.calls).toEqual([])
+    expect(launcher.calls).toEqual([])
+    expect(git.calls).toEqual([])
+  })
+
+  it('keeps an archived task in the usage report, labelled, for its past cost', async () => {
+    const { orch, usage } = await withArchived()
+    const report = await orch.getUsageReport()
+    expect(report.themes[0].targets.map((t) => t.label)).toEqual(['my-api › fix (archived)'])
+    expect(usage.calls[0].roots).toEqual([WT])
+  })
+
+  it('keeps a removed repo and theme refused while an archived task remains', async () => {
+    const { orch, themeId, repoId } = await withArchived()
+    await expect(orch.removeItem(themeId, repoId)).rejects.toThrow('Remove the tasks in "my-api" first')
+    await expect(orch.removeTheme(themeId)).rejects.toThrow('Remove the tasks in "Client X" first')
+  })
+})
+
 describe('Orchestrator: sessions and tabs', () => {
   async function withTask(): Promise<Ctx & { task: Task; target: Target }> {
     const ctx = await setup()

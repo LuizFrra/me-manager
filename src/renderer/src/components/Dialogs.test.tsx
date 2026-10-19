@@ -3,10 +3,12 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ArchiveTaskDialog,
   ChooseThemeDialog,
   CommitDialog,
   ConfirmRemoveDialog,
   ConflictDialog,
+  DeleteArchivedTaskDialog,
   NameDialog,
   NotesDialog,
   RemoveTaskDialog,
@@ -52,6 +54,91 @@ describe('RemoveTaskDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('repo missing')
     await user.click(screen.getByRole('button', { name: 'Remove anyway' }))
     expect(onConfirm).toHaveBeenCalledWith(false)
+  })
+})
+
+describe('ArchiveTaskDialog', () => {
+  it('lists the files that would be discarded and archives anyway only on the explicit button, once', async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    const onConfirm = vi.fn(() => new Promise<void>((r) => (finish = r)))
+    const onCancel = vi.fn()
+    render(
+      <ArchiveTaskDialog
+        taskName="fix"
+        work={{ uncommittedFiles: ['src/login.ts', 'notes.txt'], unpushedCommits: ['abc1234 wip'] }}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    )
+    const dialog = screen.getByRole('alertdialog', { name: 'Archive fix' })
+    expect(dialog).toHaveTextContent('2 uncommitted or untracked files')
+    expect(dialog).toHaveTextContent('src/login.ts')
+    expect(dialog).toHaveTextContent('notes.txt')
+    expect(dialog).toHaveTextContent('Commit or discard the changes first')
+    expect(dialog).not.toHaveTextContent('abc1234') // commits stay on the branch
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.dblClick(screen.getByRole('button', { name: 'Archive anyway (discards changes)' }))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Archiving…' })).toBeDisabled()
+    finish()
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }))
+    expect(onCancel).toHaveBeenCalled()
+  })
+
+  it('shows the warning when the worktree could not be checked, and closes with Esc', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(
+      <ArchiveTaskDialog
+        taskName="fix"
+        work={{ uncommittedFiles: [], unpushedCommits: [], warning: 'git status failed' }}
+        onConfirm={vi.fn(async () => {})}
+        onCancel={onCancel}
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('git status failed')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalled()
+  })
+})
+
+describe('DeleteArchivedTaskDialog', () => {
+  it('names the branch it deletes and warns about commits not on the base or pushed', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn(async () => {})
+    render(
+      <DeleteArchivedTaskDialog
+        taskName="fix"
+        branch="claude/client-x/fix"
+        baseRef="origin/main"
+        work={{ uncommittedFiles: [], unpushedCommits: ['abc1234 wip', 'def5678 more'] }}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />,
+    )
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete archived task fix' })
+    expect(dialog).toHaveTextContent('claude/client-x/fix')
+    expect(screen.getByRole('alert')).toHaveTextContent('2 commits that are not on origin/main or pushed')
+    expect(dialog).toHaveTextContent('abc1234 wip')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.click(screen.getByRole('button', { name: 'Delete task and branch' }))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('says plainly when every commit is safe elsewhere', () => {
+    render(
+      <DeleteArchivedTaskDialog
+        taskName="fix"
+        branch="claude/client-x/fix"
+        baseRef="origin/main"
+        work={{ uncommittedFiles: [], unpushedCommits: [] }}
+        onConfirm={vi.fn(async () => {})}
+        onCancel={() => {}}
+      />,
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Every commit on it is on origin/main or pushed.')
   })
 })
 

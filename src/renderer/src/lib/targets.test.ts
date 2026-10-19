@@ -25,6 +25,14 @@ describe('allTargets', () => {
     ])
   })
 
+  it('leaves out archived tasks: nothing switches to, polls or notifies about them', () => {
+    const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
+    const state = appState(theme('Client X', [repo('api', [task('fix'), archived])]))
+    expect(allTargets(state).map((e) => e.target.taskId)).toEqual(['fix'])
+    expect(visibleTargets(state, new Set()).map((t) => t.taskId)).toEqual(['fix'])
+    expect(visibleTargets(state, new Set(), filterSidebar(state, 'old'))).toEqual([])
+  })
+
   it('is empty without themes', () => {
     expect(allTargets(appState())).toEqual([])
   })

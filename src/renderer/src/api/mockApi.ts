@@ -89,6 +89,13 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     return { tab, transcript: { text, lines: 4, truncated: false } }
   }
 
+  const taskIn = (theme: Theme, repoId: string, taskId: string): Task => {
+    const repo = theme.items.find((i) => i.id === repoId)
+    const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
+    if (!task) throw new Error(`Task not found: ${taskId}`)
+    return task
+  }
+
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
     const next = clone(state)
     const theme = next.themes.find((t) => t.id === themeId)
@@ -231,6 +238,19 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind === 'repo') repo.tasks = repo.tasks.filter((k) => k.id !== taskId)
+      }),
+    // The demo's worktrees are always clean (see checkTaskRemoval), so archiving never needs `force` here.
+    archiveTask: (themeId, repoId, taskId) =>
+      edit(themeId, (t) => {
+        const task = taskIn(t, repoId, taskId)
+        if (task.archivedAt !== undefined) throw new Error(`"${task.name}" is already archived`)
+        task.archivedAt = new Date().toISOString()
+      }),
+    unarchiveTask: (themeId, repoId, taskId) =>
+      edit(themeId, (t) => {
+        const task = taskIn(t, repoId, taskId)
+        if (task.archivedAt === undefined) throw new Error(`"${task.name}" is not archived`)
+        delete task.archivedAt
       }),
     openTarget: async () => tabs,
     listTabs: async () => tabs,

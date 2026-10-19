@@ -116,6 +116,25 @@ describe('normalizeUiState', () => {
     expect(normalizeUiState({ sidebarFilter: 'x'.repeat(500) }, app()).sidebarFilter).toHaveLength(200)
   })
 
+  it('keeps the expanded Archived groups of repos that exist, once each, and leaves out an empty list', () => {
+    const ui = normalizeUiState({ archivedOpen: ['r1', 'gone', 'f1', 't1', 'r1', 7] }, app())
+    expect(ui.archivedOpen).toEqual(['r1'])
+    expect('archivedOpen' in normalizeUiState({ archivedOpen: ['gone'] }, app())).toBe(false)
+    expect('archivedOpen' in normalizeUiState({ archivedOpen: 'r1' }, app())).toBe(false)
+  })
+
+  it('keeps an archived task as the selection and its panel entry', () => {
+    const state = app()
+    const repo = state.themes[0].items[0]
+    if (repo.kind === 'repo') repo.tasks[0].archivedAt = '2026-02-01T10:00:00.000Z'
+    const ui = normalizeUiState(
+      { selected: { themeId: 't1', itemId: 'r1', taskId: 'k1' }, panels: { k1: { open: true, tab: 'files' } } },
+      state,
+    )
+    expect(ui.selected).toEqual({ themeId: 't1', itemId: 'r1', taskId: 'k1' })
+    expect(ui.panels).toEqual({ k1: { open: true, tab: 'files' } })
+  })
+
   it('gives an empty state for anything that is not an object', () => {
     for (const raw of [null, undefined, 'x', 3, []]) expect(normalizeUiState(raw, app())).toEqual(emptyUiState())
   })

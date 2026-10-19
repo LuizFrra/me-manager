@@ -148,6 +148,18 @@ button:disabled {
 .task-row .row-label {
   padding-left: 48px;
 }
+.archived-group-row .row-label {
+  padding-left: 48px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.archived-row .row-label {
+  padding-left: 64px;
+  color: var(--muted);
+}
+.archived-row.selected .row-label {
+  color: var(--text);
+}
 .row-actions {
   display: none;
   gap: 2px;
@@ -3099,4 +3111,65 @@ button.status-seg:focus-visible {
 .tab-menu button:focus {
   outline: none;
   background: var(--selected);
+}
+
+/* A selected archived task: no terminal, just what it was and how to bring it back. */
+.archived-task {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  padding: 32px 24px;
+}
+.archived-task-inner {
+  margin: auto;
+  width: min(520px, 100%);
+  padding: 20px 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.archived-task-where {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.archived-task h2 {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+}
+.archived-task p {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.archived-task-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0 0 12px;
+}
+.archived-task-facts dt {
+  color: var(--muted);
+}
+.archived-task-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.archived-task-facts code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.archived-task-notes {
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}
+.archived-task-actions {
+  display: flex;
+  gap: 8px;
+}
+.archived-task-actions button {
+  padding: 5px 14px;
 }

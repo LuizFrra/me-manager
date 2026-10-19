@@ -296,6 +296,21 @@ export class GitService implements GitApi {
     }
   }
 
+  async restoreWorktree(repoPath: string, worktreePath: string, branch: string): Promise<void> {
+    if (!branch || branch.startsWith('-')) throw new Error(`Invalid branch: ${branch}`)
+    if (!(await this.refExists(repoPath, `refs/heads/${branch}`))) {
+      throw new Error(`The branch "${branch}" no longer exists, so the task can't be restored`)
+    }
+    if (existsSync(worktreePath))
+      throw new Error(`${worktreePath} is already taken; move it away, then restore the task`)
+    // A worktree folder deleted by hand leaves an entry that would make `worktree add` refuse the path.
+    await this.git(repoPath, ['worktree', 'prune'])
+    await mkdir(dirname(worktreePath), { recursive: true })
+    await this.git(repoPath, ['worktree', 'add', worktreePath, branch]).catch((err) => {
+      throw commandFailure('git worktree add', err)
+    })
+  }
+
   async deleteBranch(repoPath: string, branch: string): Promise<void> {
     await this.git(repoPath, ['branch', '-D', branch])
   }

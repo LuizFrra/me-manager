@@ -56,8 +56,9 @@ function panelEntry(raw: unknown, isTask: boolean): UiPanelState | undefined {
 
 /**
  * Makes UI state read from disk or sent by the renderer safe to use against `app`: unknown fields and wrong types
- * are dropped, targets (the selection, panel entries, collapsed ids) that no longer exist are dropped, sizes are
- * capped (at most MAX_UI_PANELS panel entries, the most recent ones) and the panel width is checked. Pure.
+ * are dropped, targets (the selection, panel entries, collapsed ids, expanded Archived groups) that no longer exist
+ * are dropped, sizes are capped (at most MAX_UI_PANELS panel entries, the most recent ones) and the panel width is
+ * checked. Pure.
  */
 export function normalizeUiState(raw: unknown, app: AppState): UiState {
   const out = emptyUiState()
@@ -67,15 +68,17 @@ export function normalizeUiState(raw: unknown, app: AppState): UiState {
   const selected = existingTarget(raw.selected, known)
   if (selected) out.selected = selected
 
-  const ids = new Set<string>()
-  for (const theme of app.themes) {
-    ids.add(theme.id)
-    for (const item of theme.items) if (item.kind === 'repo') ids.add(item.id)
-  }
-  if (Array.isArray(raw.collapsed)) {
-    const collapsed = new Set(raw.collapsed.filter((id): id is string => typeof id === 'string' && ids.has(id)))
-    out.collapsed = [...collapsed].slice(0, MAX_COLLAPSED)
-  }
+  const repoIds = new Set<string>()
+  for (const theme of app.themes) for (const item of theme.items) if (item.kind === 'repo') repoIds.add(item.id)
+  const ids = new Set([...app.themes.map((t) => t.id), ...repoIds])
+  /** The known ids in `list`, once each, at most MAX_COLLAPSED. */
+  const knownIds = (list: unknown, known: ReadonlySet<string>): string[] =>
+    Array.isArray(list)
+      ? [...new Set(list.filter((id): id is string => typeof id === 'string' && known.has(id)))].slice(0, MAX_COLLAPSED)
+      : []
+  out.collapsed = knownIds(raw.collapsed, ids)
+  const archivedOpen = knownIds(raw.archivedOpen, repoIds)
+  if (archivedOpen.length > 0) out.archivedOpen = archivedOpen
 
   if (isRecord(raw.panels)) {
     const entries: [string, UiPanelState][] = []
