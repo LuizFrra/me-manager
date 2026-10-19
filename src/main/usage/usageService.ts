@@ -5,6 +5,7 @@ import { basename, join, resolve, sep } from 'node:path'
 import { messageCost, totalTokens, type TokenCounts } from '../../shared/pricing'
 import type { UsageBucket, UsageModelTotals, UsagePeriod, UsageSummary, UsageTotals } from '../../shared/types'
 import { USAGE_PERIODS } from '../../shared/types'
+import { mapLimit } from '../concurrency'
 import type { UsageApi, UsageSummaries } from '../contracts'
 
 /** Lines longer than this are skipped unparsed (never held in memory whole). */
@@ -17,6 +18,8 @@ export const MAX_TRACKED_FILES = 20_000
 const MAX_SCAN_DEPTH = 4
 /** Calls closer together than this reuse the last scan instead of stat-ing every transcript again. */
 const DEFAULT_MIN_REFRESH_MS = 1_000
+/** Transcripts stat-ed (and, when changed, read) at the same time by a scan. */
+export const STAT_CONCURRENCY = 16
 /** Claude Code shortens project folder names longer than this and appends a hash. */
 const MAX_ENCODED_LENGTH = 200
 
@@ -477,13 +480,14 @@ export class UsageService implements UsageApi {
       this.files.delete(path) // deleted, or no longer under a requested root
       this.generation++
     }
-    for (const path of found) {
+    // Concurrently: one stat at a time would make a scan of thousands of transcripts as slow as their sum.
+    await mapLimit(found, STAT_CONCURRENCY, async (path) => {
       try {
         if (await this.update(path)) this.generation++
       } catch {
         // Unreadable or vanished mid-scan: keep what was read before, try again next time.
       }
-    }
+    })
   }
 
   private async collect(dir: string, depth: number, out: string[]): Promise<void> {

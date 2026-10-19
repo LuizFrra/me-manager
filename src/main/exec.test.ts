@@ -31,6 +31,10 @@ describe('run', () => {
     expect(err).toBeInstanceOf(CommandError)
     expect(err.code).toBe(2)
   })
+  it('writes `input` to stdin', async () => {
+    const script = 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => process.stdout.write(s))'
+    await expect(run(process.execPath, ['-e', script], { input: 'é'.repeat(50_000) })).resolves.toBe('é'.repeat(50_000))
+  })
   it('says when the command was killed for running past its timeout', async () => {
     const err = await run(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { timeoutMs: 100 }).catch((e) => e)
     expect(err).toBeInstanceOf(CommandError)
@@ -69,6 +73,19 @@ describe('streamNul', () => {
     const res = await streamNul(file, args, (item) => items.push(item) < 5)
     expect(res).toEqual({ stopped: true })
     expect(items).toHaveLength(5)
+  })
+
+  it('kills the process and rejects when its signal aborts', async () => {
+    const [file, args] = node('process.stdout.write("x\\0"); setInterval(() => {}, 1000)')
+    const controller = new AbortController()
+    const started = Date.now()
+    const result = streamNul(file, args, () => controller.abort(new Error('superseded')), {
+      signal: controller.signal,
+    })
+    await expect(result).rejects.toThrow('superseded')
+    expect(Date.now() - started).toBeLessThan(5_000)
+    const aborted = AbortSignal.abort(new Error('before start'))
+    await expect(streamNul(file, args, () => {}, { signal: aborted })).rejects.toThrow('before start')
   })
 
   it('rejects with stderr on a non-zero exit, and explains a missing binary', async () => {

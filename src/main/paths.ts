@@ -12,6 +12,8 @@ export const settingsFile = (): string => join(appHome(), 'settings.json')
 export const uiStateFile = (): string => join(appHome(), 'ui-state.json')
 export const tmuxConfFile = (): string => join(appHome(), 'tmux.conf')
 export const worktreesRoot = (): string => join(appHome(), 'worktrees')
+/** Private files holding prompts for `claude` while its tmux window starts (see PromptFiles). */
+export const promptsDir = (): string => join(appHome(), 'prompts')
 
 export function taskWorktreePath(
   themeSlug: string,

@@ -23,6 +23,10 @@ export interface RunOptions {
   okExitCodes?: number[]
   /** Largest stdout/stderr accepted by `run`, in bytes (default 16 MB). */
   maxBuffer?: number
+  /** Written to the command's stdin, which is then closed (`run` only). */
+  input?: string | Buffer
+  /** Kills the command when it aborts, rejecting with the signal's reason (`streamNul` only). */
+  signal?: AbortSignal
 }
 
 const DEFAULT_MAX_BUFFER = 16 * 1024 * 1024
@@ -30,11 +34,14 @@ const MAX_STDERR = 64 * 1024
 
 const childEnv = (opts: RunOptions): NodeJS.ProcessEnv => (opts.env ? { ...process.env, ...opts.env } : process.env)
 
+const abortReason = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error ? signal.reason : new Error('The command was cancelled')
+
 /** Runs a binary without a shell and resolves with stdout. Rejects with CommandError. */
 export function run(file: string, args: string[], opts: RunOptions = {}): Promise<string> {
   const command = [file, ...args].join(' ')
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       file,
       args,
       {
@@ -72,6 +79,10 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
         reject(new CommandError(command, code, String(stderr), `${command} failed: ${detail}`))
       },
     )
+    if (opts.input !== undefined) {
+      child.stdin?.on('error', () => {}) // EPIPE when the command exits without reading it; its exit code says why
+      child.stdin?.end(opts.input)
+    }
   })
 }
 
@@ -87,6 +98,8 @@ export function streamNul(
   opts: Omit<RunOptions, 'maxBuffer'> = {},
 ): Promise<{ stopped: boolean }> {
   const command = [file, ...args].join(' ')
+  const { signal } = opts
+  if (signal?.aborted) return Promise.reject(abortReason(signal))
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, { cwd: opts.cwd, env: childEnv(opts), stdio: ['ignore', 'pipe', 'pipe'] })
     let settled = false
@@ -104,8 +117,16 @@ export function streamNul(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       fn()
     }
+    function onAbort(): void {
+      settle(() => {
+        child.kill()
+        reject(abortReason(signal as AbortSignal))
+      })
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     const emit = (bytes: Buffer): void => {
       if (stopped || onItem(bytes.toString('utf8')) !== false) return
       stopped = true
