@@ -11,6 +11,7 @@ import type {
   Target,
   Task,
   TaskGitStatus,
+  TaskTemplate,
   ThemeStyle,
   UiState,
   UnsavedWork,
@@ -95,7 +96,8 @@ type DialogBody =
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
   /** A review comment's note: a new one (no `initial`) or an edit. */
   | { kind: 'reviewComment'; location: string; initial?: string; onSave: (note: string) => void }
-  | { kind: 'newTask'; themeId: string; repoId: string; repoName: string }
+  /** `template`: the task template the dialog starts on, by name. */
+  | { kind: 'newTask'; themeId: string; repoId: string; repoName: string; template?: string }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | { kind: 'settings' }
@@ -146,6 +148,7 @@ type AppAction =
         | 'deleteArchivedTask'
     }
   | { type: 'copy'; kind: CopyKind }
+  | { type: 'newTaskFromTemplate'; themeId: string; repoId: string; template: string }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
 interface AppCommand extends PaletteCommand {
@@ -176,19 +179,29 @@ const isArchivedTarget = (state: AppState, target: Target | null): boolean => {
   return task !== undefined && isArchived(task)
 }
 
+/** The names of a repo's tasks, archived ones included: what a task template's `{n}` counts. */
+function repoTaskNames(state: AppState, themeId: string, repoId: string): string[] {
+  const repo = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+  return repo?.kind === 'repo' ? repo.tasks.map((t) => t.name) : []
+}
+
 /** What "copy …" offers for `target`: its branch, path, attach command. */
 function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | null): CopyEntry[] {
   const found = target && resolveTarget(state, target)
   return found ? copyEntries(found, tmuxSocket) : []
 }
 
-/** The palette's entries: every task and folder, then the actions that apply to the selection (and its tab). */
+/**
+ * The palette's entries: every task and folder, then the actions that apply to the selection (and its tab),
+ * including a new task from each template in the selected task's repo.
+ */
 function buildPaletteCommands(
   state: AppState,
   selected: Target | null,
   hasActiveTab: boolean,
   ghAvailable: boolean,
   tmuxSocket: string | null,
+  templates: readonly TaskTemplate[],
 ): AppCommand[] {
   const commands: AppCommand[] = allTargets(state).map((entry) => ({
     id: `target:${targetKey(entry.target)}`,
@@ -197,7 +210,11 @@ function buildPaletteCommands(
     icon: entry.icon,
     action: { type: 'open', target: entry.target },
   }))
-  const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
+  const action = (
+    label: string,
+    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate'>,
+    shortcut?: string,
+  ): void => {
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
   }
   action('New theme', 'newTheme')
@@ -226,6 +243,18 @@ function buildPaletteCommands(
     action(ghAvailable ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
     action('Git: Update from base', 'update')
     action('Archive current task', 'archiveTask')
+  }
+  // An archived task's repo takes new tasks like any other.
+  if (selected?.taskId && resolveTarget(state, selected)) {
+    const { themeId, itemId: repoId } = selected
+    for (const { name } of templates) {
+      commands.push({
+        id: `action:template:${name}`,
+        kind: 'action',
+        label: `New task from template: ${name}`,
+        action: { type: 'newTaskFromTemplate', themeId, repoId, template: name },
+      })
+    }
   }
   const copies = isArchivedTarget(state, selected) ? [] : copiesOf(state, selected, tmuxSocket)
   for (const { kind, label } of copies)
@@ -290,6 +319,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       }),
     [],
   )
+  // The task template last used in each repo, by repo id: the New task dialog starts on it.
+  const [lastTemplates, setLastTemplates] = useState<Record<string, string>>({})
   const [sidebarFilter, setSidebarFilter] = useState('')
   const sidebarFilterRef = useRef<HTMLInputElement>(null)
   const toggleCollapsed = useCallback(
@@ -519,6 +550,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     panelWidth: panelFraction,
     ...(sidebarFilter.trim() ? { sidebarFilter } : {}),
     ...(archivedOpen.size > 0 ? { archivedOpen: [...archivedOpen] } : {}),
+    ...(Object.keys(lastTemplates).length > 0 ? { lastTemplates } : {}),
   }))
   const saveUiNow = useLatestCallback((): void => {
     if (uiSaveTimer.current === null) return
@@ -537,6 +569,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       const [ui, live] = await Promise.all([api.getUiState(), api.getStatus().catch(() => null)])
       setCollapsed(new Set(ui.collapsed))
       if (ui.archivedOpen) setArchivedOpen(new Set(ui.archivedOpen))
+      if (ui.lastTemplates) setLastTemplates((current) => ({ ...ui.lastTemplates, ...current }))
       if (ui.sidebarFilter) setSidebarFilter((current) => current || (ui.sidebarFilter ?? ''))
       for (const [key, entry] of Object.entries(ui.panels)) {
         if (!panelsRef.current.has(key)) panelsRef.current.set(key, { ...DEFAULT_PANEL, ...entry })
@@ -571,7 +604,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       uiSaveTimer.current = null
       api.saveUiState(uiSnapshot()).catch(() => {})
     }, UI_SAVE_MS)
-  }, [api, uiSnapshot, selected, collapsed, archivedOpen, sidebarFilter, panel, panelFraction])
+  }, [api, uiSnapshot, selected, collapsed, archivedOpen, sidebarFilter, panel, panelFraction, lastTemplates])
 
   // A save still waiting goes out when the window closes or reloads (and if the App unmounts).
   useEffect(() => {
@@ -914,9 +947,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const openSettings = (): void => void openDialog({ kind: 'settings' })
 
-  const newTask = (themeId: string, repoId: string): void => {
+  /** `template`: the task template to start on; the one last used in the repo when not given. */
+  const newTask = (themeId: string, repoId: string, template: string | undefined = lastTemplates[repoId]): void => {
     const repo = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
-    if (repo?.kind === 'repo') openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name })
+    if (repo?.kind === 'repo') openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name, template })
   }
 
   /**
@@ -930,9 +964,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     repoId: string,
     name: string,
     options: NewTaskOptions,
+    template: string | undefined,
   ): Promise<void> => {
     const next = await update(() => api.createTask(themeId, repoId, name, options))
     if (!next) return
+    setLastTemplates((last) => {
+      const next = { ...last }
+      if (template) next[repoId] = template
+      else delete next[repoId]
+      return next
+    })
     const movedOn = modalEpoch.current !== dialogId
     closeDialog(dialogId)
     const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
@@ -1220,8 +1261,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
   // to 50k files) whenever its commands change.
   const paletteCommands = useMemo(
-    () => (paletteOpen ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket) : []),
-    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket],
+    () =>
+      paletteOpen
+        ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates)
+        : [],
+    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates],
   )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
@@ -1330,6 +1374,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'archiveTask') withSelectedTask(archiveTask)
     else if (action.type === 'restoreTask') withSelectedTask(restoreTask)
     else if (action.type === 'deleteArchivedTask') withSelectedTask(deleteArchivedTask)
+    else if (action.type === 'newTaskFromTemplate') newTask(action.themeId, action.repoId, action.template)
     else if (action.type === 'customizeTheme') {
       if (selectedRef.current) customizeTheme(selectedRef.current.themeId)
     } else if (action.type === 'copy') {
@@ -1553,7 +1598,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         <NewTaskDialog
           repoName={dialog.repoName}
           loadBranches={() => api.listBranches(dialog.themeId, dialog.repoId)}
-          onSubmit={(name, options) => createTask(dialog.id, dialog.themeId, dialog.repoId, name, options)}
+          templates={settings.taskTemplates}
+          taskNames={repoTaskNames(state, dialog.themeId, dialog.repoId)}
+          initialTemplate={dialog.template}
+          onSubmit={(name, options, template) =>
+            createTask(dialog.id, dialog.themeId, dialog.repoId, name, options, template)
+          }
           onCancel={() => closeDialog(dialog.id)}
         />
       )}
