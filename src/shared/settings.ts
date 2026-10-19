@@ -1,3 +1,4 @@
+import { BUDGET_LIMITS } from './budget'
 import { normalizeTaskTemplates } from './templates'
 import { UPDATE_STRATEGIES, type EffectiveClaudeFlags, type Settings, type UpdateStrategy } from './types'
 
@@ -16,6 +17,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   cloneDirectory: '',
   showStatusBar: true,
   taskTemplates: [],
+  dailyBudgetUsd: null,
+  taskBudgetUsd: null,
 })
 
 type ClaudeFlagSettings = Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'>
@@ -64,13 +67,19 @@ const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Num
  * Turns anything (a parsed settings.json, a renderer's patch merged over the current settings) into valid
  * Settings. Known keys only; unknown ones are dropped. A missing or wrongly typed value falls back to `base`'s;
  * numbers are rounded and clamped to their limits, and the editor command is trimmed. Task templates are checked
- * one by one (see normalizeTaskTemplates): invalid ones are dropped, the rest kept.
+ * one by one (see normalizeTaskTemplates): invalid ones are dropped, the rest kept. A budget is null (none) or a
+ * positive number, rounded to cents and clamped to BUDGET_LIMITS.
  */
 export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAULT_SETTINGS): Settings {
   const r = isRecord(raw) ? raw : {}
   const claudeArgs = Array.isArray(r.claudeArgs) && r.claudeArgs.every(isArgString) ? r.claudeArgs : base.claudeArgs
   const number = (v: unknown, fallback: number, limits: { min: number; max: number }): number =>
     clamp(Math.round(isFiniteNumber(v) ? v : fallback), limits)
+  const budget = (v: unknown, fallback: number | null): number | null => {
+    if (v === null) return null
+    if (!isFiniteNumber(v) || v <= 0) return fallback
+    return clamp(Math.round(v * 100) / 100, BUDGET_LIMITS)
+  }
   return {
     claudeArgs: [...claudeArgs],
     editorCommand: isArgString(r.editorCommand) ? r.editorCommand.trim() : base.editorCommand,
@@ -88,5 +97,7 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
         : base.cloneDirectory,
     showStatusBar: typeof r.showStatusBar === 'boolean' ? r.showStatusBar : base.showStatusBar,
     taskTemplates: normalizeTaskTemplates(Array.isArray(r.taskTemplates) ? r.taskTemplates : base.taskTemplates),
+    dailyBudgetUsd: budget(r.dailyBudgetUsd, base.dailyBudgetUsd),
+    taskBudgetUsd: budget(r.taskBudgetUsd, base.taskBudgetUsd),
   }
 }
