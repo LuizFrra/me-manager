@@ -741,6 +741,11 @@ button:disabled {
   align-items: baseline;
   gap: 6px;
 }
+.settings-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
 .settings-choice-hint {
   color: var(--muted);
   font-size: 12px;

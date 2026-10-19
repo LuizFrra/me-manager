@@ -1330,6 +1330,7 @@ describe('App settings', () => {
       taskTemplates: [],
       dailyBudgetUsd: null,
       taskBudgetUsd: null,
+      appearance: 'system',
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()

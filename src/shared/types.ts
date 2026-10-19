@@ -265,6 +265,8 @@ export interface Settings {
   dailyBudgetUsd: number | null
   /** The default limit on each task's estimated cost, all time, in USD (Task.budgetUsd overrides it); null for none. */
   taskBudgetUsd: number | null
+  /** Light or dark colours; `system` follows the OS, live. */
+  appearance: Appearance
 }
 
 /**
@@ -292,6 +294,14 @@ export interface SettingsView extends Settings {
 export type UpdateStrategy = 'rebase' | 'merge'
 
 export const UPDATE_STRATEGIES: readonly UpdateStrategy[] = ['rebase', 'merge']
+
+/** Settings.appearance. `system` resolves to `dark` or `light` from the OS preference. */
+export type Appearance = 'system' | 'dark' | 'light'
+
+export const APPEARANCES: readonly Appearance[] = ['system', 'dark', 'light']
+
+/** What the UI is drawn in: an Appearance with `system` resolved. */
+export type ResolvedAppearance = Exclude<Appearance, 'system'>
 
 /** What "Update from base" did. A conflict was undone (`--abort`), leaving the branch and the worktree as they were. */
 export type UpdateResult =

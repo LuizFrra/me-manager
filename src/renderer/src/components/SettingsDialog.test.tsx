@@ -84,6 +84,21 @@ describe('SettingsDialog: update strategy', () => {
   })
 })
 
+describe('SettingsDialog: appearance', () => {
+  it('shows the saved appearance and saves another', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={{ ...DEFAULT_SETTINGS, appearance: 'dark' }} onSave={onSave} onCancel={vi.fn()} />)
+    const group = screen.getByRole('group', { name: 'Appearance' })
+    expect(group).toHaveAccessibleDescription(/the terminal, code and diagrams too/)
+    expect(screen.getByRole('radio', { name: /^Dark/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /^System/ })).not.toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /^Light/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ appearance: 'light' }))
+  })
+})
+
 describe('SettingsDialog: claude arguments with a line break', () => {
   const settings = {
     ...DEFAULT_SETTINGS,

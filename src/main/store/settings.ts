@@ -39,6 +39,7 @@ export class SettingsStore implements SettingsStoreApi {
 export class SettingsService implements SettingsApi {
   private current: Settings
   private queue: Promise<void> = Promise.resolve()
+  private readonly listeners = new Set<(settings: Settings) => void>()
 
   /** `initial` is what `get()` returns until `init()` loads the saved settings. */
   constructor(
@@ -56,12 +57,19 @@ export class SettingsService implements SettingsApi {
     return this.current
   }
 
+  /** Calls `listener` with the new settings after each update is saved. Returns the unsubscribe. */
+  onChange(listener: (settings: Settings) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
   /** `patch` comes from the renderer: anything invalid in it is ignored and keeps the current value. */
   update(patch: Partial<Settings>): Promise<Settings> {
     const run = this.queue.then(async () => {
       const next = normalizeSettings({ ...this.current, ...(typeof patch === 'object' ? patch : {}) }, this.current)
       await this.store.save(next)
       this.current = next
+      for (const listener of this.listeners) listener(next)
       return next
     })
     this.queue = run.then(

@@ -27,6 +27,7 @@ const custom: Settings = {
   taskTemplates: [{ name: 'Review', taskName: 'review-{n}', base: 'origin/develop', prompt: 'Review the diff' }],
   dailyBudgetUsd: 20,
   taskBudgetUsd: 2.5,
+  appearance: 'light',
 }
 
 describe('SettingsStore', () => {
@@ -115,6 +116,24 @@ describe('SettingsService', () => {
     const service = new SettingsService(new MemorySettingsStore())
     await Promise.all([service.update({ terminalFontSize: 20 }), service.update({ notifications: false })])
     expect(service.get()).toMatchObject({ terminalFontSize: 20, notifications: false })
+  })
+
+  it('tells listeners about each saved update, but not about one that failed to save', async () => {
+    const store = new MemorySettingsStore()
+    const service = new SettingsService(store)
+    const seen: Settings[] = []
+    const off = service.onChange((s) => seen.push(s))
+    await service.update({ appearance: 'light' })
+    expect(seen).toEqual([{ ...DEFAULT_SETTINGS, appearance: 'light' }])
+    store.save = async () => {
+      throw new Error('disk full')
+    }
+    await expect(service.update({ appearance: 'dark' })).rejects.toThrow('disk full')
+    expect(seen).toHaveLength(1)
+    store.save = async () => {}
+    off()
+    await service.update({ appearance: 'dark' })
+    expect(seen).toHaveLength(1)
   })
 
   it('keeps the current settings when saving fails, and recovers', async () => {
