@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { RUN_WINDOW } from '../../../shared/runCommand'
 import type { TabInfo } from '../../../shared/types'
 import { PANEL_SHORTCUT_LABEL, shortcutLabel } from '../lib/shortcuts'
 
@@ -99,13 +100,18 @@ export function TabBar(props: {
   onRestartClaude: () => void
   onCopyTranscript: (index: number) => void
   onSaveTranscript: (index: number) => void
+  /** Restart and Stop in the run tab's menu. */
+  onRestartRun?: () => void
+  onStopRun?: () => void
   panelOpen: boolean
   onTogglePanel: () => void
 }): React.JSX.Element {
   const [menu, setMenu] = useState<OpenMenu | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
   // A tab that closed meanwhile (from the terminal, say) takes its menu with it.
-  const shownMenu = menu && props.tabs.some((t) => t.index === menu.tab.index) ? menu : null
+  // Its items follow the tab as it is now: a run tab that stopped meanwhile has no Stop.
+  const menuTab = menu && props.tabs.find((t) => t.index === menu.tab.index)
+  const shownMenu = menu && menuTab ? menu : null
   const hasClaude = props.tabs.some((t) => t.name === 'claude')
 
   // Right-click, or the Menu key / Shift+F10 on a focused tab (no pointer position: open under the tab).
@@ -120,11 +126,18 @@ export function TabBar(props: {
       trigger: e.currentTarget,
     })
   }
-  const menuItems = (index: number): MenuItem[] => [
-    { label: 'Copy transcript', run: () => props.onCopyTranscript(index) },
-    { label: 'Save transcript…', run: () => props.onSaveTranscript(index) },
-    { label: 'Close tab', run: () => props.onClose(index) },
-  ]
+  const menuItems = (tab: TabInfo): MenuItem[] => {
+    const { onRestartRun, onStopRun } = props
+    const run: MenuItem[] = []
+    if (tab.name === RUN_WINDOW && onRestartRun) run.push({ label: 'Restart', run: onRestartRun })
+    if (tab.name === RUN_WINDOW && !tab.dead && onStopRun) run.push({ label: 'Stop', run: onStopRun })
+    return [
+      ...run,
+      { label: 'Copy transcript', run: () => props.onCopyTranscript(tab.index) },
+      { label: 'Save transcript…', run: () => props.onSaveTranscript(tab.index) },
+      { label: 'Close tab', run: () => props.onClose(tab.index) },
+    ]
+  }
 
   return (
     <div className="tabbar" role="tablist">
@@ -134,6 +147,8 @@ export function TabBar(props: {
             role="tab"
             aria-selected={t.active}
             aria-haspopup="menu"
+            className={t.dead ? 'dead' : undefined}
+            title={t.dead ? 'Stopped: the command exited. Restart it from the tab menu.' : undefined}
             onClick={() => props.onSelect(t.index)}
             onContextMenu={(e) => openMenu(e, t)}
           >
@@ -144,7 +159,7 @@ export function TabBar(props: {
           </button>
         </div>
       ))}
-      {shownMenu && <TabMenu menu={shownMenu} items={menuItems(shownMenu.tab.index)} onClose={closeMenu} />}
+      {shownMenu && <TabMenu menu={shownMenu} items={menuItems(menuTab ?? shownMenu.tab)} onClose={closeMenu} />}
       <button
         className="tab-new"
         aria-label="New shell tab"

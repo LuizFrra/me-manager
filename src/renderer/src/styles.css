@@ -3400,3 +3400,26 @@ button.status-seg:focus-visible {
   white-space: nowrap;
   border: 0;
 }
+
+/* ---------- Run command and dev-server links ---------- */
+.run-group .run-state {
+  padding: 2px 8px;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+.run-state.running {
+  color: var(--ok);
+}
+.run-state.stopped {
+  color: var(--muted);
+}
+.status-run.running {
+  color: var(--ok);
+}
+.tab button.dead {
+  color: var(--muted);
+  font-style: italic;
+}
+.run-command-input {
+  font-family: var(--mono);
+}

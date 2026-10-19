@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { TaskHeader } from './TaskHeader'
+import { TaskHeader, type RunControlsProps } from './TaskHeader'
 
 const base = {
   title: 'my-api › fix',
@@ -67,5 +68,69 @@ describe('TaskHeader session state', () => {
     const pill = screen.getByLabelText(`Session: ${label}`)
     expect(pill).toHaveTextContent(label)
     expect(pill).toHaveClass('session-state', session)
+  })
+})
+
+describe('TaskHeader run controls', () => {
+  const run = (over: Partial<RunControlsProps> = {}): RunControlsProps => ({
+    command: 'npm run dev',
+    state: 'none',
+    onRun: vi.fn(),
+    onRestart: vi.fn(),
+    onStop: vi.fn(),
+    onEdit: vi.fn(),
+    ...over,
+  })
+  const group = (): HTMLElement => screen.getByRole('group', { name: 'Run' })
+
+  it('offers to set a command when there is none', async () => {
+    const user = userEvent.setup()
+    const props = run({ command: undefined })
+    render(<TaskHeader {...base} run={props} />)
+    expect(within(group()).getAllByRole('button')).toHaveLength(1)
+    await user.click(within(group()).getByRole('button', { name: 'Set run command…' }))
+    expect(props.onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the command when nothing runs yet, without a state or Restart and Stop', async () => {
+    const user = userEvent.setup()
+    const props = run()
+    render(<TaskHeader {...base} run={props} />)
+    const button = within(group()).getByRole('button', { name: 'Run npm run dev' })
+    expect(button).toHaveAttribute('title', 'Run “npm run dev” in a “run” tab')
+    await user.click(button)
+    expect(props.onRun).toHaveBeenCalledTimes(1)
+    expect(screen.queryByLabelText(/^Run: /)).not.toBeInTheDocument()
+    expect(within(group()).queryByRole('button', { name: 'Restart run' })).not.toBeInTheDocument()
+    expect(within(group()).queryByRole('button', { name: 'Stop run' })).not.toBeInTheDocument()
+    await user.click(within(group()).getByRole('button', { name: 'Edit run command…' }))
+    expect(props.onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a running command, with Restart and Stop', async () => {
+    const user = userEvent.setup()
+    const props = run({ state: 'running' })
+    render(<TaskHeader {...base} run={props} />)
+    expect(screen.getByLabelText('Run: running')).toHaveClass('run-state', 'running')
+    expect(within(group()).getByRole('button', { name: 'Run npm run dev' })).toHaveAttribute(
+      'title',
+      'Show the “run” tab',
+    )
+    await user.click(within(group()).getByRole('button', { name: 'Restart run' }))
+    await user.click(within(group()).getByRole('button', { name: 'Stop run' }))
+    expect(props.onRestart).toHaveBeenCalledTimes(1)
+    expect(props.onStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a stopped command, with Restart only', () => {
+    render(<TaskHeader {...base} run={run({ state: 'stopped' })} />)
+    expect(screen.getByLabelText('Run: stopped')).toHaveClass('run-state', 'stopped')
+    expect(within(group()).getByRole('button', { name: 'Restart run' })).toBeInTheDocument()
+    expect(within(group()).queryByRole('button', { name: 'Stop run' })).not.toBeInTheDocument()
+  })
+
+  it('is absent without run props', () => {
+    render(<TaskHeader {...base} />)
+    expect(screen.queryByRole('group', { name: 'Run' })).not.toBeInTheDocument()
   })
 })

@@ -3507,3 +3507,114 @@ describe('App archiving tasks', () => {
     expect(openTarget).not.toHaveBeenCalled()
   })
 })
+
+describe('App run command', () => {
+  const runGroup = (): HTMLElement => screen.getByRole('group', { name: 'Run' })
+  const statusBar = (): HTMLElement => screen.getByRole('group', { name: 'Status bar' })
+
+  async function setCommand(user: UserEvent, command: string): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'Run command for my-api…' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Run command for my-api' })
+    await user.type(within(dialog).getByRole('textbox', { name: 'Command' }), command)
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  }
+
+  it("sets a repo's run command from the sidebar, then runs, stops and restarts it from the header", async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const setRunCommand = vi.spyOn(api, 'setRunCommand')
+    const startRun = vi.spyOn(api, 'startRun')
+    const stopRun = vi.spyOn(api, 'stopRun')
+    const restartRun = vi.spyOn(api, 'restartRun')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    expect(within(runGroup()).getByRole('button', { name: 'Set run command…' })).toBeInTheDocument()
+    await setCommand(user, 'npm run dev')
+    const state = await api.getState()
+    expect(setRunCommand).toHaveBeenCalledWith(state.themes[0].id, state.themes[0].items[0].id, 'npm run dev')
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved the run command of my-api')
+
+    await user.click(within(runGroup()).getByRole('button', { name: 'Run npm run dev' }))
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }))
+    expect(await screen.findByRole('tab', { name: 'run' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText('Run: running')).toBeInTheDocument()
+    expect(within(statusBar()).getByRole('button', { name: 'Run tab running: show it' })).toBeInTheDocument()
+
+    await user.click(within(runGroup()).getByRole('button', { name: 'Stop run' }))
+    expect(stopRun).toHaveBeenCalledTimes(1)
+    expect(await screen.findByLabelText('Run: stopped')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'run' })).toHaveClass('dead')
+
+    await user.click(within(runGroup()).getByRole('button', { name: 'Restart run' }))
+    expect(restartRun).toHaveBeenCalledTimes(1)
+    expect(await screen.findByLabelText('Run: running')).toBeInTheDocument()
+  })
+
+  it('runs, restarts and stops from the palette, and edits the command there', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const startRun = vi.spyOn(api, 'startRun')
+    const restartRun = vi.spyOn(api, 'restartRun')
+    const stopRun = vi.spyOn(api, 'stopRun')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const runFromPalette = async (label: string): Promise<void> => {
+      fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+      await user.type(await screen.findByRole('combobox'), label)
+      expect(screen.getAllByRole('option')[0]).toHaveAccessibleName(label)
+      await user.keyboard('{Enter}')
+    }
+    await runFromPalette('Set run command…')
+    await user.type(await screen.findByRole('textbox', { name: 'Command' }), 'pnpm dev')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await runFromPalette('Run pnpm dev')
+    expect(startRun).toHaveBeenCalledTimes(1)
+    await screen.findByLabelText('Run: running')
+    await runFromPalette('Stop the run command')
+    expect(stopRun).toHaveBeenCalledTimes(1)
+    await screen.findByLabelText('Run: stopped')
+    await runFromPalette('Restart the run command')
+    expect(restartRun).toHaveBeenCalledTimes(1)
+    await runFromPalette('Edit run command…')
+    expect(await screen.findByRole('textbox', { name: 'Command' })).toHaveValue('pnpm dev')
+  })
+
+  it('restarts and stops from the run tab menu, and shows the run tab from the status bar', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const restartRun = vi.spyOn(api, 'restartRun')
+    const stopRun = vi.spyOn(api, 'stopRun')
+    const startRun = vi.spyOn(api, 'startRun')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await setCommand(user, 'npm start')
+    await user.click(within(runGroup()).getByRole('button', { name: 'Run npm start' }))
+    fireEvent.contextMenu(await screen.findByRole('tab', { name: 'run' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Stop' }))
+    expect(stopRun).toHaveBeenCalledTimes(1)
+    fireEvent.contextMenu(await screen.findByRole('tab', { name: 'run' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Restart' }))
+    expect(restartRun).toHaveBeenCalledTimes(1)
+    await user.click(within(statusBar()).getByRole('button', { name: /^Run tab .*: show it$/ }))
+    expect(startRun).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows why Run failed', async () => {
+    const user = userEvent.setup()
+    render(
+      <App
+        api={repoApi({
+          startRun: async () => {
+            throw new Error('Open the task first: its session is not running')
+          },
+        })}
+      />,
+    )
+    await createRepoAndTask(user)
+    await setCommand(user, 'npm start')
+    await user.click(within(runGroup()).getByRole('button', { name: 'Run npm start' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Open the task first: its session is not running')
+  })
+})
