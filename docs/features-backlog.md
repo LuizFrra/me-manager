@@ -60,7 +60,7 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 33 | Task templates: saved new-task presets (name pattern, base branch, initial prompt), chosen in the New task dialog and managed in Settings | feature | done (merge of feat/f33-templates) |
 | 34 | Run command per repo: a configurable dev or test command (e.g. `npm run dev`) launched in a "run" tab with one click, with restart and stop | feature | done (merge of feat/f34-run) |
 | 35 | Dev-server URLs: detect `http://localhost:<port>` printed in a task's tabs and show clickable links in the header and status bar | feature | done (merge of feat/f34-run) |
-| 36 | Usage budgets: optional cost limits per task and per day, a warning toast or notification when crossed, and a badge in the sidebar | feature | in progress (feat/f36-budgets) |
+| 36 | Usage budgets: optional cost limits per task and per day, a warning toast or notification when crossed, and a badge in the sidebar | feature | done (merge of feat/f36-budgets) |
 | 37 | Drag and drop: reorder themes, items and tasks in the sidebar, persisted | ux | done (merge of feat/f37-dnd) |
 | 38 | Bulk actions: multi-select tasks (Shift/Ctrl-click) to push, update from base or remove together, with one confirmation | feature | in progress (feat/f38-bulk) |
 | 39 | Save the terminal transcript: export a tab's tmux scrollback to a file, or copy it | feature | done (merge of feat/f39-transcript) |

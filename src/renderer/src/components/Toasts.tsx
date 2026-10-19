@@ -6,7 +6,7 @@ export function Toasts({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id:
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`toast toast-${t.kind}${t.action ? ' toast-with-action' : ''}`}
+          className={`toast toast-${t.kind}${t.action ? ' toast-with-action' : ''}${t.warning ? ' toast-warning' : ''}`}
           role={t.kind === 'error' ? 'alert' : 'status'}
         >
           <span className="toast-message">{t.message}</span>

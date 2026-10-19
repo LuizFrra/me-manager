@@ -961,6 +961,13 @@ button:disabled {
   color: var(--ok);
   font-weight: 700;
 }
+.toast-info.toast-warning {
+  border-color: var(--waiting);
+}
+.toast-info.toast-warning::before {
+  content: '⚠';
+  color: var(--waiting);
+}
 .toast-info button {
   color: var(--muted);
 }
