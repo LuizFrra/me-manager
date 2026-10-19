@@ -11,7 +11,9 @@ import type {
   SearchResult,
   Settings,
   TabInfo,
+  Target,
   TaskGitStatus,
+  Transcript,
   UnsavedWork,
   UpdateResult,
   UpdateStrategy,
@@ -193,7 +195,16 @@ export interface UsageApi {
   summarize(roots: readonly string[], groups?: Readonly<Record<string, readonly string[]>>): Promise<UsageSummaries>
 }
 
-/** What the orchestrator implements: everything except renderer/pty-only calls. */
+/** A tab's transcript and the file name saveTranscript suggests for it. */
+export interface CapturedTranscript {
+  transcript: Transcript
+  fileName: string
+}
+
+/**
+ * What the orchestrator implements: everything except renderer/pty-only calls and saveTranscript (its dialog needs
+ * the window; see main/transcript.ts), plus the capture saveTranscript starts with.
+ */
 export type AppService = Omit<
   MeManagerApi,
   | 'checkPrereqs'
@@ -205,7 +216,11 @@ export type AppService = Omit<
   | 'onPtyExit'
   | 'onSelectTarget'
   | 'openExternal'
->
+  | 'saveTranscript'
+> & {
+  /** copyTranscript's capture, with the file name to suggest for it. */
+  captureTranscript(target: Target, index: number): Promise<CapturedTranscript>
+}
 
 export interface OrchestratorDeps {
   store: StoreApi

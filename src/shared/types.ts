@@ -145,6 +145,28 @@ export interface TabInfo {
   active: boolean
 }
 
+/** The most of a tab's scrollback a transcript holds: beyond it, only the most recent lines are kept. */
+export const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024
+
+/** A tab's whole scrollback as plain text (see MeManagerApi.copyTranscript). */
+export interface Transcript {
+  /**
+   * One line per terminal line (wrapped lines joined), without colours or other escape sequences, trailing spaces
+   * or the blank lines below the last output; ends with a newline, or is '' for an empty tab.
+   */
+  text: string
+  lines: number
+  /** Set when the scrollback was over MAX_TRANSCRIPT_BYTES: `text` holds its most recent lines only. */
+  truncated: boolean
+}
+
+/** Where saveTranscript wrote a transcript, and what it held. */
+export interface SavedTranscript {
+  path: string
+  lines: number
+  truncated: boolean
+}
+
 export interface UnsavedWork {
   uncommittedFiles: string[]
   unpushedCommits: string[]
@@ -329,6 +351,16 @@ export interface MeManagerApi {
   selectTab(target: Target, index: number): Promise<TabInfo[]>
   closeTab(target: Target, index: number): Promise<TabInfo[]>
   restartClaude(target: Target): Promise<TabInfo[]>
+  /**
+   * The scrollback of the tab at `index` (a TabInfo.index of the target's session) as plain text, for the renderer
+   * to put on the clipboard. Rejects when the session isn't running or has no tab at `index`.
+   */
+  copyTranscript(target: Target, index: number): Promise<Transcript>
+  /**
+   * Captures the tab like copyTranscript, then asks where to save it with a save dialog that suggests
+   * `<theme>-<task or folder>-<tab>-<YYYYMMDD-HHMM>.txt` in Downloads, and writes it there. null when cancelled.
+   */
+  saveTranscript(target: Target, index: number): Promise<SavedTranscript | null>
 
   listFiles(target: Target): Promise<FileList>
   readFile(target: Target, path: string): Promise<FileContent>
