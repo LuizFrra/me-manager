@@ -11,6 +11,7 @@ import {
 import type {
   AppState,
   BranchList,
+  DevUrl,
   ChangeList,
   ChangeScope,
   ClaudeActivity,
@@ -48,6 +49,8 @@ import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
+import { RUN_WINDOW } from '../../shared/runCommand'
+import { findDevUrls, MAX_DEV_URLS } from '../../shared/devUrls'
 import { mapLimit } from '../concurrency'
 import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries } from '../contracts'
 import { baseBranchName } from '../git/gh'
@@ -89,6 +92,40 @@ export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
 const CLAUDE_WINDOW = 'claude'
 /** How long createTask waits for `git fetch` before branching from the last fetched refs. */
 export const FETCH_TIMEOUT_MS = 20_000
+
+/**
+ * The shell command of a `run` tab: the item's run command line, as typed, after a `$ <command>` line that shows
+ * what runs. Only the command itself is shell: in that line it is one shell-quoted word. tmux runs this with the
+ * user's shell (`default-shell -c`, which is $SHELL) in the worktree or folder, and keeps the tab open with its
+ * output once the command exits (remain-on-exit, set for that tab only: see TmuxApi.newWindow), rather than
+ * `…; exec $SHELL`, so that a stopped command reads as stopped (`#{pane_dead}`) and Restart can run it again in
+ * place (`respawn-window -k`).
+ */
+export const runWindowCommand = (command: string): string => `printf '$ %s\\n' ${shellQuote(command)}; ${command}`
+/** How long Restart waits after Ctrl-C, so a dev server can shut down (and free its port) before it runs again. */
+export const RUN_RESTART_GRACE_MS = 500
+
+/** How much of each tab getDevUrls reads: its screen and this many lines of scrollback above it. */
+export const DEV_URL_SCROLLBACK_LINES = 200
+/** A tab that keeps printing (a busy log) is captured again for getDevUrls at most this often. */
+export const DEV_URL_RESCAN_MS = 3_000
+
+/** One tab's last capture for getDevUrls. */
+interface DevUrlScan {
+  /** The tab's `window_activity` (Unix seconds) when it was captured. */
+  activity: number
+  /** When it was captured, in ms. */
+  at: number
+  /** Its URLs, newest first. */
+  urls: string[]
+}
+
+/**
+ * Whether a tab may have printed something its last capture doesn't have: it printed since, or in the second of the
+ * capture itself (tmux reports whole seconds, so output later in that second has the same activity time).
+ */
+const mayHaveChanged = (scan: DevUrlScan, activity: number): boolean =>
+  activity !== scan.activity || activity >= Math.floor(scan.at / 1000)
 
 /**
  * A worktree's git status is read at most this often, however fast the UI polls: each read runs a few git
@@ -179,12 +216,16 @@ function assertNotArchived(task: Task): void {
 
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
+/** Run, Restart and Stop on one session go one at a time, so two clicks never open two run tabs. */
+const runQueue = (session: string): string => `run:${session}`
 
 export interface OrchestratorOptions {
   /** Overrides FETCH_TIMEOUT_MS (for tests). */
   fetchTimeoutMs?: number
   /** The clock, in ms (for tests). */
   now?: () => number
+  /** Overrides RUN_RESTART_GRACE_MS (for tests). */
+  runGraceMs?: number
 }
 
 interface GitStatusEntry {
@@ -203,6 +244,7 @@ export class Orchestrator implements AppService {
    */
   private readonly queues = new Map<string, Promise<void>>()
   private readonly fetchTimeoutMs: number
+  private readonly runGraceMs: number
   /** Bumped by every openTarget call, so only the latest one attaches the terminal. */
   private openSeq = 0
   private readonly now: () => number
@@ -213,6 +255,11 @@ export class Orchestrator implements AppService {
    * captured at: the screen can't change without new activity, so it is captured again only after some.
    */
   private readonly waitingCache = new Map<string, { activitySec: number; waiting: boolean }>()
+  /**
+   * getDevUrls' last capture of each tab (by window id) of the session it last scanned; only the selected target is
+   * polled, so one session's are kept.
+   */
+  private devUrlScans: { session: string; tabs: Map<string, DevUrlScan> } | null = null
   /** The search running for each target (by targetKey): a newer one there aborts it. */
   private readonly searches = new Map<string, AbortController>()
 
@@ -222,6 +269,7 @@ export class Orchestrator implements AppService {
   ) {
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS
     this.now = options.now ?? Date.now
+    this.runGraceMs = options.runGraceMs ?? RUN_RESTART_GRACE_MS
   }
 
   async init(): Promise<void> {
@@ -526,6 +574,11 @@ export class Orchestrator implements AppService {
     })
   }
 
+  /** The command comes from the renderer: setRunCommand checks it. It applies from the next Run or Restart. */
+  async setRunCommand(themeId: string, itemId: string, command: string): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.setRunCommand(this.state, themeId, itemId, command)))
+  }
+
   /** The item comes from the renderer: restoreItem checks it. */
   async restoreItem(themeId: string, item: Item, index?: number): Promise<AppState> {
     return this.exclusive(async () => this.commit(m.restoreItem(this.state, themeId, item, index)))
@@ -757,6 +810,115 @@ export class Orchestrator implements AppService {
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
     else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
     return this.deps.tmux.listWindows(session)
+  }
+
+  // The run command, in a `run` tab of the target's session (see runWindowCommand). Each runs on the session's run
+  // queue, against the state as it is when its turn comes.
+
+  /** The target's session and folder (refusing an archived task, like resolve) and its item. */
+  private runTarget(target: Target): { session: string; cwd: string; item: Item } {
+    const { session, cwd } = this.resolve(target)
+    return { session, cwd, item: m.getItem(this.state, target.themeId, target.itemId) }
+  }
+
+  /** Runs `op` on the target's run queue with its item's run command; refuses without one, or without a session. */
+  private withRunCommand(
+    target: Target,
+    op: (run: { session: string; cwd: string; command: string; tabs: TabInfo[] }) => Promise<void>,
+  ): Promise<TabInfo[]> {
+    return this.exclusive(
+      async () => {
+        const { session, cwd, item } = this.runTarget(target)
+        if (!item.runCommand) throw new Error(`Set a run command for “${item.name}” first`)
+        if (!(await this.deps.tmux.hasSession(session))) {
+          throw new Error(`Open the ${target.taskId ? 'task' : 'folder'} first: its session is not running`)
+        }
+        await op({ session, cwd, command: item.runCommand, tabs: await this.deps.tmux.listWindows(session) })
+        return this.deps.tmux.listWindows(session)
+      },
+      runQueue(this.resolve(target).session),
+    )
+  }
+
+  private newRunWindow(session: string, cwd: string, command: string): Promise<void> {
+    return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true })
+  }
+
+  /** Shows the run tab when there is one, running or stopped (Restart runs it again); otherwise opens one. */
+  async startRun(target: Target): Promise<TabInfo[]> {
+    return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
+      const run = tabs.find((t) => t.name === RUN_WINDOW)
+      if (run) await this.deps.tmux.selectWindow(session, run.index)
+      else await this.newRunWindow(session, cwd, command)
+    })
+  }
+
+  /**
+   * Runs the item's current command again in the run tab, and shows it: a running one gets Ctrl-C and
+   * runGraceMs to shut down first, and is killed if it is still running then (`respawn-window -k`). Opens a run
+   * tab when there is none.
+   */
+  async restartRun(target: Target): Promise<TabInfo[]> {
+    return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
+      const { tmux } = this.deps
+      let run = tabs.find((t) => t.name === RUN_WINDOW)
+      if (run && !run.dead) {
+        await tmux.sendInterrupt(session, RUN_WINDOW)
+        if (this.runGraceMs > 0) await new Promise((r) => setTimeout(r, this.runGraceMs))
+        // A run tab without remain-on-exit (made outside the app) closes when its command exits.
+        run = (await tmux.listWindows(session)).find((t) => t.name === RUN_WINDOW)
+      }
+      if (!run) return this.newRunWindow(session, cwd, command)
+      await tmux.respawnWindow(session, RUN_WINDOW, cwd, runWindowCommand(command))
+      await tmux.selectWindow(session, run.index)
+    })
+  }
+
+  /**
+   * Ctrl-C in the run tab, which stays open with the output (its process may ignore it: closing the tab kills it).
+   * Nothing to do for a stopped or missing one. Needs no run command: it may have been removed meanwhile.
+   */
+  async stopRun(target: Target): Promise<TabInfo[]> {
+    const { session } = this.resolve(target)
+    return this.exclusive(async () => {
+      this.runTarget(target) // still there, and not archived meanwhile
+      const run = (await this.deps.tmux.listWindows(session).catch(() => [] as TabInfo[])).find(
+        (t) => t.name === RUN_WINDOW,
+      )
+      if (run && !run.dead) await this.deps.tmux.sendInterrupt(session, RUN_WINDOW)
+      return this.deps.tmux.listWindows(session).catch(() => [])
+    }, runQueue(session))
+  }
+
+  /**
+   * Read-only, so it skips the queues. One `list-windows`, plus a capture of each tab that printed something since
+   * its last one (see mayHaveChanged), at most every DEV_URL_RESCAN_MS. Closed tabs drop out with their URLs.
+   */
+  async getDevUrls(target: Target): Promise<DevUrl[]> {
+    const { session } = this.resolve(target)
+    const windows = await this.deps.tmux.listWindowActivity(session).catch(() => [])
+    if (this.devUrlScans?.session !== session) this.devUrlScans = { session, tabs: new Map() }
+    const scans = this.devUrlScans.tabs
+    const live = new Set(windows.map((w) => w.id))
+    for (const id of scans.keys()) if (!live.has(id)) scans.delete(id)
+    const now = this.now()
+    await mapLimit(windows, PANE_CAPTURE_CONCURRENCY, async ({ id, activity }) => {
+      const scan = scans.get(id)
+      if (scan && (!mayHaveChanged(scan, activity) || now - scan.at < DEV_URL_RESCAN_MS)) return
+      const text = await this.deps.tmux.captureTail(id, DEV_URL_SCROLLBACK_LINES).catch(() => null)
+      scans.set(id, { activity, at: now, urls: text === null ? [] : findDevUrls(text) })
+    })
+    const urls: DevUrl[] = []
+    const seen = new Set<string>()
+    // The tab that printed last first; sort is stable, so tabs that printed in the same second keep their order.
+    for (const w of [...windows].sort((a, b) => b.activity - a.activity)) {
+      for (const url of scans.get(w.id)?.urls ?? []) {
+        if (seen.has(url)) continue
+        seen.add(url)
+        urls.push({ url, index: w.index, tab: w.name })
+      }
+    }
+    return urls.slice(0, MAX_DEV_URLS)
   }
 
   // Transcripts. Read-only, so these skip the mutation queue.

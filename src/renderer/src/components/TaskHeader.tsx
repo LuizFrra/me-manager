@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import type { TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
+import type { DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
 import type { CopyEntry } from '../lib/copy'
 import { GIT_ACTION_BUSY, type GitActionKind } from '../lib/gitActions'
 import { baseSummary, plural } from '../lib/gitStatus'
+import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
+import { DevUrlLinks } from './DevUrlLinks'
 import { UsageBadge } from './UsageBadge'
 
 /** The header's git line: checked-out branch, standing against the base, uncommitted files and the last commit. */
@@ -122,6 +124,72 @@ function GitActions(props: GitActionsProps): React.JSX.Element {
   )
 }
 
+export interface RunControlsProps {
+  /** The repo's or folder's run command; undefined when none is set, and the group offers to set one. */
+  command?: string
+  /** The session's run tab (see runState). */
+  state: RunState
+  /** Shows the run tab, or opens one running the command. */
+  onRun: () => void
+  onRestart: () => void
+  onStop: () => void
+  /** Opens the run command dialog. */
+  onEdit: () => void
+}
+
+/** Run, Restart and Stop the run command, with whether it runs; or, without a command, a way to set one. */
+function RunControls(props: RunControlsProps): React.JSX.Element {
+  const { command, state } = props
+  return (
+    <div className="copy-group run-group" role="group" aria-label="Run">
+      <span className="copy-group-label" aria-hidden="true">
+        Run
+      </span>
+      {command === undefined ? (
+        <button
+          aria-label="Set run command…"
+          title="Set a command (e.g. npm run dev) to run in a “run” tab"
+          onClick={props.onEdit}
+        >
+          Set command…
+        </button>
+      ) : (
+        <>
+          {state !== 'none' && (
+            <span
+              className={`run-state ${state}`}
+              title={RUN_STATE_INFO[state].title}
+              aria-label={`Run: ${RUN_STATE_INFO[state].label}`}
+            >
+              <span aria-hidden="true">{RUN_STATE_INFO[state].glyph}</span> {RUN_STATE_INFO[state].label}
+            </span>
+          )}
+          <button
+            aria-label={`Run ${command}`}
+            title={state === 'none' ? `Run “${command}” in a “run” tab` : 'Show the “run” tab'}
+            onClick={props.onRun}
+          >
+            Run
+          </button>
+          {state !== 'none' && (
+            <button aria-label="Restart run" title={`Stop and run “${command}” again`} onClick={props.onRestart}>
+              Restart
+            </button>
+          )}
+          {state === 'running' && (
+            <button aria-label="Stop run" title="Stop it (Ctrl-C); its output stays in the tab" onClick={props.onStop}>
+              Stop
+            </button>
+          )}
+          <button aria-label="Edit run command…" title={`Edit the run command: ${command}`} onClick={props.onEdit}>
+            ✎
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 /**
  * The selected task's or folder's header: title, path line, and the task's notes, collapsed to one line until
  * clicked. Notes are plain text (a React text node), never HTML.
@@ -150,6 +218,11 @@ export function TaskHeader(props: {
   session?: SessionState
   /** Set for tasks: the Git button group. */
   gitActions?: GitActionsProps
+  /** The run command's buttons (tasks and folders). */
+  run?: RunControlsProps
+  /** Dev-server URLs printed in the session's tabs (see getDevUrls), as links opened with onOpenUrl. */
+  devUrls?: readonly DevUrl[]
+  onOpenUrl?: (url: string) => void
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -189,6 +262,14 @@ export function TaskHeader(props: {
           </div>
           <div className="task-subtitle">{props.subtitle}</div>
           {props.git && props.baseRef !== undefined && <GitLine git={props.git} baseRef={props.baseRef} />}
+          {props.devUrls && props.devUrls.length > 0 && props.onOpenUrl && (
+            <div className="task-urls" role="group" aria-label="Dev-server links">
+              <span className="task-urls-label" aria-hidden="true">
+                ↗
+              </span>
+              <DevUrlLinks urls={props.devUrls} onOpen={props.onOpenUrl} className="dev-url" />
+            </div>
+          )}
         </div>
         <div className="task-header-actions">
           <div className="task-header-actions-row">
@@ -235,9 +316,10 @@ export function TaskHeader(props: {
               </button>
             )}
           </div>
-          {props.gitActions && (
+          {(props.run || props.gitActions) && (
             <div className="task-header-actions-row">
-              <GitActions {...props.gitActions} />
+              {props.run && <RunControls {...props.run} />}
+              {props.gitActions && <GitActions {...props.gitActions} />}
             </div>
           )}
         </div>

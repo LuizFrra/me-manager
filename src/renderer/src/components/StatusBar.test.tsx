@@ -106,4 +106,69 @@ describe('StatusBar', () => {
     expect(b.queryByText(/tab/)).not.toBeInTheDocument()
     expect(b.queryByText('⚠ skip-perms')).not.toBeInTheDocument()
   })
+
+  it.each([
+    ['running', '▶ running'],
+    ['stopped', '■ stopped'],
+  ] as const)('shows a %s run tab, which a click shows, for tasks and folders', async (run, text) => {
+    const user = userEvent.setup()
+    for (const task of [undefined, { branch: 'b', baseRef: 'origin/main' }]) {
+      const onShowRun = vi.fn()
+      const { unmount } = render(
+        <StatusBar
+          task={task}
+          path="/p"
+          session="idle"
+          tabs={2}
+          skipPermissions={false}
+          run={run}
+          onShowRun={onShowRun}
+          onCopyBranch={vi.fn()}
+          onOpenChanges={vi.fn()}
+          onOpenUsage={vi.fn()}
+        />,
+      )
+      const button = within(bar()).getByRole('button', { name: `Run tab ${run}: show it` })
+      expect(button).toHaveTextContent(text)
+      expect(button).toHaveClass('status-run', run)
+      await user.click(button)
+      expect(onShowRun).toHaveBeenCalledTimes(1)
+      unmount()
+    }
+  })
+
+  it('shows nothing about running without a run tab', () => {
+    renderBar({ run: 'none' })
+    expect(screen.queryByRole('button', { name: /^Run tab/ })).not.toBeInTheDocument()
+  })
+
+  it('shows dev-server URLs as links, for tasks and folders, that open through onOpenUrl', async () => {
+    const user = userEvent.setup()
+    const devUrls = [
+      { url: 'http://localhost:3000/', index: 1, tab: 'run' },
+      { url: 'https://localhost:8443/', index: 2, tab: 'shell' },
+    ]
+    for (const task of [undefined, { branch: 'b', baseRef: 'origin/main' }]) {
+      const onOpenUrl = vi.fn()
+      const { unmount } = render(
+        <StatusBar
+          task={task}
+          path="/p"
+          session="idle"
+          tabs={2}
+          skipPermissions={false}
+          devUrls={devUrls}
+          onOpenUrl={onOpenUrl}
+          onCopyBranch={vi.fn()}
+          onOpenChanges={vi.fn()}
+          onOpenUsage={vi.fn()}
+        />,
+      )
+      const links = within(bar()).getAllByRole('link')
+      expect(links.map((l) => l.textContent)).toEqual(['localhost:3000', 'https://localhost:8443'])
+      await user.click(links[0])
+      expect(onOpenUrl).toHaveBeenCalledWith('http://localhost:3000/')
+      unmount()
+    }
+  })
 })

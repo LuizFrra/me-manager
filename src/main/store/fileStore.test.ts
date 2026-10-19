@@ -114,6 +114,30 @@ describe('FileStore', () => {
     const repo = loaded.themes[0].items[0]
     expect(repo.kind === 'repo' && repo.tasks.map((t) => 'archivedAt' in t)).toEqual([false, false, false, false])
   })
+  it('round-trips run commands and drops one that does not check out, so the item loads without it', async () => {
+    const raw = {
+      version: 1,
+      themes: [
+        {
+          id: 't1',
+          name: 'X',
+          slug: 'x',
+          items: [
+            { id: 'r1', kind: 'repo', name: 'a', slug: 'a', path: '/a', tasks: [], runCommand: 'npm run dev' },
+            { id: 'f1', kind: 'folder', name: 'b', slug: 'b', path: '/b', runCommand: 'hugo server' },
+            { id: 'r2', kind: 'repo', name: 'c', slug: 'c', path: '/c', tasks: [], runCommand: 'a\nb' },
+            { id: 'f2', kind: 'folder', name: 'd', slug: 'd', path: '/d', runCommand: 42 },
+            { id: 'f3', kind: 'folder', name: 'e', slug: 'e', path: '/e', runCommand: '' },
+          ],
+        },
+      ],
+    }
+    await mkdir(join(dir, 'nested'), { recursive: true })
+    await writeFile(file, JSON.stringify(raw), 'utf8')
+    const items = (await new FileStore(file).load()).themes[0].items
+    expect(items.map((i) => i.runCommand)).toEqual(['npm run dev', 'hugo server', undefined, undefined, undefined])
+    expect(items.map((i) => 'runCommand' in i)).toEqual([true, true, false, false, false])
+  })
   it('throws when both files are unreadable', async () => {
     const store = new FileStore(file)
     await store.save(emptyState())

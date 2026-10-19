@@ -20,6 +20,7 @@ import type {
   GhApi,
   GitApi,
   LauncherApi,
+  NewWindowOptions,
   OrchestratorDeps,
   PromptFilesApi,
   PtyApi,
@@ -28,6 +29,7 @@ import type {
   TmuxApi,
   UsageApi,
   UsageSummaries,
+  WindowActivity,
 } from '../contracts'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { emptyUsageSummary } from '../../shared/usage'
@@ -203,8 +205,20 @@ export class FakeGh implements GhApi {
   }
 }
 
+/**
+ * A FakeTmux window. `remainOnExit` and `dead` are only there when set, so tests can compare windows as
+ * `{ name, command }`.
+ */
+export interface FakeWindow {
+  name: string
+  command?: string
+  remainOnExit?: true
+  /** Its command exited and remain-on-exit kept it: listWindows reports it `dead`. */
+  dead?: true
+}
+
 export class FakeTmux implements TmuxApi {
-  sessions = new Map<string, { cwd: string; windows: { name: string; command?: string }[]; active: number }>()
+  sessions = new Map<string, { cwd: string; windows: FakeWindow[]; active: number }>()
   calls: string[] = []
   failNewSession = false
   async hasSession(name: string): Promise<boolean> {
@@ -225,12 +239,81 @@ export class FakeTmux implements TmuxApi {
   async listWindows(session: string): Promise<TabInfo[]> {
     const s = this.sessions.get(session)
     if (!s) throw new Error(`no session ${session}`)
-    return s.windows.map((w, index) => ({ index, name: w.name, active: index === s.active }))
+    return s.windows.map((w, index) => ({
+      index,
+      name: w.name,
+      active: index === s.active,
+      ...(w.dead ? { dead: true as const } : {}),
+    }))
   }
-  async newWindow(session: string, _cwd: string, windowName: string, command?: string): Promise<void> {
+  async newWindow(
+    session: string,
+    cwd: string,
+    windowName: string,
+    command?: string,
+    options: NewWindowOptions = {},
+  ): Promise<void> {
     const s = this.sessions.get(session)!
-    s.windows.push({ name: windowName, command })
+    if (options.remainOnExit) {
+      this.calls.push(`newWindow ${session} ${windowName} [remain-on-exit] in ${cwd}: ${command}`)
+      s.windows.push({ name: windowName, command, remainOnExit: true })
+    } else s.windows.push({ name: windowName, command })
     s.active = s.windows.length - 1
+  }
+  /** The window named `windowName` exactly, like a `=session:=name` target; throws like tmux when there is none. */
+  private window(session: string, windowName: string): FakeWindow {
+    const w = this.sessions.get(session)?.windows.find((x) => x.name === windowName)
+    if (!w) throw new Error(`can't find window: ${windowName}`)
+    return w
+  }
+  async respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void> {
+    const w = this.window(session, windowName)
+    this.calls.push(`respawnWindow ${session} ${windowName} in ${cwd}: ${command}`)
+    w.command = command
+    delete w.dead
+  }
+  /** What a Ctrl-C does to each window, by `<session>:<window>`: 'exit' (the default) or 'ignore'. */
+  interruptEffect = new Map<string, 'exit' | 'ignore'>()
+  async sendInterrupt(session: string, windowName: string): Promise<void> {
+    const w = this.window(session, windowName)
+    this.calls.push(`sendInterrupt ${session} ${windowName}`)
+    if (this.interruptEffect.get(`${session}:${windowName}`) === 'ignore') return
+    if (w.remainOnExit) w.dead = true
+    else {
+      const s = this.sessions.get(session)!
+      s.windows.splice(s.windows.indexOf(w), 1)
+    }
+  }
+  /** Window ids (`@n`), given out on first use. */
+  private readonly ids = new WeakMap<FakeWindow, string>()
+  private nextId = 0
+  idOf(w: FakeWindow): string {
+    let id = this.ids.get(w)
+    if (!id) this.ids.set(w, (id = `@${++this.nextId}`))
+    return id
+  }
+  /** `window_activity` (Unix seconds) and the text captureTail returns, by `<session>:<window>`. */
+  windowActivitySec = new Map<string, number>()
+  tails = new Map<string, string>()
+  tailCalls: string[] = []
+  async listWindowActivity(session: string): Promise<WindowActivity[]> {
+    const s = this.sessions.get(session)
+    if (!s) return []
+    return s.windows.map((w, index) => ({
+      index,
+      id: this.idOf(w),
+      name: w.name,
+      activity: this.windowActivitySec.get(`${session}:${w.name}`) ?? 0,
+    }))
+  }
+  async captureTail(windowId: string, lines: number): Promise<string | null> {
+    for (const [session, s] of this.sessions) {
+      const w = s.windows.find((x) => this.ids.get(x) === windowId)
+      if (!w) continue
+      this.tailCalls.push(`${session}:${w.name} ${lines}`)
+      return this.tails.get(`${session}:${w.name}`) ?? ''
+    }
+    return null
   }
   async selectWindow(session: string, index: number): Promise<void> {
     this.sessions.get(session)!.active = index
