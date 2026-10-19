@@ -3152,6 +3152,7 @@ describe('App archiving tasks', () => {
     const openTarget = vi.spyOn(api, 'openTarget')
     const listTabs = vi.spyOn(api, 'listTabs')
     const getUsage = vi.spyOn(api, 'getUsage')
+    const detachTerminal = vi.spyOn(api, 'detachTerminal')
     render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B', 'task C') // task C is selected
     await user.click(screen.getByRole('button', { name: 'Archive task task A' }))
@@ -3166,6 +3167,7 @@ describe('App archiving tasks', () => {
     await user.click(screen.getByRole('button', { name: '▶ Archived (1)' }))
     await user.click(screen.getByRole('button', { name: 'task A' }))
     expect(await placeholder()).toHaveTextContent('“task A” is archived')
+    expect(detachTerminal).toHaveBeenCalled() // task B's terminal no longer shown, so it isn't "selected" in main
     await act(async () => {
       fireEvent.keyDown(window, { key: 'T', ctrlKey: true, shiftKey: true }) // new tab: nothing to open it in
     })

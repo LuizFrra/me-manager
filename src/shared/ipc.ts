@@ -31,6 +31,7 @@ export const INVOKE_METHODS = [
   'archiveTask',
   'unarchiveTask',
   'openTarget',
+  'detachTerminal',
   'listTabs',
   'newTab',
   'selectTab',

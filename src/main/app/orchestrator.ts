@@ -695,6 +695,12 @@ export class Orchestrator implements AppService {
     return this.deps.tmux.listWindows(session)
   }
 
+  /** Also cancels an open still in flight, so it won't attach afterwards. */
+  async detachTerminal(): Promise<void> {
+    this.openSeq++
+    this.detachIf(() => true)
+  }
+
   async listTabs(target: Target): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
     return this.deps.tmux.listWindows(session).catch(() => [])

@@ -787,6 +787,28 @@ describe('Orchestrator: sessions and tabs', () => {
     expect(tmux.calls).toContain(`newSession mmt_client-x_my-api_fix ${CLAUDE_CONTINUE_CMD}`)
   })
 
+  it('detaches the terminal on request, cancelling an open still in flight', async () => {
+    const { orch, tmux, pty, target } = await withTask()
+    await orch.openTarget(target)
+    await orch.detachTerminal()
+    expect(pty.attached).toBeNull()
+    expect(orch.currentTarget()).toBeNull()
+
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const hasSession = tmux.hasSession.bind(tmux)
+    tmux.hasSession = async (name: string): Promise<boolean> => {
+      await gate
+      return hasSession(name)
+    }
+    const opening = orch.openTarget(target)
+    await orch.detachTerminal()
+    release()
+    await opening
+    expect(pty.attached).toBeNull()
+    expect(orch.currentTarget()).toBeNull()
+  })
+
   it('refuses to open a task whose worktree is missing', async () => {
     const ctx = await setup()
     const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
