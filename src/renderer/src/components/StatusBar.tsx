@@ -1,3 +1,5 @@
+import { Folder, GitBranch } from 'lucide-react'
+import { ICON } from '../lib/icon'
 import { budgetPercent, budgetSummary } from '../../../shared/budget'
 import type { BudgetStatus, DevUrl, TaskGitStatus } from '../../../shared/types'
 import { baseSummary, plural } from '../lib/gitStatus'
@@ -124,7 +126,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
       <div className="status-bar" role="group" aria-label="Status bar">
         <div className="status-left">
           <span className="status-seg status-path" title={p.path}>
-            <span aria-hidden="true">📁</span> {p.path}
+            <Folder {...ICON} size={12} /> {p.path}
           </span>
         </div>
         <div className="status-right">
@@ -147,7 +149,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
           title={`Copy branch name: ${branch}`}
           onClick={() => p.onCopyBranch(branch)}
         >
-          <span aria-hidden="true">⎇</span>
+          <GitBranch {...ICON} size={12} />
           <span className="status-branch-name">{branch}</span>
         </button>
         {git &&

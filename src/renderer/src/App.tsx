@@ -66,6 +66,7 @@ import { plural } from './lib/gitStatus'
 import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
+import { repoChoices, taskNameFromPrompt } from './lib/composer'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
@@ -157,6 +158,7 @@ type AppAction =
   | {
       type:
         | 'newTheme'
+        | 'newTaskHome'
         | 'togglePanel'
         | 'searchFiles'
         | 'newTab'
@@ -327,6 +329,7 @@ function buildPaletteCommands(
   ): void => {
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
   }
+  if (repoChoices(state).length > 0) action('New task…', 'newTaskHome', shortcutLabel('newTask'))
   action('New theme', 'newTheme')
   if (multiSelected >= 2) {
     for (const bulk of ['push', 'update', 'archive', 'remove'] as const)
@@ -1241,6 +1244,35 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
    * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). Dismissing the
    * dialog alone doesn't count: the task they asked for still opens.
    */
+  /** New task: back to the home screen, with the composer focused. */
+  const [composerFocus, setComposerFocus] = useState(0)
+  const goHome = (): void => {
+    if (selectedRef.current) {
+      select(null)
+      setTabs([])
+      void api.detachTerminal().catch(() => {}) // the task is no longer shown
+    }
+    setComposerFocus((n) => n + 1)
+  }
+
+  /** The composer's Start: a task named from the prompt, which becomes Claude's first message; then opens it. */
+  const startTaskFromHome = async (themeId: string, repoId: string, prompt: string): Promise<boolean> => {
+    const repo = stateRef.current.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    if (repo?.kind !== 'repo') return false
+    const name = taskNameFromPrompt(
+      prompt,
+      repo.tasks.map((t) => t.slug),
+    )
+    const next = await update(() => api.createTask(themeId, repoId, name, { prompt }))
+    if (!next) return false
+    const created = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    const task = created?.kind === 'repo' ? created.tasks.find((t) => t.name === name) : undefined
+    // Opened unless the user went elsewhere meanwhile; the new task is in the sidebar either way.
+    if (task && selectedRef.current === null && !dialogRef.current)
+      void open({ themeId, itemId: repoId, taskId: task.id })
+    return true
+  }
+
   const createTask = async (
     dialogId: number,
     themeId: string,
@@ -1624,6 +1656,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     switch (shortcut.id) {
       case 'settings':
         return openSettings()
+      case 'newTask':
+        return goHome()
       case 'openEditor':
         return openExternally('editor')
       case 'zoomIn':
@@ -1797,6 +1831,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const runCommand = ({ action }: AppCommand): void => {
     if (action.type === 'open') void open(action.target)
     else if (action.type === 'newTheme') newTheme()
+    else if (action.type === 'newTaskHome') goHome()
     else if (action.type === 'togglePanel') togglePanel()
     else if (action.type === 'searchFiles') searchInFiles()
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
@@ -1872,6 +1907,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         filterRef={sidebarFilterRef}
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
+        onNewTask={goHome}
         onRenameTheme={renameTheme}
         onCustomizeTheme={customizeTheme}
         onRemoveTheme={removeTheme}
@@ -2070,6 +2106,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             onAddRepo={startAddRepo}
             onCloneRepo={startClone}
             onOpenPalette={() => setPaletteOpen(true)}
+            onStartTask={startTaskFromHome}
+            composerFocus={composerFocus}
           />
         )}
       </main>

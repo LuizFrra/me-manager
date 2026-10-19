@@ -21,7 +21,12 @@ describe('MermaidBlock', () => {
 
     expect(await screen.findByTestId('diagram')).toBeInTheDocument()
     expect(mermaidMock.initialize).toHaveBeenCalledWith(
-      expect.objectContaining({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' }),
+      expect.objectContaining({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'base',
+        themeVariables: expect.objectContaining({ darkMode: true, primaryBorderColor: '#d97757' }),
+      }),
     )
     const [id, code] = mermaidMock.render.mock.calls[0]
     expect(id).toMatch(/^[a-zA-Z][\w-]*$/)
@@ -83,9 +88,12 @@ describe('MermaidBlock', () => {
   })
 
   // Last: it re-initializes mermaid, which the "only once" test above counts.
-  it("draws in mermaid's default theme in light mode and re-renders when the appearance changes", async () => {
+  it('draws in light colours in light mode and re-renders when the appearance changes', async () => {
     mermaidMock.render.mockImplementation(async (id: string) => ({ svg: `<svg data-testid="${id}"></svg>` }))
-    const themes = (): unknown[] => mermaidMock.initialize.mock.calls.map((c) => (c[0] as { theme: string }).theme)
+    const themes = (): unknown[] =>
+      mermaidMock.initialize.mock.calls.map(
+        (c) => (c[0] as { themeVariables: { darkMode: boolean } }).themeVariables.darkMode,
+      )
     mermaidMock.initialize.mockClear()
     const block = (appearance: 'dark' | 'light'): React.JSX.Element => (
       <AppearanceContext value={appearance}>
@@ -94,14 +102,14 @@ describe('MermaidBlock', () => {
     )
     const { rerender, container } = render(block('light'))
     await waitFor(() => expect(container.querySelector('svg')).not.toBeNull())
-    expect(themes()).toEqual(['default'])
+    expect(themes()).toEqual([false])
     expect(mermaidMock.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ securityLevel: 'strict' }))
     const first = container.querySelector('svg')!.dataset.testid
 
     rerender(block('dark'))
     expect(container.querySelector('svg')).not.toBeNull() // the old diagram stays until the new one is drawn
     await waitFor(() => expect(container.querySelector('svg')!.dataset.testid).not.toBe(first))
-    expect(themes()).toEqual(['default', 'dark'])
+    expect(themes()).toEqual([false, true])
     expect(mermaidMock.render).toHaveBeenCalledTimes(2)
   })
 })
