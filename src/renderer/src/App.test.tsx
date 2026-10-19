@@ -3444,6 +3444,30 @@ describe('App welcome and home screens', () => {
     }
   })
 
+  it("opens the New task dialog from the composer's Options…, with its name and prompt", async () => {
+    const api = repoApi()
+    let s = await api.createTheme('Work')
+    s = await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    const createTask = vi.spyOn(api, 'createTask')
+    const user = userEvent.setup()
+    render(<App api={api} />)
+    const h = within(await screen.findByRole('region', { name: 'Home' }))
+    await user.type(h.getByRole('textbox', { name: 'What should Claude work on?' }), 'Bump the deps')
+    await user.click(h.getByRole('button', { name: 'Options…' }))
+    const dialog = within(screen.getByRole('dialog', { name: /^New task/ }))
+    expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveValue('Bump the deps')
+    expect(dialog.getByRole('textbox', { name: /^Initial prompt/ })).toHaveValue('Bump the deps')
+    await user.click(dialog.getByRole('button', { name: 'Create' }))
+    await waitFor(() =>
+      expect(createTask).toHaveBeenCalledWith(
+        s.themes[0].id,
+        s.themes[0].items[0].id,
+        'Bump the deps',
+        expect.objectContaining({ prompt: 'Bump the deps' }),
+      ),
+    )
+  })
+
   it('offers no composer without a repository', async () => {
     const api = createMockApi()
     await api.createTheme('Work')

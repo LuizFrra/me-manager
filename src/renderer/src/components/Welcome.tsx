@@ -130,6 +130,8 @@ function Composer(p: {
   state: AppState
   focus: number
   onStart: (themeId: string, repoId: string, prompt: string) => Promise<boolean>
+  /** Opens the New task dialog (base branch, templates) with what the composer holds. */
+  onMoreOptions: (themeId: string, repoId: string, prompt: string) => void
 }): React.JSX.Element {
   const choices = repoChoices(p.state)
   const [choice, setChoice] = useState(() => {
@@ -210,6 +212,15 @@ function Composer(p: {
           ) : null}
         </span>
         <button
+          type="button"
+          className="composer-options"
+          title="Choose the base branch or a template"
+          disabled={busy || !current}
+          onClick={() => current && p.onMoreOptions(current.themeId, current.repoId, prompt)}
+        >
+          Options…
+        </button>
+        <button
           type="submit"
           className="composer-send"
           aria-label="Start task"
@@ -234,6 +245,7 @@ export function Home(
     onOpen: (target: Target) => void
     onOpenPalette: () => void
     onStartTask: (themeId: string, repoId: string, prompt: string) => Promise<boolean>
+    onMoreTaskOptions: (themeId: string, repoId: string, prompt: string) => void
     /** Bumped to focus the composer (New task). */
     composerFocus: number
   },
@@ -250,7 +262,12 @@ export function Home(
           {greeting(now)}
         </h1>
         {hasRepos ? (
-          <Composer state={p.state} focus={p.composerFocus} onStart={p.onStartTask} />
+          <Composer
+            state={p.state}
+            focus={p.composerFocus}
+            onStart={p.onStartTask}
+            onMoreOptions={p.onMoreTaskOptions}
+          />
         ) : (
           <p className="home-title">Add a repository to start tasks, or select a folder in the sidebar.</p>
         )}

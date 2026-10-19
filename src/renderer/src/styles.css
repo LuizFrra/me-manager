@@ -3869,6 +3869,16 @@ button.status-seg:focus-visible {
 .composer-error {
   color: var(--error-text);
 }
+.composer-options {
+  flex: none;
+  padding: 5px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  border-radius: var(--radius);
+}
+.composer-options:hover {
+  color: var(--text-strong);
+}
 .composer-send {
   flex: none;
   display: flex;
