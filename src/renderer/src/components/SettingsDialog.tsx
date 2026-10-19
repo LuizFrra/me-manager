@@ -1,7 +1,16 @@
-import { useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { FONT_SIZE_LIMITS } from '../../../shared/settings'
-import type { Settings, UpdateStrategy } from '../../../shared/types'
-import { parseForm, POLL_SECONDS, toForm, type EditableSettings, type SettingsForm } from '../lib/settingsForm'
+import { MAX_TASK_TEMPLATES, type TemplateErrors } from '../../../shared/templates'
+import { MAX_TASK_PROMPT, type Settings, type UpdateStrategy } from '../../../shared/types'
+import {
+  newTemplateKey,
+  parseForm,
+  POLL_SECONDS,
+  toForm,
+  type EditableSettings,
+  type SettingsForm,
+  type TemplateForm,
+} from '../lib/settingsForm'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 
 /**
@@ -49,6 +58,184 @@ function Field(props: {
   )
 }
 
+/** What gets focus once the template list has re-rendered: a control of one template, or the Add button. */
+type TemplateFocus = { key: string; control: 'name' | 'up' | 'down' | 'delete' } | 'add'
+
+/**
+ * The "Task templates" section: one group of fields per template, with buttons to move it up or down and to
+ * delete it, and one to add a template at the end. After each of those, focus lands on the control that took the
+ * place of the one pressed, so the keyboard user stays in the list.
+ */
+function TaskTemplatesSection(props: {
+  templates: TemplateForm[]
+  errors?: TemplateErrors[]
+  onChange: (update: (templates: TemplateForm[]) => TemplateForm[]) => void
+}): React.JSX.Element {
+  const { templates, errors, onChange } = props
+  // Set by the buttons, and applied once the list they changed has rendered.
+  const pendingFocus = useRef<TemplateFocus | null>(null)
+  const sectionRef = useRef<HTMLElement>(null)
+  const introId = useId()
+  const limitId = useId()
+  const full = templates.length >= MAX_TASK_TEMPLATES
+
+  useEffect(() => {
+    const focus = pendingFocus.current
+    if (!focus) return
+    pendingFocus.current = null
+    const root = sectionRef.current
+    if (focus === 'add') return root?.querySelector<HTMLElement>('[data-control="add"]')?.focus()
+    const control = (name: string): HTMLButtonElement | HTMLInputElement | null | undefined =>
+      root?.querySelector(`[data-template="${focus.key}"] [data-control="${name}"]`)
+    // A move to the top or the bottom turns the button pressed off: the other one takes the focus.
+    const other = focus.control === 'up' ? 'down' : focus.control === 'down' ? 'up' : focus.control
+    const target = [control(focus.control), control(other)].find((el) => el && !el.disabled)
+    target?.focus()
+  }, [templates])
+
+  const edit = (key: string, field: keyof Omit<TemplateForm, 'key'>, value: string): void =>
+    onChange((list) => list.map((t) => (t.key === key ? { ...t, [field]: value } : t)))
+  const move = (index: number, step: -1 | 1): void => {
+    onChange((list) => {
+      const next = [...list]
+      ;[next[index], next[index + step]] = [next[index + step], next[index]]
+      return next
+    })
+    pendingFocus.current = { key: templates[index].key, control: step < 0 ? 'up' : 'down' }
+  }
+  const remove = (index: number): void => {
+    onChange((list) => list.filter((_, i) => i !== index))
+    const after = templates[index + 1] ?? templates[index - 1]
+    pendingFocus.current = after ? { key: after.key, control: 'delete' } : 'add'
+  }
+  const add = (): void => {
+    const key = newTemplateKey()
+    onChange((list) => [...list, { key, name: '', taskName: '', base: '', prompt: '' }])
+    pendingFocus.current = { key, control: 'name' }
+  }
+
+  return (
+    <section className="settings-section" aria-label="Task templates" ref={sectionRef}>
+      <h3>Task templates</h3>
+      <p id={introId} className="settings-hint">
+        Presets for the New task dialog, which fills in its fields from the one you pick; they stay editable. In a task
+        name, <code>{'{date}'}</code> is today as YYYYMMDD and <code>{'{n}'}</code> the next number not used by the
+        repository&apos;s tasks, archived ones included. A base branch the repository doesn&apos;t have gives its
+        default branch instead.
+      </p>
+      {templates.length > 0 && (
+        <ol className="template-list">
+          {templates.map((t, i) => {
+            const label = t.name.trim() || String(i + 1)
+            const e = errors?.[i] ?? {}
+            return (
+              <li key={t.key} data-template={t.key}>
+                <fieldset className="template-card" aria-label={`Template ${label}`}>
+                  <div className="settings-row">
+                    <Field label="Name" error={e.name}>
+                      {(aria) => (
+                        <input
+                          {...aria}
+                          data-control="name"
+                          placeholder="e.g. Review"
+                          value={t.name}
+                          onChange={(ev) => edit(t.key, 'name', ev.target.value)}
+                        />
+                      )}
+                    </Field>
+                    <Field label="Task name" error={e.taskName}>
+                      {(aria) => (
+                        <input
+                          {...aria}
+                          className="mono"
+                          spellCheck={false}
+                          placeholder="e.g. review-{n}"
+                          value={t.taskName}
+                          onChange={(ev) => edit(t.key, 'taskName', ev.target.value)}
+                        />
+                      )}
+                    </Field>
+                  </div>
+                  <Field label="Base branch" error={e.base}>
+                    {(aria) => (
+                      <input
+                        {...aria}
+                        className="mono"
+                        spellCheck={false}
+                        placeholder="The repository's default"
+                        value={t.base}
+                        onChange={(ev) => edit(t.key, 'base', ev.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Initial prompt" error={e.prompt}>
+                    {(aria) => (
+                      <textarea
+                        {...aria}
+                        rows={3}
+                        maxLength={MAX_TASK_PROMPT}
+                        placeholder="What should Claude start with?"
+                        value={t.prompt}
+                        onChange={(ev) => edit(t.key, 'prompt', ev.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <div className="template-actions">
+                    <button
+                      type="button"
+                      data-control="up"
+                      aria-label={`Move template ${label} up`}
+                      title="Move up"
+                      disabled={i === 0}
+                      onClick={() => move(i, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      data-control="down"
+                      aria-label={`Move template ${label} down`}
+                      title="Move down"
+                      disabled={i === templates.length - 1}
+                      onClick={() => move(i, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      data-control="delete"
+                      aria-label={`Delete template ${label}`}
+                      onClick={() => remove(i)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </fieldset>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+      <div className="template-add">
+        <button
+          type="button"
+          data-control="add"
+          disabled={full}
+          aria-describedby={full ? limitId : undefined}
+          onClick={add}
+        >
+          Add template
+        </button>
+        {full && (
+          <span id={limitId} className="settings-hint">
+            At most {MAX_TASK_TEMPLATES} templates.
+          </span>
+        )}
+      </div>
+    </section>
+  )
+}
+
 const UPDATE_CHOICES: { value: UpdateStrategy; label: string; hint: string }[] = [
   { value: 'rebase', label: 'Rebase', hint: 'replays the task’s commits on top of the base (git rebase)' },
   { value: 'merge', label: 'Merge', hint: 'adds a merge commit (git merge --no-edit)' },
@@ -85,7 +272,7 @@ export function SettingsDialog(props: {
     (
       field: Exclude<
         keyof SettingsForm,
-        'notifications' | 'remoteControl' | 'skipPermissions' | 'updateStrategy' | 'showStatusBar'
+        'notifications' | 'remoteControl' | 'skipPermissions' | 'updateStrategy' | 'showStatusBar' | 'taskTemplates'
       >,
     ) =>
     (e: React.ChangeEvent<HTMLInputElement>): void =>
@@ -308,6 +495,12 @@ export function SettingsDialog(props: {
             </p>
           </div>
         </section>
+
+        <TaskTemplatesSection
+          templates={form.taskTemplates}
+          errors={errors.taskTemplates}
+          onChange={(update) => setForm((f) => ({ ...f, taskTemplates: update(f.taskTemplates) }))}
+        />
 
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel} disabled={busy}>
