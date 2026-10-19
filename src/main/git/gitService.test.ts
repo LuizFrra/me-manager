@@ -312,6 +312,56 @@ describe('removeWorktree / deleteBranch', () => {
   })
 })
 
+describe('restoreWorktree (archived tasks)', () => {
+  it('recreates the worktree from the kept branch, with its commits and no new branch', async () => {
+    const { clone, wt, branch } = await withTask()
+    await commitFile(wt, 'a.txt', 'a', 'work in progress')
+    const head = (await git(wt, 'rev-parse', 'HEAD')).trim()
+    await svc.removeWorktree(clone, wt) // archived
+    const branchNames = (): Promise<string> => git(clone, 'for-each-ref', '--format=%(refname)', 'refs/heads')
+    const branches = await branchNames()
+    await svc.restoreWorktree(clone, wt, branch)
+    expect((await git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe(branch)
+    expect((await git(wt, 'rev-parse', 'HEAD')).trim()).toBe(head)
+    expect(existsSync(join(wt, 'a.txt'))).toBe(true)
+    expect(await branchNames()).toBe(branches)
+    await expect(git(wt, 'rev-parse', '--abbrev-ref', '@{u}')).rejects.toThrow() // still no upstream
+  })
+  it('works when the worktree folder was deleted by hand, leaving a stale entry', async () => {
+    const { clone, wt, branch } = await withTask()
+    await rm(wt, { recursive: true, force: true })
+    await svc.restoreWorktree(clone, wt, branch)
+    expect(existsSync(join(wt, 'README.md'))).toBe(true)
+  })
+  it('refuses when the branch no longer exists, creating nothing', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await svc.deleteBranch(clone, branch)
+    await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(
+      `The branch "${branch}" no longer exists, so the task can't be restored`,
+    )
+    expect(existsSync(wt)).toBe(false)
+  })
+  it('refuses when something is at the worktree path, leaving it as it was', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await mkdir(wt, { recursive: true })
+    await writeFile(join(wt, 'mine.txt'), 'x')
+    await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(`${wt} is already taken`)
+    expect(existsSync(join(wt, 'mine.txt'))).toBe(true)
+  })
+  it("reports git's reason when the branch is checked out elsewhere", async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await git(clone, 'checkout', branch)
+    await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(/^git worktree add failed: fatal: /)
+  })
+  it('refuses an option-like branch', async () => {
+    const { clone, wt } = await withTask()
+    await expect(svc.restoreWorktree(clone, `${wt}-2`, '--force')).rejects.toThrow('Invalid branch: --force')
+  })
+})
+
 describe('taskStatus', () => {
   it('is clean and level with the base for a fresh task', async () => {
     const { wt, branch } = await withTask()

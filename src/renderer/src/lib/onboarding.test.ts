@@ -24,6 +24,12 @@ describe('recentTasks', () => {
     expect(recentTasks(state, 2)).toHaveLength(2)
     expect(recentTasks(appState(theme('Empty', [folder('f')])))).toEqual([])
   })
+
+  it('leaves out archived tasks', () => {
+    const archived = { ...at('new', '2026-05-01T00:00:00Z'), archivedAt: '2026-06-01T00:00:00Z' }
+    const state = appState(theme('A', [repo('api', [at('old', '2026-01-01T00:00:00Z'), archived])]))
+    expect(recentTasks(state).map((r) => r.task.name)).toEqual(['old'])
+  })
 })
 
 describe('homeTips', () => {

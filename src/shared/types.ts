@@ -8,7 +8,15 @@ export interface Task {
   createdAt: string
   /** Free-text notes about the task, at most MAX_TASK_NOTES characters; absent when there are none. */
   notes?: string
+  /**
+   * When the task was archived (ISO time; see MeManagerApi.archiveTask): its worktree and session are gone, its
+   * branch, base and notes are kept. Absent for an active task, and in state files from before archiving existed.
+   */
+  archivedAt?: string
 }
+
+/** An archived task has no worktree and no session: nothing may poll, open or attach to it until it is restored. */
+export const isArchived = (task: Task): boolean => task.archivedAt !== undefined
 
 export const MAX_TASK_NOTES = 2000
 
@@ -266,6 +274,8 @@ export interface UiState {
   panelWidth?: number
   /** The sidebar filter's text; absent when empty. */
   sidebarFilter?: string
+  /** Ids of repos whose "Archived" group is expanded (each starts collapsed); absent when there are none. */
+  archivedOpen?: string[]
 }
 
 /** The API the renderer sees as `window.api`. */
@@ -342,8 +352,29 @@ export interface MeManagerApi {
   renameTask(themeId: string, repoId: string, taskId: string, name: string): Promise<AppState>
   /** Up to MAX_TASK_NOTES characters; an empty string removes the notes. */
   setTaskNotes(themeId: string, repoId: string, taskId: string, notes: string): Promise<AppState>
+  /**
+   * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
+   * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.
+   */
   checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork>
+  /**
+   * Kills the session, removes the worktree and drops the task, deleting its branch too when asked. An archived
+   * task has no worktree or session left, so only the branch (when asked) and the task go.
+   */
   removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState>
+  /**
+   * Kills the task's session and removes its worktree, keeping its branch; the task stays, with `archivedAt` set.
+   * Refuses ("Commit or discard the changes first") while the worktree has uncommitted or untracked files, or
+   * could not be checked, unless `force`, which discards them. Refused for an archived task, and when the original
+   * repository is gone (its branch with it).
+   */
+  archiveTask(themeId: string, repoId: string, taskId: string, force?: boolean): Promise<AppState>
+  /**
+   * Restores an archived task: recreates its worktree at its usual path from its kept branch (no new branch) and
+   * clears `archivedAt`. The session starts when the task is next opened, as for any task. Refuses when the branch
+   * no longer exists or something is at the worktree path.
+   */
+  unarchiveTask(themeId: string, repoId: string, taskId: string): Promise<AppState>
 
   openTarget(target: Target): Promise<TabInfo[]>
   listTabs(target: Target): Promise<TabInfo[]>

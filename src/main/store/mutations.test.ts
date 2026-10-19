@@ -233,6 +233,33 @@ describe('tasks', () => {
     const added = m.addTask(s, themeId, repoId, task('fix'))
     expect(() => m.addTask(added, themeId, repoId, task('fix'))).toThrow(/already exists/)
   })
+  it('archives a task, keeping its branch, base and notes, and restores it', () => {
+    const { s, themeId, repoId } = setup()
+    const added = m.setTaskNotes(m.addTask(s, themeId, repoId, task('fix')), themeId, repoId, 'task-fix', 'wip')
+    const archived = m.archiveTask(added, themeId, repoId, 'task-fix', '2026-02-01T10:00:00.000Z')
+    expect(m.getTask(archived, themeId, repoId, 'task-fix')).toEqual({
+      ...task('fix'),
+      notes: 'wip',
+      archivedAt: '2026-02-01T10:00:00.000Z',
+    })
+    expect(m.getTask(added, themeId, repoId, 'task-fix').archivedAt).toBeUndefined() // the input is untouched
+    const restored = m.unarchiveTask(archived, themeId, repoId, 'task-fix')
+    expect(m.getTask(restored, themeId, repoId, 'task-fix')).toEqual({ ...task('fix'), notes: 'wip' })
+  })
+  it('refuses to archive an archived task or restore an active one', () => {
+    const { s, themeId, repoId } = setup()
+    const added = m.addTask(s, themeId, repoId, task('fix'))
+    expect(() => m.unarchiveTask(added, themeId, repoId, 'task-fix')).toThrow('"fix" is not archived')
+    const archived = m.archiveTask(added, themeId, repoId, 'task-fix', '2026-02-01T10:00:00.000Z')
+    expect(() => m.archiveTask(archived, themeId, repoId, 'task-fix', 'x')).toThrow('"fix" is already archived')
+  })
+  it('keeps an archived task’s name and slug taken, saying it is archived', () => {
+    const { s, themeId, repoId } = setup()
+    const archived = m.archiveTask(m.addTask(s, themeId, repoId, task('fix')), themeId, repoId, 'task-fix', 'x')
+    expect(() => m.addTask(archived, themeId, repoId, { ...task('fix'), id: 'other' })).toThrow(
+      'A task named "fix" already exists in my-api (archived)',
+    )
+  })
   it('getRepo rejects folders', () => {
     const { s, themeId } = setup()
     const next = m.addFolder(s, themeId, '/docs/notes')

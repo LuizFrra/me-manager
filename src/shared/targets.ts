@@ -1,4 +1,4 @@
-import type { AppState, Target } from './types'
+import { isArchived, type AppState, type Target } from './types'
 
 export interface TargetEntry {
   target: Target
@@ -9,7 +9,10 @@ export interface TargetEntry {
   icon?: string
 }
 
-/** Every task and folder, in sidebar order (themes, then their items, then a repo's tasks). */
+/**
+ * Every task and folder, in sidebar order (themes, then their items, then a repo's tasks). Archived tasks are left
+ * out: they have no session or worktree, so nothing that switches to, polls or notifies about targets may see them.
+ */
 export function allTargets(state: AppState): TargetEntry[] {
   const entries: TargetEntry[] = []
   for (const theme of state.themes)
@@ -23,13 +26,15 @@ export function allTargets(state: AppState): TargetEntry[] {
         })
         continue
       }
-      for (const task of item.tasks)
+      for (const task of item.tasks) {
+        if (isArchived(task)) continue
         entries.push({
           target: { themeId: theme.id, itemId: item.id, taskId: task.id },
           kind: 'task',
           label: `${theme.name} › ${item.name} › ${task.name}`,
           ...(theme.icon ? { icon: theme.icon } : {}),
         })
+      }
     }
   return entries
 }

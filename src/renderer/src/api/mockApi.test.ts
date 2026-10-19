@@ -13,6 +13,21 @@ describe('createMockApi', () => {
     const task = s.themes[0].items[0].kind === 'repo' ? s.themes[0].items[0].tasks[0] : null
     expect(task).toMatchObject({ name: 'fix login', branch: 'claude/client-x/fix-login' })
   })
+  it('archives and restores a task, refusing each twice', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('T')
+    const themeId = s.themes[0].id
+    s = await api.addRepo(themeId, '/code/r')
+    const repoId = s.themes[0].items[0].id
+    s = await api.createTask(themeId, repoId, 'fix')
+    const taskId = s.themes[0].items[0].kind === 'repo' ? s.themes[0].items[0].tasks[0].id : ''
+    s = await api.archiveTask(themeId, repoId, taskId)
+    expect(s.themes[0].items[0]).toMatchObject({ tasks: [{ archivedAt: expect.any(String) }] })
+    await expect(api.archiveTask(themeId, repoId, taskId)).rejects.toThrow('"fix" is already archived')
+    s = await api.unarchiveTask(themeId, repoId, taskId)
+    expect(s.themes[0].items[0]).not.toMatchObject({ tasks: [{ archivedAt: expect.anything() }] })
+    await expect(api.unarchiveTask(themeId, repoId, taskId)).rejects.toThrow('"fix" is not archived')
+  })
   it('lists demo branches and creates tasks from a chosen one', async () => {
     const api = createMockApi()
     let s = await api.createTheme('T')

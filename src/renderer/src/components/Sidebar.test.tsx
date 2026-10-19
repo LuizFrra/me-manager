@@ -30,6 +30,10 @@ function renderSidebar(patch: Partial<SidebarProps> = {}): void {
       onAddTask={vi.fn()}
       onRenameTask={vi.fn()}
       onRemoveTask={vi.fn()}
+      onArchiveTask={vi.fn()}
+      onToggleArchived={vi.fn()}
+      onRestoreTask={vi.fn()}
+      onDeleteArchivedTask={vi.fn()}
       onOpenSettings={vi.fn()}
       onOpenUsage={vi.fn()}
       {...patch}
@@ -135,5 +139,71 @@ describe('Sidebar theme style', () => {
     renderSidebar({ onCustomizeTheme })
     await userEvent.setup().click(screen.getByRole('button', { name: 'Customize theme Client' }))
     expect(onCustomizeTheme).toHaveBeenCalledWith('Client')
+  })
+})
+
+describe('Sidebar archived tasks', () => {
+  const old = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
+  const older = { ...task('older'), archivedAt: '2026-01-15T10:00:00.000Z' }
+  const withArchived = appState(theme('Client', [repo('api', [task('fix'), old, older]), repo('web', [task('ui')])]))
+  const user = (): ReturnType<typeof userEvent.setup> => userEvent.setup()
+
+  it('archives an active task from its row', async () => {
+    const onArchiveTask = vi.fn()
+    renderSidebar({ onArchiveTask })
+    await user().click(screen.getByRole('button', { name: 'Archive task fix' }))
+    expect(onArchiveTask).toHaveBeenCalledWith('Client', 'api', 'fix', 'fix')
+  })
+
+  it('keeps archived tasks out of the task list, in a collapsed "Archived (N)" group', async () => {
+    const onToggleArchived = vi.fn()
+    renderSidebar({ state: withArchived, onToggleArchived })
+    expect(screen.getByRole('button', { name: '○ fix' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /\bold/ })).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: '▶ Archived (2)' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getAllByRole('button', { name: /Archived/ })).toHaveLength(1) // none for "web"
+    await user().click(toggle)
+    expect(onToggleArchived).toHaveBeenCalledWith('api')
+  })
+
+  it('lists them when expanded, with Restore and Delete, and selects one on click', async () => {
+    const onSelect = vi.fn()
+    const onRestoreTask = vi.fn()
+    const onDeleteArchivedTask = vi.fn()
+    renderSidebar({
+      state: withArchived,
+      archivedOpen: new Set(['api']),
+      onSelect,
+      onRestoreTask,
+      onDeleteArchivedTask,
+    })
+    expect(screen.getByRole('button', { name: '▼ Archived (2)' })).toHaveAttribute('aria-expanded', 'true')
+    const u = user()
+    await u.click(screen.getByRole('button', { name: 'old' }))
+    expect(onSelect).toHaveBeenCalledWith({ themeId: 'Client', itemId: 'api', taskId: 'old' })
+    await u.click(screen.getByRole('button', { name: 'Restore task older' }))
+    expect(onRestoreTask).toHaveBeenCalledWith('Client', 'api', 'older', 'older')
+    await u.click(screen.getByRole('button', { name: 'Delete archived task old' }))
+    expect(onDeleteArchivedTask).toHaveBeenCalledWith('Client', 'api', 'old', 'old')
+    expect(screen.queryByRole('button', { name: 'Archive task old' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename task old' })).not.toBeInTheDocument()
+  })
+
+  it('marks the selected archived task', () => {
+    renderSidebar({
+      state: withArchived,
+      archivedOpen: new Set(['api']),
+      selected: { themeId: 'Client', itemId: 'api', taskId: 'old' },
+    })
+    expect(screen.getByRole('button', { name: 'old' }).closest('.row')).toHaveClass('selected')
+  })
+
+  it('shows matching archived tasks while filtering, with their group expanded', () => {
+    renderSidebar({ state: withArchived, filter: 'older' })
+    expect(screen.getByRole('button', { name: '▼ Archived (1)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'older' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'old' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '○ fix' })).not.toBeInTheDocument()
   })
 })

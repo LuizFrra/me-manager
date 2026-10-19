@@ -1,4 +1,4 @@
-import type { AppState, Target, Task, Theme } from '../../../shared/types'
+import { isArchived, type AppState, type Target, type Task, type Theme } from '../../../shared/types'
 import { shortcutLabel } from './shortcuts'
 
 export interface RecentTask {
@@ -8,14 +8,20 @@ export interface RecentTask {
   repoName: string
 }
 
-/** The most recently created tasks across every theme, newest first: what the home screen offers to reopen. */
+/** The most recently created active tasks across every theme, newest first: what the home screen offers to reopen. */
 export function recentTasks(state: AppState, limit = 5): RecentTask[] {
   const all: RecentTask[] = []
   for (const theme of state.themes)
     for (const item of theme.items) {
       if (item.kind !== 'repo') continue
       for (const task of item.tasks)
-        all.push({ target: { themeId: theme.id, itemId: item.id, taskId: task.id }, task, theme, repoName: item.name })
+        if (!isArchived(task))
+          all.push({
+            target: { themeId: theme.id, itemId: item.id, taskId: task.id },
+            task,
+            theme,
+            repoName: item.name,
+          })
     }
   const time = (t: Task): number => Date.parse(t.createdAt) || 0
   return all.sort((a, b) => time(b.task) - time(a.task)).slice(0, limit)
