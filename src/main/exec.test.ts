@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CommandError, run, streamNul } from './exec'
+import { CommandError, run, runTail, streamNul } from './exec'
 
 describe('run', () => {
   it('returns stdout', async () => {
@@ -109,5 +109,55 @@ describe('streamNul', () => {
     expect(err).toBeInstanceOf(CommandError)
     expect(err.message).toContain('timed out')
     expect(err.timedOut).toBe(true)
+  })
+})
+
+describe('runTail', () => {
+  const node = (code: string): [string, string[]] => [process.execPath, ['-e', code]]
+
+  it('resolves with all of stdout when it fits', async () => {
+    const [file, args] = node('process.stdout.write("one\\ntwo\\n")')
+    await expect(runTail(file, args, 1024)).resolves.toEqual({ stdout: 'one\ntwo\n', truncated: false })
+  })
+
+  it('keeps the end of a larger output, from the start of a line, and says it was cut', async () => {
+    // 2,000 lines of 10 bytes, written in many chunks; only the last ~1 KB is kept.
+    const [file, args] = node(
+      'for (let i = 0; i < 2000; i++) process.stdout.write(`line ${String(i).padStart(4, "0")}\\n`)',
+    )
+    const { stdout, truncated } = await runTail(file, args, 1024)
+    expect(truncated).toBe(true)
+    expect(Buffer.byteLength(stdout)).toBeLessThanOrEqual(1024)
+    const lines = stdout.split('\n')
+    expect(lines.pop()).toBe('')
+    expect(lines.at(-1)).toBe('line 1999')
+    expect(lines.every((l) => /^line \d{4}$/.test(l))).toBe(true) // whole lines only
+    expect(lines.length).toBeGreaterThan(90)
+  })
+
+  it('never splits a multi-byte character when it cuts', async () => {
+    const [file, args] = node('for (let i = 0; i < 500; i++) process.stdout.write("éééé\\n")')
+    const { stdout, truncated } = await runTail(file, args, 100)
+    expect(truncated).toBe(true)
+    expect(stdout).toMatch(/^(éééé\n)+$/)
+    // One line longer than the cap: its end, from a whole character.
+    const [one, oneArgs] = node('process.stdout.write("é".repeat(500))')
+    const long = await runTail(one, oneArgs, 101)
+    expect(long.truncated).toBe(true)
+    expect(long.stdout).toBe('é'.repeat(50))
+  })
+
+  it('rejects with stderr on a non-zero exit, explains a missing binary and honors the timeout', async () => {
+    const [file, args] = node('console.error("boom"); process.exit(3)')
+    const err = await runTail(file, args, 1024).catch((e) => e)
+    expect(err).toBeInstanceOf(CommandError)
+    expect(err.message).toContain('boom')
+    expect(err.code).toBe(3)
+    const missing = await runTail('definitely-not-a-real-binary-xyz', [], 1024).catch((e) => e)
+    expect(missing.message).toContain('not found')
+    const [slow, slowArgs] = node('setTimeout(() => {}, 10000)')
+    const late = await runTail(slow, slowArgs, 1024, { timeoutMs: 100 }).catch((e) => e)
+    expect(late).toBeInstanceOf(CommandError)
+    expect(late.timedOut).toBe(true)
   })
 })
