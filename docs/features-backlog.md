@@ -63,6 +63,6 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 36 | Usage budgets: optional cost limits per task and per day, a warning toast or notification when crossed, and a badge in the sidebar | feature | todo |
 | 37 | Drag and drop: reorder themes, items and tasks in the sidebar, persisted | ux | todo |
 | 38 | Bulk actions: multi-select tasks (Shift/Ctrl-click) to push, update from base or remove together, with one confirmation | feature | todo |
-| 39 | Save the terminal transcript: export a tab's tmux scrollback to a file, or copy it | feature | in progress (feat/f39-transcript) |
+| 39 | Save the terminal transcript: export a tab's tmux scrollback to a file, or copy it | feature | done (merge of feat/f39-transcript) |
 | 40 | Appearance: light theme and system-follow option, with the terminal colors matching | ux | todo |
 | 41 | Portuguese (pt-BR) UI translation, with a language setting (English default) | ux | todo |
