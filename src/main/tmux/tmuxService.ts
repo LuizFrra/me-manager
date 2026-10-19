@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { TabInfo } from '../../shared/types'
 import type { TmuxApi } from '../contracts'
-import { CommandError, run, type RunOptions } from '../exec'
+import { CommandError, run, runTail, type RunOptions } from '../exec'
 import { TMUX_CONF } from './tmuxConf'
 
 /**
@@ -31,6 +31,17 @@ export function parseWindowActivity(out: string, windowName: string): Record<str
     result[session] = Math.max(result[session] ?? 0, at)
   }
   return result
+}
+
+/**
+ * A pane capture as a transcript: each line without its trailing spaces (`-J` keeps them, and full-screen apps pad
+ * with them), without the blank lines below the last output (the rest of the screen), and ending with one
+ * newline; '' when nothing is left.
+ */
+export function tidyCapture(text: string): string {
+  const lines = text.split('\n').map((line) => line.replace(/[ \t]+$/, ''))
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines.length > 0 ? `${lines.join('\n')}\n` : ''
 }
 
 /** sendText waits this long between the text and Enter, so the app reads Enter as a key press, not pasted text. */
@@ -110,6 +121,29 @@ export class TmuxService implements TmuxApi {
       if (err instanceof CommandError) return null
       throw err
     }
+  }
+
+  async captureHistory(
+    session: string,
+    index: number,
+    maxBytes: number,
+  ): Promise<{ text: string; truncated: boolean }> {
+    // By window id (`@3`), never `=session:index`: tmux falls back to matching window *names* (`9` or `9…`) when
+    // there is no window at that index.
+    const out = await this.tmux(['list-windows', '-t', `=${session}`, '-F', '#{window_index}\t#{window_id}'])
+    const id = out
+      .split('\n')
+      .map((line) => line.split('\t'))
+      .find(([i]) => i === String(index))?.[1]
+    if (!id || !/^@\d+$/.test(id)) throw new Error(`No tab ${index} in ${session}`)
+    // -J joins wrapped lines; without -e there are no escape sequences; -S - -E -: the whole history and screen.
+    const { stdout, truncated } = await runTail(
+      'tmux',
+      [...this.baseArgs(), 'capture-pane', '-p', '-J', '-S', '-', '-E', '-', '-t', id],
+      maxBytes,
+      { timeoutMs: this.timeoutMs },
+    )
+    return { text: tidyCapture(stdout), truncated }
   }
 
   async sendText(session: string, windowName: string, text: string): Promise<void> {

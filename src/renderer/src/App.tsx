@@ -17,7 +17,7 @@ import type {
   UpdateResult,
   UsageSummary,
 } from '../../shared/types'
-import { hasUnsavedWork } from '../../shared/types'
+import { hasUnsavedWork, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { GH_INSTALL_HINT } from '../../shared/git'
@@ -123,6 +123,8 @@ type AppAction =
         | 'update'
         | 'toggleStatusBar'
         | 'customizeTheme'
+        | 'copyTranscript'
+        | 'saveTranscript'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -142,6 +144,10 @@ export const UI_SAVE_MS = 500
 /** The header's usage badge refreshes this often: reading transcripts costs more than the status poll. */
 export const USAGE_POLL_MS = 10_000
 
+/** For a transcript's confirmation: a note when it holds only the end of the scrollback. */
+const transcriptCut = ({ truncated }: { truncated: boolean }): string =>
+  truncated ? ` (the last ${MAX_TRANSCRIPT_BYTES / (1024 * 1024)} MB of the scrollback)` : ''
+
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
 
 /** What "copy …" offers for `target`: its branch, path, attach command. */
@@ -150,10 +156,11 @@ function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | n
   return found ? copyEntries(found, tmuxSocket) : []
 }
 
-/** The palette's entries: every task and folder, then the actions that apply to the selection. */
+/** The palette's entries: every task and folder, then the actions that apply to the selection (and its tab). */
 function buildPaletteCommands(
   state: AppState,
   selected: Target | null,
+  hasActiveTab: boolean,
   ghAvailable: boolean,
   tmuxSocket: string | null,
 ): AppCommand[] {
@@ -173,6 +180,10 @@ function buildPaletteCommands(
     action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
     action('New shell tab', 'newTab', shortcutLabel('newTab'))
     action('Restart Claude', 'restartClaude')
+    if (hasActiveTab) {
+      action('Copy transcript of current tab', 'copyTranscript')
+      action('Save transcript of current tab', 'saveTranscript')
+    }
     action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
     action('Reveal in file manager', 'fileManager')
     action('Toggle status bar', 'toggleStatusBar')
@@ -991,11 +1002,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [api, selected],
   )
 
+  const hasActiveTab = tabs.some((t) => t.active)
   // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
   // to 50k files) whenever its commands change.
   const paletteCommands = useMemo(
-    () => (paletteOpen ? buildPaletteCommands(state, selected, gitTools.gh, tmuxSocket) : []),
-    [paletteOpen, state, selected, gitTools.gh, tmuxSocket],
+    () => (paletteOpen ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket) : []),
+    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket],
   )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
@@ -1050,6 +1062,32 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (entry) void copy({ ...entry, text: branch })
   }
 
+  /** The selected target with the tab at `index`, or its active tab; null when there is none. */
+  const transcriptTab = (index?: number): { target: Target; index: number } | null => {
+    const target = selectedRef.current
+    const tab = index ?? tabs.find((t) => t.active)?.index
+    return target && tab !== undefined ? { target, index: tab } : null
+  }
+
+  const copyTranscript = async (index?: number): Promise<void> => {
+    const tab = transcriptTab(index)
+    const transcript = tab && (await attempt(() => api.copyTranscript(tab.target, tab.index)))
+    if (!transcript) return
+    try {
+      await navigator.clipboard.writeText(transcript.text)
+    } catch {
+      return showError('Could not copy the transcript to the clipboard')
+    }
+    showInfo(`Copied ${plural(transcript.lines, 'line')}${transcriptCut(transcript)}`)
+  }
+
+  /** Main shows the save dialog; null: the user cancelled it. */
+  const saveTranscript = async (index?: number): Promise<void> => {
+    const tab = transcriptTab(index)
+    const saved = tab && (await attempt(() => api.saveTranscript(tab.target, tab.index)))
+    if (saved) showInfo(`Saved to ${saved.path}${transcriptCut(saved)}`)
+  }
+
   const renameSelectedTask = (): void => {
     const target = selectedRef.current
     const task = target ? resolveTarget(state, target)?.task : undefined
@@ -1073,6 +1111,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'openPr') void openPullRequest()
     else if (action.type === 'update') void updateFromBase()
     else if (action.type === 'toggleStatusBar') toggleStatusBar()
+    else if (action.type === 'copyTranscript') void copyTranscript()
+    else if (action.type === 'saveTranscript') void saveTranscript()
     else if (action.type === 'customizeTheme') {
       if (selectedRef.current) customizeTheme(selectedRef.current.themeId)
     } else if (action.type === 'copy') {
@@ -1165,6 +1205,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onClose={(index) => void tabAction((t) => api.closeTab(t, index))}
               onNew={() => void tabAction((t) => api.newTab(t))}
               onRestartClaude={() => void tabAction((t) => api.restartClaude(t))}
+              onCopyTranscript={(index) => void copyTranscript(index)}
+              onSaveTranscript={(index) => void saveTranscript(index)}
               panelOpen={panel.open}
               onTogglePanel={togglePanel}
             />

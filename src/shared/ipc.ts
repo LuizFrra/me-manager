@@ -34,6 +34,8 @@ export const INVOKE_METHODS = [
   'selectTab',
   'closeTab',
   'restartClaude',
+  'copyTranscript',
+  'saveTranscript',
   'listFiles',
   'readFile',
   'readImage',

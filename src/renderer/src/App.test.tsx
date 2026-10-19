@@ -469,6 +469,9 @@ describe('App command palette', () => {
     const user = userEvent.setup()
     let ptyExit: (code: number) => void = () => {}
     const api = repoApi({
+      // No tabs before the session ends either: the tab actions the palette lists stay the same.
+      openTarget: async () => [],
+      listTabs: async () => [],
       onPtyExit: (cb) => {
         ptyExit = cb
         return () => {}
@@ -992,6 +995,125 @@ describe('App copy actions', () => {
     await createRepoAndTask(user)
     await user.click(within(header()).getByRole('button', { name: 'Copy branch name' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not copy the branch name to the clipboard')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+})
+
+describe('App transcripts', () => {
+  type WriteText = (text: string) => Promise<void>
+  /** Installed after userEvent.setup(), which puts its own clipboard stub on navigator. */
+  function mockClipboard(writeText = vi.fn<WriteText>(async () => {})): typeof writeText {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    return writeText
+  }
+  const TWO_TABS: TabInfo[] = [
+    { index: 0, name: 'claude', active: false },
+    { index: 2, name: 'shell', active: true },
+  ]
+  const transcript = { text: 'one\ntwo\nthree\n', lines: 3, truncated: false }
+  const tabMenu = (name: string): HTMLElement => {
+    fireEvent.contextMenu(screen.getByRole('tab', { name }))
+    return screen.getByRole('menu', { name: `Tab ${name}` })
+  }
+  const runFromPalette = async (user: UserEvent, label: string): Promise<void> => {
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    await user.type(await screen.findByRole('combobox'), label)
+    expect(screen.getAllByRole('option')[0]).toHaveAccessibleName(label)
+    await user.keyboard('{Enter}')
+  }
+
+  it("copies a tab's transcript from its menu and says how many lines", async () => {
+    const user = userEvent.setup()
+    const writeText = mockClipboard()
+    const copyTranscript = vi.fn(async () => transcript)
+    render(<App api={repoApi({ copyTranscript, openTarget: async () => TWO_TABS, listTabs: async () => TWO_TABS })} />)
+    await createRepoAndTask(user)
+    await user.click(within(tabMenu('claude')).getByRole('menuitem', { name: 'Copy transcript' }))
+    expect(copyTranscript).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }), 0)
+    expect(writeText).toHaveBeenCalledWith('one\ntwo\nthree\n')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied 3 lines')
+  })
+
+  it("saves a tab's transcript from its menu and says where", async () => {
+    const user = userEvent.setup()
+    const saveTranscript = vi.fn(async () => ({ path: '/home/me/Downloads/x-shell.txt', lines: 3, truncated: false }))
+    render(<App api={repoApi({ saveTranscript, openTarget: async () => TWO_TABS, listTabs: async () => TWO_TABS })} />)
+    await createRepoAndTask(user)
+    await user.click(within(tabMenu('shell')).getByRole('menuitem', { name: 'Save transcript…' }))
+    expect(saveTranscript).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }), 2)
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved to /home/me/Downloads/x-shell.txt')
+  })
+
+  it('acts on the current tab from the palette', async () => {
+    const user = userEvent.setup()
+    const writeText = mockClipboard()
+    const copyTranscript = vi.fn(async () => ({ ...transcript, lines: 1 }))
+    const saveTranscript = vi.fn(async () => ({ path: '/tmp/t.txt', lines: 1, truncated: false }))
+    render(
+      <App
+        api={repoApi({
+          copyTranscript,
+          saveTranscript,
+          openTarget: async () => TWO_TABS,
+          listTabs: async () => TWO_TABS,
+        })}
+      />,
+    )
+    await createRepoAndTask(user)
+    await runFromPalette(user, 'Copy transcript of current tab')
+    expect(copyTranscript).toHaveBeenLastCalledWith(expect.anything(), 2)
+    expect(writeText).toHaveBeenCalled()
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied 1 line')
+    await runFromPalette(user, 'Save transcript of current tab')
+    expect(saveTranscript).toHaveBeenLastCalledWith(expect.anything(), 2)
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved to /tmp/t.txt')
+  })
+
+  it('offers no transcript actions without a tab', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi({ openTarget: async () => [], listTabs: async () => [] })} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    await user.type(await screen.findByRole('combobox'), 'transcript')
+    expect(screen.queryByRole('option', { name: /transcript/ })).not.toBeInTheDocument()
+  })
+
+  it('says when the transcript holds only the most recent part of the scrollback', async () => {
+    const user = userEvent.setup()
+    mockClipboard()
+    const copyTranscript = vi.fn(async () => ({ ...transcript, truncated: true }))
+    const saveTranscript = vi.fn(async () => ({ path: '/tmp/t.txt', lines: 3, truncated: true }))
+    render(<App api={repoApi({ copyTranscript, saveTranscript })} />)
+    await createRepoAndTask(user)
+    await user.click(within(tabMenu('claude')).getByRole('menuitem', { name: 'Copy transcript' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied 3 lines (the last 20 MB of the scrollback)')
+    await user.click(within(tabMenu('claude')).getByRole('menuitem', { name: 'Save transcript…' }))
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Saved to /tmp/t.txt (the last 20 MB of the scrollback)',
+    )
+  })
+
+  it('shows nothing when the save dialog is cancelled, and errors as error toasts', async () => {
+    const user = userEvent.setup()
+    mockClipboard(vi.fn<WriteText>(async () => Promise.reject(new Error('denied'))))
+    let save: () => Promise<null> = async () => null
+    const api = repoApi({ saveTranscript: () => save() })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(within(tabMenu('claude')).getByRole('menuitem', { name: 'Save transcript…' }))
+    await act(async () => {})
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    save = async () =>
+      Promise.reject(new Error("Error invoking remote method 'api:saveTranscript': Error: That tab is no longer open"))
+    await user.click(within(tabMenu('claude')).getByRole('menuitem', { name: 'Save transcript…' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^That tab is no longer open/)
+
+    await user.click(within(tabMenu('claude')).getByRole('menuitem', { name: 'Copy transcript' }))
+    await waitFor(() =>
+      expect(screen.getAllByRole('alert').at(-1)).toHaveTextContent('Could not copy the transcript to the clipboard'),
+    )
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 })

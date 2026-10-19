@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join } from 'node:path'
 import { checkCloneName, checkCloneUrl } from '../../shared/clone'
-import { MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT } from '../../shared/types'
+import { MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
 import type {
   AppState,
   BranchList,
@@ -28,6 +28,7 @@ import type {
   TaskGitStatus,
   Theme,
   ThemeStyle,
+  Transcript,
   UnsavedWork,
   UpdateResult,
   UiState,
@@ -42,12 +43,13 @@ import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
 import { mapLimit } from '../concurrency'
-import type { AppService, OrchestratorDeps, UsageSummaries } from '../contracts'
+import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries } from '../contracts'
 import { baseBranchName } from '../git/gh'
 import { taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
 import * as m from '../store/mutations'
 import { isRecentlyActive, looksWaiting } from '../tmux/activity'
+import { transcriptFileName } from '../transcript'
 
 /**
  * The shell string tmux runs to start Claude with the user's extra arguments (Settings.claudeArgs). tmux hands
@@ -652,6 +654,34 @@ export class Orchestrator implements AppService {
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
     else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
     return this.deps.tmux.listWindows(session)
+  }
+
+  // Transcripts. Read-only, so these skip the mutation queue.
+
+  async copyTranscript(target: Target, index: number): Promise<Transcript> {
+    return (await this.captureTranscript(target, index)).transcript
+  }
+
+  /**
+   * The index comes from the renderer: it must be one of the session's windows, so tmux never resolves it some
+   * other way. The file name uses the theme's and the task's (or folder's) slugs and the tab's name.
+   */
+  async captureTranscript(target: Target, index: number): Promise<CapturedTranscript> {
+    const theme = m.getTheme(this.state, target.themeId)
+    const item = m.getItem(this.state, target.themeId, target.itemId)
+    const { session } = this.resolve(target)
+    const tabs = Number.isInteger(index) ? await this.deps.tmux.listWindows(session).catch(() => [] as TabInfo[]) : []
+    const tab = tabs.find((t) => t.index === index)
+    if (!tab) throw new Error('That tab is no longer open')
+    const { text, truncated } = await this.deps.tmux.captureHistory(session, index, MAX_TRANSCRIPT_BYTES)
+    let lines = 0
+    for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) lines++
+    const name =
+      item.kind === 'repo' && target.taskId ? m.getTask(this.state, theme.id, item.id, target.taskId).slug : item.slug
+    return {
+      transcript: { text, lines, truncated },
+      fileName: transcriptFileName({ theme: theme.slug, target: name, tab: tab.name }, new Date(this.now())),
+    }
   }
 
   // Git actions on a task's worktree. Each runs on the task's own queue and refreshes its git status after.

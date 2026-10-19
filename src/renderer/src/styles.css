@@ -3077,3 +3077,26 @@ button.status-seg:focus-visible {
 .choose-theme-list button:hover {
   border-color: #4fa3ff88;
 }
+
+/* ---------- Tab menu ---------- */
+.tab-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px #00000066;
+}
+.tab-menu button {
+  padding: 5px 10px;
+  text-align: left;
+}
+.tab-menu button:focus-visible,
+.tab-menu button:focus {
+  outline: none;
+  background: var(--selected);
+}
