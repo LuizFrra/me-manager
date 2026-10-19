@@ -128,7 +128,7 @@ button:disabled {
   gap: 4px;
   padding: 6px 8px;
   border-top: 1px solid var(--border);
-  background: #4fa3ff14;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .bulk-bar-count {
   font-weight: 600;
@@ -211,7 +211,10 @@ button:disabled {
 }
 /* A task in the multi-selection: a stripe, apart from the current task's fill (a row can be both). */
 .row.multi-selected {
-  background-image: linear-gradient(#4fa3ff14, #4fa3ff14);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--accent) 8%, transparent),
+    color-mix(in srgb, var(--accent) 8%, transparent)
+  );
   box-shadow: inset 3px 0 0 var(--accent);
 }
 /* Shift+click selects a range of tasks, not the rows' text. */
@@ -3719,7 +3722,7 @@ button.status-seg:focus-visible {
 
 /* ---------- Budgets ---------- */
 :root {
-  --budget-warn: #d29922;
+  --budget-warn: var(--st-m); /* the same amber as a modified file, in each appearance */
   --budget-over: var(--danger);
 }
 .usage-badge.budget-warn {
