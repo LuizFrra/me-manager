@@ -31,6 +31,7 @@ export type ShortcutId =
   | 'openEditor'
   | 'usage'
   | 'newTask'
+  | 'sidebar'
   | 'target'
   | 'newTab'
   | 'closeTab'
@@ -108,6 +109,7 @@ const SHORTCUTS: ShortcutDef[] = [
   { id: 'openEditor', description: 'Open in editor', chords: [letter(true, 'O')] },
   { id: 'usage', description: 'Claude usage and cost', chords: [letter(true, 'U')] },
   { id: 'newTask', description: 'New task', chords: [letter(true, 'N')] },
+  { id: 'sidebar', description: 'Show or hide the sidebar', chords: [letter(true, 'B')] },
   {
     id: 'target',
     description: 'Go to the 1st…9th task or folder in the sidebar',

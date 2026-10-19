@@ -348,6 +348,8 @@ export interface UiState {
    * Names only; one that no longer names a template is ignored. Absent when there are none.
    */
   lastTemplates?: Record<string, string>
+  /** True while the sidebar is collapsed to its rail of icons; absent when it is shown. */
+  sidebarCollapsed?: true
 }
 
 /** The API the renderer sees as `window.api`. */
