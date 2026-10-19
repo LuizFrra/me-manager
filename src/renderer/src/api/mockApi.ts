@@ -418,6 +418,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     onPtyData: () => () => {},
     onPtyExit: () => () => {},
     onSelectTarget: () => () => {},
+    onBudgetAlert: () => () => {},
   }
   return { ...api, ...overrides }
 }

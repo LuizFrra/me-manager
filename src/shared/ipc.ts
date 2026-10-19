@@ -79,3 +79,5 @@ export const PTY_DATA = 'pty:data'
 export const PTY_EXIT = 'pty:exit'
 /** Main → renderer: select this target (a desktop notification was clicked). */
 export const SELECT_TARGET = 'app:select-target'
+/** Main → renderer: a budget reached a threshold (see MeManagerApi.onBudgetAlert). */
+export const BUDGET_ALERT = 'app:budget-alert'

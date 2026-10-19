@@ -587,6 +587,11 @@ export interface MeManagerApi {
   onPtyExit(cb: (code: number) => void): () => void
   /** Main asks to select a target (a desktop notification for it was clicked). Returns an unsubscribe function. */
   onSelectTarget(cb: (target: Target) => void): () => void
+  /**
+   * A budget reached 80% or 100% while the window was focused (a desktop notification is sent too, if
+   * notifications are on). Returns an unsubscribe function.
+   */
+  onBudgetAlert(cb: (alert: BudgetAlert) => void): () => void
 }
 
 /** The files of a target, as relative POSIX paths, sorted. */
@@ -734,6 +739,17 @@ export interface BudgetReport {
    * cost against it, by task id.
    */
   tasks: Record<string, BudgetStatus>
+}
+
+/** A budget that reached 80% or 100%, for an in-app toast (see MeManagerApi.onBudgetAlert). */
+export interface BudgetAlert {
+  /** e.g. "Task over its budget". */
+  title: string
+  /** e.g. "Client X › my-api › Fix login: $5.10 of $5.00 task budget". */
+  body: string
+  level: Exclude<BudgetLevel, 'ok'>
+  /** The task, for a task's budget; absent for the daily one. */
+  target?: Target
 }
 
 export interface UsageReport {

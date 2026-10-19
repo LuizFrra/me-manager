@@ -91,6 +91,14 @@ describe('createDesktopNotifier', () => {
     expect(win.webContents.send).toHaveBeenCalledWith(SELECT_TARGET, notice.target)
   })
 
+  it('only brings the window to the front for a notice without a target (the daily budget)', () => {
+    const win = fakeWindow()
+    createDesktopNotifier({ getWindow: () => win as never })({ title: "Today's budget is used up", body: '$10.00' })
+    FakeNotification.instances[0].emit('click')
+    expect(win.focus).toHaveBeenCalled()
+    expect(win.webContents.send).not.toHaveBeenCalled()
+  })
+
   it('waits for a window that is still loading (re-created after being closed)', () => {
     const win = fakeWindow({ loading: true })
     createDesktopNotifier({ getWindow: () => win as never })(notice)
