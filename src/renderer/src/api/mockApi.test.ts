@@ -172,4 +172,26 @@ describe('createMockApi', () => {
     expect(theme.usage.all.cost).toBeCloseTo(sum)
     expect(report.total.all.cost).toBeCloseTo(sum)
   })
+
+  it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {
+    const api = createMockApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const target = { themeId, itemId: repoId }
+    await expect(api.startRun(target)).rejects.toThrow('Set a run command for “my-api” first')
+    await expect(api.setRunCommand(themeId, repoId, 'a\nb')).rejects.toThrow('one line')
+    expect((await api.setRunCommand(themeId, repoId, ' npm run dev ')).themes[0].items[0].runCommand).toBe(
+      'npm run dev',
+    )
+    const tabs = await api.startRun(target)
+    expect(tabs.map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['run', true],
+    ])
+    await expect(api.getDevUrls(target)).resolves.toEqual([{ url: 'http://localhost:5173/', index: 1, tab: 'run' }])
+    expect((await api.stopRun(target)).find((t) => t.name === 'run')?.dead).toBe(true)
+    await expect(api.getDevUrls(target)).resolves.toEqual([])
+    expect((await api.restartRun(target)).find((t) => t.name === 'run')?.dead).toBeUndefined()
+    expect((await api.setRunCommand(themeId, repoId, '')).themes[0].items[0]).not.toHaveProperty('runCommand')
+  })
 })
