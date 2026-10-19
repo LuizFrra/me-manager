@@ -1125,7 +1125,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         setTerminalFocus((n) => n + 1)
       }
       showInfo(
-        `Pasted ${plural(comments.length, 'review comment')} into Claude's prompt: read them and press Enter to send`,
+        `Pasted ${plural(comments.length, 'review comment')} into Claude's prompt: read ${comments.length === 1 ? 'it' : 'them'} and press Enter to send`,
       )
     } finally {
       reviewSendingRef.current.delete(key)
