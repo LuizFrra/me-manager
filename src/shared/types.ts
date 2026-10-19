@@ -177,6 +177,11 @@ export interface TabInfo {
   index: number
   name: string
   active: boolean
+  /**
+   * Set when the tab's program has exited and tmux keeps the tab open with its output (remain-on-exit: the
+   * `run` tab, see MeManagerApi.startRun). Absent for every other tab, which closes when its program exits.
+   */
+  dead?: true
 }
 
 /** The most of a tab's scrollback a transcript holds: beyond it, only the most recent lines are kept. */
