@@ -993,19 +993,30 @@ export function NewTaskDialog(props: {
     }
   }, [loadBranches, selectBase])
 
-  /** Fills in what `template` sets; clears what the last one set and the user left alone (None: no template). */
+  /**
+   * Fills in what `template` sets; clears what the last one set and the user left alone (None: no template). The
+   * name and prompt the dialog opened with (the composer's) are the user's text: a template never replaces them.
+   */
   const chooseTemplate = (template: TaskTemplate | undefined): void => {
     const last = prefill.current
-    const nextName = template?.taskName
-      ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
-      : name === last.name
-        ? ''
-        : name
-    const nextPrompt = template?.prompt ?? (prompt === last.prompt ? '' : prompt)
+    const keepName = name !== '' && name === props.initialName
+    const keepPrompt = prompt !== '' && prompt === props.initialPrompt
+    const nextName = keepName
+      ? name
+      : template?.taskName
+        ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
+        : name === last.name
+          ? ''
+          : name
+    const nextPrompt = keepPrompt ? prompt : (template?.prompt ?? (prompt === last.prompt ? '' : prompt))
     setTemplateName(template?.name ?? '')
     setName(nextName)
     setPrompt(nextPrompt)
-    prefill.current = { name: template?.taskName ? nextName : '', prompt: template?.prompt ?? '', baseRef: '' }
+    prefill.current = {
+      name: template?.taskName && !keepName ? nextName : '',
+      prompt: keepPrompt ? '' : (template?.prompt ?? ''),
+      baseRef: '',
+    }
     wantedBase.current = template?.base
     if (branches.kind !== 'ready') return
     if (template?.base || baseRef === last.baseRef) selectBase(branches.list)

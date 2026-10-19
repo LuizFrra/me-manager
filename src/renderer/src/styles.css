@@ -3815,7 +3815,7 @@ button.status-seg:focus-visible {
 .composer-input::placeholder {
   color: var(--faint);
 }
-.composer-input:disabled {
+.composer-input:read-only {
   color: var(--muted);
 }
 .composer-bar {

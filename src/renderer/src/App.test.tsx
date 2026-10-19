@@ -3468,6 +3468,41 @@ describe('App welcome and home screens', () => {
     )
   })
 
+  it('keeps the app shortcuts working while the composer has focus', async () => {
+    const api = repoApi()
+    const s = await api.createTheme('Work')
+    await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    const user = userEvent.setup()
+    render(<App api={api} />)
+    const input = await screen.findByRole('textbox', { name: 'What should Claude work on?' })
+    await waitFor(() => expect(input).toHaveFocus())
+    fireEvent.keyDown(input, { key: 'B', ctrlKey: true, shiftKey: true })
+    expect(await screen.findByRole('button', { name: 'Show sidebar' })).toBeInTheDocument()
+    await user.type(input, 'still types')
+    expect(input).toHaveValue('still types')
+  })
+
+  it("doesn't open the composer's new task under an overlay opened while it was created", async () => {
+    const api = repoApi()
+    const s = await api.createTheme('Work')
+    await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    const create = api.createTask.bind(api)
+    let release = (): void => {}
+    api.createTask = (...args) =>
+      new Promise((resolve, reject) => {
+        release = () => void create(...args).then(resolve, reject)
+      })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const user = userEvent.setup()
+    render(<App api={api} />)
+    await user.type(await screen.findByRole('textbox', { name: 'What should Claude work on?' }), 'Fix it{Enter}')
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    expect(await screen.findByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
+    await act(async () => release())
+    expect(await screen.findByRole('button', { name: /^\S Fix it$/ })).toBeInTheDocument()
+    expect(openTarget).not.toHaveBeenCalled()
+  })
+
   it('offers no composer without a repository', async () => {
     const api = createMockApi()
     await api.createTheme('Work')

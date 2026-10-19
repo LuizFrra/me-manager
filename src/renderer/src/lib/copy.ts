@@ -43,7 +43,6 @@ export function copyEntries({ theme, item, task }: ResolvedTarget, socket: strin
     entries.push({
       kind: 'attach',
       label: 'Copy attach command',
-
       what: 'attach command',
       text: attachCommand(socket, sessionName(theme.slug, item.slug, task?.slug)),
     })
