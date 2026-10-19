@@ -270,6 +270,7 @@ export type AppService = Omit<
   | 'onPtyData'
   | 'onPtyExit'
   | 'onSelectTarget'
+  | 'onBudgetAlert'
   | 'openExternal'
   | 'saveTranscript'
 > & {

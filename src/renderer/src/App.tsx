@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppState,
+  BudgetAlert,
+  BudgetReport,
   DevUrl,
   GitTools,
   Item,
@@ -21,6 +23,7 @@ import type {
   UsageSummary,
 } from '../../shared/types'
 import { hasUnsavedWork, isArchived, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
+import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
 import { targetKey } from '../../shared/naming'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { GH_INSTALL_HINT } from '../../shared/git'
@@ -30,6 +33,7 @@ import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
 import {
   ArchiveTaskDialog,
+  BudgetDialog,
   ChooseThemeDialog,
   CloneRepoDialog,
   CommitDialog,
@@ -52,6 +56,7 @@ import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { useToasts } from './lib/toasts'
+import { formatCost } from './lib/usageFormat'
 import type { GitActionKind } from './lib/gitActions'
 import { plural } from './lib/gitStatus'
 import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
@@ -116,6 +121,8 @@ type DialogBody =
       itemKind: 'repo' | 'folder'
       initial: string
     }
+  /** A task's own budget; `initial` is null when it has none. */
+  | { kind: 'budget'; target: Target; taskName: string; initial: number | null }
   | { kind: 'chooseTheme'; title: string; onChoose: (themeId: string) => void }
   | {
       kind: 'confirmRemove'
@@ -165,6 +172,7 @@ type AppAction =
         | 'editRunCommand'
         | 'moveTaskUp'
         | 'moveTaskDown'
+        | 'taskBudget'
     }
   | { type: 'copy'; kind: CopyKind }
   | { type: 'newTaskFromTemplate'; themeId: string; repoId: string; template: string }
@@ -187,6 +195,26 @@ export const ZOOM_SAVE_MS = 500
 export const UI_SAVE_MS = 500
 /** The header's usage badge refreshes this often: reading transcripts costs more than the status poll. */
 export const USAGE_POLL_MS = 10_000
+
+/**
+ * What the budgets depend on besides the usage, so they are read again when it changes: the daily and default
+ * budgets and the active tasks with their own. '' while no budget is set at all, when none are polled.
+ */
+function budgetsKey(state: AppState, settings: Settings): string {
+  const tasks: [string, number | null][] = []
+  let own = false
+  for (const theme of state.themes)
+    for (const item of theme.items) {
+      if (item.kind !== 'repo') continue
+      for (const task of item.tasks) {
+        if (isArchived(task)) continue
+        tasks.push([task.id, task.budgetUsd ?? null])
+        own ||= task.budgetUsd !== undefined
+      }
+    }
+  if (!own && settings.dailyBudgetUsd === null && settings.taskBudgetUsd === null) return ''
+  return JSON.stringify([settings.dailyBudgetUsd, settings.taskBudgetUsd, tasks])
+}
 
 /** For a transcript's confirmation: a note when it holds only the end of the scrollback. */
 const transcriptCut = ({ truncated }: { truncated: boolean }): string =>
@@ -290,6 +318,12 @@ function buildPaletteCommands(
     action(ghAvailable ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
     action('Git: Update from base', 'update')
     action('Archive current task', 'archiveTask')
+    const task = selected ? resolveTarget(state, selected)?.task : undefined
+    // Not "task budget": typing a task's name ("task B") would find it first.
+    action(
+      task?.budgetUsd !== undefined ? 'Edit budget for current task…' : 'Set budget for current task…',
+      'taskBudget',
+    )
   }
   // An archived task's repo takes new tasks like any other.
   if (selected?.taskId && resolveTarget(state, selected)) {
@@ -357,6 +391,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [devUrls, setDevUrls] = useState<{ key: string; urls: DevUrl[] } | null>(null)
   // The selected target's usage, tagged with its targetKey so another target's numbers never show.
   const [usage, setUsage] = useState<{ key: string; summary: UsageSummary } | null>(null)
+  // Where the budgets stand (main's getBudgets), read with the usage while any budget is set; null otherwise.
+  const [budgets, setBudgets] = useState<BudgetReport | null>(null)
+  const budgetsOnRef = useRef(false)
   // gh is assumed missing until main says otherwise; the PR button then explains how to install it.
   const [gitTools, setGitTools] = useState<GitTools>({ gh: false })
   // The git action running on each task, by targetKey (one at a time per task, like main's queue).
@@ -532,18 +569,34 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     )
   }, [api, refreshGit])
 
+  /** The selected target's usage and, while any budget is set, the budgets: together, so one scan serves both. */
   const refreshUsage = useCallback((): Promise<void> | undefined => {
+    const reads: Promise<void>[] = []
     const current = selectedRef.current
-    if (!current || isArchivedTarget(stateRef.current, current)) return undefined
-    const key = targetKey(current)
-    return api.getUsage(current).then(
-      (summary) => {
-        if (!sameTarget(selectedRef.current, current)) return
-        const next = { key, summary }
-        setUsage((prev) => (prev ? keepIfEqual(next)(prev) : next))
-      },
-      () => {}, // the badge just keeps its last numbers
-    )
+    if (current && !isArchivedTarget(stateRef.current, current)) {
+      const key = targetKey(current)
+      reads.push(
+        api.getUsage(current).then(
+          (summary) => {
+            if (!sameTarget(selectedRef.current, current)) return
+            const next = { key, summary }
+            setUsage((prev) => (prev ? keepIfEqual(next)(prev) : next))
+          },
+          () => {}, // the badge just keeps its last numbers
+        ),
+      )
+    }
+    if (budgetsOnRef.current) {
+      reads.push(
+        api.getBudgets().then(
+          (next) => {
+            if (budgetsOnRef.current) setBudgets((prev) => (prev ? keepIfEqual(next)(prev) : next))
+          },
+          () => {}, // the budget marks keep their last state
+        ),
+      )
+    }
+    return reads.length > 0 ? Promise.all(reads).then(() => {}) : undefined
   }, [api])
 
   const checkPrereqs = useCallback(() => {
@@ -564,11 +617,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }, [refresh, pollMs])
 
   const selectedKey = selected ? targetKey(selected) : null
+  const budgetDeps = budgetsKey(state, settings)
   useEffect(() => {
-    if (selectedKey === null) return undefined
+    budgetsOnRef.current = budgetDeps !== ''
+    if (!budgetsOnRef.current) setBudgets(null)
+  }, [budgetDeps])
+  useEffect(() => {
+    if (selectedKey === null && budgetDeps === '') return undefined
     void refreshUsage()
     return startVisibleInterval(refreshUsage, USAGE_POLL_MS)
-  }, [refreshUsage, selectedKey])
+  }, [refreshUsage, selectedKey, budgetDeps])
 
   useEffect(
     () =>
@@ -699,6 +757,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   })
   useEffect(() => api.onSelectTarget(onSelectTarget), [api, onSelectTarget])
 
+  // A budget reached 80% or 100% while the window is focused (main sends a desktop notification too).
+  const onBudgetAlert = useLatestCallback((alert: BudgetAlert): void => {
+    showInfo(`${alert.title}: ${alert.body}`, { action: { label: 'Usage', run: () => setUsageOpen(true) } })
+    void refreshUsage()
+  })
+  useEffect(() => api.onBudgetAlert(onBudgetAlert), [api, onBudgetAlert])
+
   const tabAction = async (fn: (target: Target) => Promise<TabInfo[]>): Promise<void> => {
     const target = selectedRef.current
     if (!target || isArchivedTarget(stateRef.current, target)) return
@@ -785,6 +850,27 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (!(await update(() => api.setRunCommand(dialog.themeId, dialog.itemId, command)))) return
     closeDialog(dialog.id)
     showInfo(command ? `Saved the run command of ${dialog.itemName}` : `Removed the run command of ${dialog.itemName}`)
+  }
+
+  const editTaskBudget = (): void => {
+    const target = selectedRef.current
+    const task = target ? resolveTarget(state, target)?.task : undefined
+    if (!target?.taskId || !task || isArchived(task)) return
+    openDialog({ kind: 'budget', target, taskName: task.name, initial: task.budgetUsd ?? null })
+  }
+
+  const saveTaskBudget = async (
+    dialog: Extract<Dialog, { kind: 'budget' }>,
+    budgetUsd: number | null,
+  ): Promise<void> => {
+    const { themeId, itemId, taskId } = dialog.target
+    if (!taskId || !(await update(() => api.setTaskBudget(themeId, itemId, taskId, budgetUsd)))) return
+    closeDialog(dialog.id)
+    showInfo(
+      budgetUsd === null
+        ? `Removed the budget of ${dialog.taskName}`
+        : `Set the budget of ${dialog.taskName} to ${formatCost(budgetUsd)}`,
+    )
   }
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
@@ -1524,6 +1610,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'stopRun') runTab('stop')
     else if (action.type === 'moveTaskUp') moveSelectedTask(-1)
     else if (action.type === 'moveTaskDown') moveSelectedTask(1)
+    else if (action.type === 'taskBudget') editTaskBudget()
     else if (action.type === 'editRunCommand') {
       if (selectedRef.current) editRunCommand(selectedRef.current.themeId, selectedRef.current.itemId)
     } else if (action.type === 'customizeTheme') {
@@ -1548,6 +1635,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     : undefined
   const isRepo = item?.kind === 'repo' && selected?.taskId !== undefined
   const sessionFlags = effectiveSessionFlags(settings)
+  // From the badge's own numbers (not main's budgets, which may be a poll behind), so the two always agree.
+  const taskBudget =
+    selected && selectedTask && !isArchived(selectedTask) && usage?.key === targetKey(selected)
+      ? budgetStatus(usage.summary.all.cost, effectiveTaskBudget(selectedTask, settings))
+      : null
 
   return (
     <div className="app">
@@ -1555,6 +1647,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         state={state}
         status={status}
         gitStatus={gitStatus}
+        budgets={budgets?.tasks}
         selected={selected}
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
@@ -1612,6 +1705,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onRevealInFileManager={() => openExternally('fileManager')}
               sessionFlags={sessionFlags}
               usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
+              budget={taskBudget}
               onOpenUsage={() => setUsageOpen(true)}
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
               baseRef={selectedTask?.baseRef}
@@ -1727,6 +1821,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 session={sessionState(status, targetKey(selected))}
                 tabs={tabs.length}
                 todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
+                dailyBudget={budgets?.daily}
                 skipPermissions={sessionFlags.skipPermissions}
                 run={run}
                 onShowRun={() => runTab('start')}
@@ -1843,6 +1938,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onCancel={() => closeDialog(dialog.id)}
         />
       )}
+      {dialog?.kind === 'budget' && (
+        <BudgetDialog
+          taskName={dialog.taskName}
+          initial={dialog.initial}
+          defaultBudget={settings.taskBudgetUsd}
+          onSave={(budgetUsd) => saveTaskBudget(dialog, budgetUsd)}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
       {dialog?.kind === 'confirmRemove' && (
         <ConfirmRemoveDialog
           kind={dialog.what}
@@ -1913,6 +2017,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onOpenTarget={(target) => {
             if (!sameTarget(selectedRef.current, target)) void open(target)
           }}
+          onOpenSettings={openSettings}
         />
       )}
       <Toasts toasts={toasts} onDismiss={dismiss} />

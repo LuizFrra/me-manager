@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { LiveStatus, TaskGitStatus } from '../../../shared/types'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
+import { budgetStatus } from '../../../shared/budget'
 import { Sidebar, type SidebarProps } from './Sidebar'
 
 const state = appState(theme('Client', [repo('api', [task('fix'), task('docs')]), folder('notes')]))
@@ -429,5 +430,22 @@ describe('Sidebar reordering', () => {
     fireEvent.keyDown(taskRow('fix'), { key: 'ArrowDown', altKey: true, shiftKey: true })
     expect(onMove).not.toHaveBeenCalled()
     expect(onAnnounce).toHaveBeenCalledWith('Clear the filter to move rows')
+  })
+})
+
+describe('Sidebar budget badge', () => {
+  it('marks a task over its budget, and only that one', () => {
+    renderSidebar({ budgets: { fix: budgetStatus(5.2, 5)!, docs: budgetStatus(4.5, 5)! } })
+    const badge = screen.getByRole('img', { name: 'Over budget: $5.20 of $5.00 task budget' })
+    expect(badge).toHaveTextContent('$')
+    expect(badge).toHaveAttribute('title', 'Over budget: $5.20 of $5.00 task budget')
+    expect(screen.getAllByRole('img')).toHaveLength(1)
+    // The task's button keeps its plain name.
+    expect(screen.getByRole('button', { name: '○ fix' })).toBeInTheDocument()
+  })
+
+  it('shows nothing without budgets', () => {
+    renderSidebar()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 })

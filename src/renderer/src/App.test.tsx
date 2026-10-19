@@ -3,7 +3,17 @@ import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi, type MockInstance } from 'vitest'
 import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
-import type { MeManagerApi, TabInfo, Target, TaskGitStatus, UsageReport, UsageSummary } from '../../shared/types'
+import { budgetStatus } from '../../shared/budget'
+import type {
+  BudgetAlert,
+  BudgetReport,
+  MeManagerApi,
+  TabInfo,
+  Target,
+  TaskGitStatus,
+  UsageReport,
+  UsageSummary,
+} from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { fuzzyFilter } from './lib/fuzzy'
 
@@ -1318,6 +1328,8 @@ describe('App settings', () => {
       updateStrategy: 'rebase',
       showStatusBar: true,
       taskTemplates: [],
+      dailyBudgetUsd: null,
+      taskBudgetUsd: null,
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()
@@ -1800,6 +1812,129 @@ describe('App usage', () => {
     expect(screen.queryByRole('dialog', { name: 'Claude usage' })).not.toBeInTheDocument()
     expect(openTarget).toHaveBeenCalledTimes(1)
     expect(screen.getByText('my-api › task A')).toBeInTheDocument()
+  })
+
+  describe('budgets', () => {
+    /** The id of the task named `name` in the API's state. */
+    const taskIdOf = async (api: MeManagerApi, name: string): Promise<string> => {
+      const repo = (await api.getState()).themes.flatMap((t) => t.items).find((i) => i.kind === 'repo')
+      return (repo?.kind === 'repo' && repo.tasks.find((t) => t.name === name)?.id) || ''
+    }
+    /** usageApi, with budgets as main reports them: each task's all-time cost and `today` for the day. */
+    async function budgetApi(costs: Record<string, number>, today: number): Promise<MeManagerApi> {
+      const api: MeManagerApi = usageApi(costs, {
+        getBudgets: async () => {
+          const s = await api.getSettings()
+          const tasks: BudgetReport['tasks'] = {}
+          for (const [name, cost] of Object.entries(costs)) {
+            const status = budgetStatus(cost, s.taskBudgetUsd)
+            const id = await taskIdOf(api, name)
+            if (status && id) tasks[id] = status
+          }
+          return { daily: budgetStatus(today, s.dailyBudgetUsd), tasks }
+        },
+      })
+      await api.updateSettings({ taskBudgetUsd: 5, dailyBudgetUsd: 5 })
+      return api
+    }
+
+    it('marks the header badge, the status bar and the sidebar row as budgets are reached', async () => {
+      const user = userEvent.setup()
+      render(<App api={await budgetApi({ 'fix login bug': 6 }, 4.5)} />)
+      await createRepoAndTask(user)
+      const badge = await screen.findByRole('button', { name: 'Claude usage: $6.00 · 300k tok, over its budget' })
+      expect(badge).toHaveClass('budget-over')
+      expect(badge).toHaveAccessibleDescription(/\$6\.00 of \$5\.00 task budget \(120%\)/)
+      const cost = await screen.findByRole('button', {
+        name: "Today's cost $0.60, 90% of the daily budget: show usage",
+      })
+      expect(cost).toHaveClass('budget-warn')
+      expect(cost).toHaveAttribute('title', expect.stringContaining('$4.50 of $5.00 daily budget (90%)'))
+      expect(await screen.findByRole('img', { name: 'Over budget: $6.00 of $5.00 task budget' })).toBeInTheDocument()
+    })
+
+    it('polls no budgets while none is set', async () => {
+      const user = userEvent.setup()
+      const api = usageApi({ 'fix login bug': 6 })
+      const getBudgets = vi.spyOn(api, 'getBudgets')
+      render(<App api={api} />)
+      await createRepoAndTask(user)
+      await screen.findByRole('button', { name: 'Claude usage: $6.00 · 300k tok' })
+      expect(getBudgets).not.toHaveBeenCalled()
+      expect(screen.queryByRole('img', { name: /Over budget/ })).not.toBeInTheDocument()
+    })
+
+    it("sets and removes a task's own budget from the palette", async () => {
+      const user = userEvent.setup()
+      const api = usageApi({ 'fix login bug': 3 })
+      const setTaskBudget = vi.spyOn(api, 'setTaskBudget')
+      render(<App api={api} />)
+      await createRepoAndTask(user)
+      const palette = async (query: string): Promise<void> => {
+        fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+        const dialog = await screen.findByRole('dialog', { name: 'Command palette' })
+        await user.type(within(dialog).getByRole('combobox'), query)
+        await user.keyboard('{Enter}')
+      }
+      await palette('set budget')
+      const dialog = await screen.findByRole('dialog', { name: 'Budget for fix login bug' })
+      await user.type(within(dialog).getByRole('textbox', { name: 'Budget' }), '3.5')
+      await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+      expect(setTaskBudget).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String), 3.5)
+      expect(await screen.findByText('Set the budget of fix login bug to $3.50')).toBeInTheDocument()
+      // 3 of 3.50: the badge warns, from the task's own budget.
+      expect(await screen.findByRole('button', { name: /^Claude usage: \$3\.00 .*, 85% of its budget$/ })).toHaveClass(
+        'budget-warn',
+      )
+
+      await palette('edit budget')
+      const again = await screen.findByRole('dialog', { name: 'Budget for fix login bug' })
+      await user.clear(within(again).getByRole('textbox', { name: 'Budget' }))
+      await user.click(within(again).getByRole('button', { name: 'Remove' }))
+      expect(setTaskBudget).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), expect.any(String), null)
+      expect(await screen.findByText('Removed the budget of fix login bug')).toBeInTheDocument()
+    })
+
+    it('shows a budget alert from main as a toast that opens the usage view', async () => {
+      const user = userEvent.setup()
+      let alert: ((a: BudgetAlert) => void) | undefined
+      render(
+        <App
+          api={usageApi(
+            {},
+            {
+              onBudgetAlert: (cb) => {
+                alert = cb
+                return () => (alert = undefined)
+              },
+            },
+          )}
+        />,
+      )
+      await waitFor(() => expect(alert).toBeDefined())
+      act(() =>
+        alert!({
+          title: "Today's budget is used up",
+          body: '$10.00 of $10.00 daily budget (all tasks and folders)',
+          level: 'over',
+        }),
+      )
+      const toast = await screen.findByText(
+        "Today's budget is used up: $10.00 of $10.00 daily budget (all tasks and folders)",
+      )
+      await user.click(within(toast.closest('.toast') as HTMLElement).getByRole('button', { name: 'Usage' }))
+      expect(usageDialog()).toBeInTheDocument()
+    })
+
+    it('opens the settings from the usage view when no budget is set', async () => {
+      const user = userEvent.setup()
+      render(<App api={usageApi({})} />)
+      await createTheme(user, 'Client X')
+      await user.click(screen.getByRole('button', { name: 'Usage' }))
+      await user.click(await within(usageDialog()).findByRole('button', { name: 'Set budgets in Settings' }))
+      expect(screen.queryByRole('dialog', { name: 'Claude usage' })).not.toBeInTheDocument()
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    })
   })
 
   it('lists Ctrl+Shift+U in the shortcut help', async () => {

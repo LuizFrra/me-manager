@@ -11,6 +11,8 @@ import {
 import type {
   AppState,
   BranchList,
+  BudgetReport,
+  BudgetStatus,
   DevUrl,
   ChangeList,
   ChangeScope,
@@ -44,6 +46,7 @@ import type {
   UsageSummary,
   UsageTargetReport,
 } from '../../shared/types'
+import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
 import { builtInClaudeFlags, effectiveClaudeFlags } from '../../shared/settings'
 import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
@@ -678,6 +681,10 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commitIfChanged(m.moveTask(this.state, themeId, repoId, taskId, toIndex)))
   }
 
+  async setTaskBudget(themeId: string, repoId: string, taskId: string, budgetUsd: number | null): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.setTaskBudget(this.state, themeId, repoId, taskId, budgetUsd)))
+  }
+
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)
@@ -1223,6 +1230,26 @@ export class Orchestrator implements AppService {
     const { root } = this.targetRoot(target)
     const { usage } = await this.allUsage()
     return usage.roots[root] ?? emptyUsageSummary()
+  }
+
+  async getBudgets(): Promise<BudgetReport> {
+    const settings = this.deps.settings.get()
+    const budgeted: { task: Task; limit: number }[] = []
+    for (const theme of this.state.themes)
+      for (const item of theme.items) {
+        if (item.kind !== 'repo') continue
+        for (const task of item.tasks) {
+          const limit = effectiveTaskBudget(task, settings)
+          if (limit !== null && !isArchived(task)) budgeted.push({ task, limit })
+        }
+      }
+    if (budgeted.length === 0 && settings.dailyBudgetUsd === null) return { daily: null, tasks: {} }
+    const { usage } = await this.allUsage()
+    const tasks: Record<string, BudgetStatus> = {}
+    for (const { task, limit } of budgeted) {
+      tasks[task.id] = budgetStatus(usage.roots[task.worktreePath]?.all.cost ?? 0, limit)!
+    }
+    return { daily: budgetStatus(usage.groups.total?.today.cost ?? 0, settings.dailyBudgetUsd), tasks }
   }
 
   async getUsageReport(): Promise<UsageReport> {

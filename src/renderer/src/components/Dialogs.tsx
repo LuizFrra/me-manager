@@ -10,12 +10,14 @@ import {
   type UnsavedWork,
   type UpdateStrategy,
 } from '../../../shared/types'
+import { budgetFromText, budgetText } from '../../../shared/budget'
 import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
 import { MAX_RUN_COMMAND, runCommandError } from '../../../shared/runCommand'
 import { expandTaskName, templateBase } from '../../../shared/templates'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
+import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
@@ -809,6 +811,93 @@ export function NotesDialog(props: {
           </button>
           <button type="submit" disabled={busy || unchanged}>
             {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+/**
+ * Sets, changes or (emptied) removes a task's own budget, in dollars; without one the default task budget from
+ * Settings applies. Enter saves, Esc cancels.
+ */
+export function BudgetDialog(props: {
+  taskName: string
+  /** The task's own budget; null when it has none. */
+  initial: number | null
+  /** Settings.taskBudgetUsd, what applies without one. */
+  defaultBudget: number | null
+  onSave: (budgetUsd: number | null) => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const [text, setText] = useState(budgetText(props.initial))
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const noteId = useId()
+  const errorId = useId()
+  const parsed = budgetFromText(text)
+  const error = 'error' in parsed ? parsed.error : null
+  const value = 'value' in parsed ? parsed.value : null
+  const unchanged = error === null && value === props.initial
+  const removing = error === null && value === null && !unchanged
+  const save = async (): Promise<void> => {
+    if (busyRef.current || unchanged || error) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onSave(value)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  const fallback =
+    props.defaultBudget === null
+      ? 'Leave it empty for no budget.'
+      : `Leave it empty for the default task budget (${formatCost(props.defaultBudget)}).`
+  return (
+    <div className="overlay">
+      <form
+        className="dialog"
+        role="dialog"
+        aria-label={`Budget for ${props.taskName}`}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void save()
+        }}
+      >
+        <h2>Budget for “{props.taskName}”</h2>
+        <div className="budget-input">
+          <span aria-hidden="true">$</span>
+          <input
+            autoFocus
+            aria-label="Budget"
+            aria-describedby={`${noteId}${error ? ` ${errorId}` : ''}`}
+            aria-invalid={error ? true : undefined}
+            inputMode="decimal"
+            placeholder={props.defaultBudget === null ? 'None' : budgetText(props.defaultBudget)}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
+          />
+        </div>
+        {error && (
+          <p id={errorId} className="dialog-field-hint dialog-field-error" role="alert">
+            {error}
+          </p>
+        )}
+        <p id={noteId} className="dialog-note">
+          A limit on the task&apos;s estimated cost, all time. Its usage badge turns amber at 80% and red at 100%, with
+          a notification at each. {fallback}
+        </p>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={busy || unchanged || error !== null}>
+            {busy ? 'Saving…' : removing ? 'Remove' : 'Save'}
           </button>
         </div>
       </form>

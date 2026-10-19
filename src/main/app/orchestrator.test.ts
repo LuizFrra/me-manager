@@ -596,6 +596,30 @@ describe('Orchestrator: task notes', () => {
   })
 })
 
+describe('Orchestrator: task budgets', () => {
+  it("saves a task's own budget and clears it with null, touching neither git nor tmux", async () => {
+    const { orch, store, git, tmux, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    git.calls = []
+    tmux.calls = []
+    let s = await orch.setTaskBudget(themeId, repoId, task.id, 7.5)
+    expect(taskOf(s).budgetUsd).toBe(7.5)
+    expect(store.saved.at(-1)).toEqual(s)
+    s = await orch.setTaskBudget(themeId, repoId, task.id, null)
+    expect(taskOf(s)).toEqual(task)
+    expect(git.calls).toEqual([])
+    expect(tmux.calls).toEqual([])
+  })
+
+  it('rejects an invalid budget without saving', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const saves = store.saved.length
+    await expect(orch.setTaskBudget(themeId, repoId, task.id, -1)).rejects.toThrow(/The budget must be an amount/)
+    expect(store.saved.length).toBe(saves)
+  })
+})
+
 describe('Orchestrator: removeTask', () => {
   it('detaches, kills the session, removes the worktree and optionally the branch', async () => {
     const { orch, git, tmux, pty, themeId, repoId } = await setup()
@@ -1500,6 +1524,64 @@ describe('Orchestrator: usage', () => {
       ['folder', 'notes', '/docs/notes'],
     ])
     expect(report.themes[1].targets[0].usage.all.cost).toBe(3)
+  })
+})
+
+describe('Orchestrator: budgets', () => {
+  const summary = (all: number, today = 0): ReturnType<typeof emptyUsageSummary> => {
+    const s = emptyUsageSummary()
+    s.all.cost = all
+    s.today.cost = today
+    return s
+  }
+
+  async function withTasks(): Promise<Ctx & { tasks: Task[] }> {
+    const ctx = await setup()
+    for (const name of ['a', 'b', 'c']) await ctx.orch.createTask(ctx.themeId, ctx.repoId, name)
+    await ctx.orch.addFolder(ctx.themeId, '/docs/notes')
+    const repo = (await ctx.orch.getState()).themes[0].items[0]
+    if (repo.kind !== 'repo') throw new Error('expected repo')
+    ctx.usage.calls = []
+    return { ...ctx, tasks: repo.tasks }
+  }
+
+  it('reports nothing, without reading any usage, while no budget is set', async () => {
+    const { orch, usage } = await withTasks()
+    expect(await orch.getBudgets()).toEqual({ daily: null, tasks: {} })
+    expect(usage.calls).toEqual([])
+  })
+
+  it("reports each active task's all-time cost against its own budget or the default one, by task id", async () => {
+    const { orch, usage, settings, themeId, repoId, tasks } = await withTasks()
+    const [a, b, c] = tasks
+    usage.byRoot[a.worktreePath] = summary(4.5)
+    usage.byRoot[b.worktreePath] = summary(1)
+    usage.byRoot[c.worktreePath] = summary(9)
+    await settings.update({ taskBudgetUsd: 5 })
+    await orch.setTaskBudget(themeId, repoId, b.id, 1)
+    await orch.archiveTask(themeId, repoId, c.id) // archived: never reported
+    expect(await orch.getBudgets()).toEqual({
+      daily: null,
+      tasks: {
+        [a.id]: { level: 'warn', spent: 4.5, limit: 5, fraction: 0.9 },
+        [b.id]: { level: 'over', spent: 1, limit: 1, fraction: 1 },
+      },
+    })
+    // The same request as getUsage and the report, so the usage service's cached aggregation serves all three.
+    await orch.getUsageReport()
+    expect(usage.calls[0]).toEqual(usage.calls[1])
+  })
+
+  it("reports only tasks with a budget of their own when there is no default, and today's total for the day", async () => {
+    const { orch, usage, settings, themeId, repoId, tasks } = await withTasks()
+    usage.byRoot[tasks[0].worktreePath] = summary(3)
+    usage.byGroup.total = summary(50, 8.5)
+    await orch.setTaskBudget(themeId, repoId, tasks[0].id, 10)
+    await settings.update({ dailyBudgetUsd: 10 })
+    expect(await orch.getBudgets()).toEqual({
+      daily: { level: 'warn', spent: 8.5, limit: 10, fraction: 0.85 },
+      tasks: { [tasks[0].id]: { level: 'ok', spent: 3, limit: 10, fraction: 0.3 } },
+    })
   })
 })
 

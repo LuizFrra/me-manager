@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BranchList, TaskTemplate } from '../../../shared/types'
 import {
   ArchiveTaskDialog,
+  BudgetDialog,
   ChooseThemeDialog,
   CommitDialog,
   ConfirmRemoveDialog,
@@ -174,6 +175,47 @@ describe('ConfirmRemoveDialog', () => {
     )
     const dialog = screen.getByRole('alertdialog', { name: 'Remove repository my-api' })
     expect(dialog).toHaveAccessibleDescription(/The repository is removed from Client X\..*not touched\./)
+  })
+})
+
+describe('BudgetDialog', () => {
+  it("sets a task's own budget, naming the default it replaces", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<BudgetDialog taskName="Fix login" initial={null} defaultBudget={5} onSave={onSave} onCancel={vi.fn()} />)
+    expect(screen.getByRole('dialog', { name: 'Budget for Fix login' })).toBeInTheDocument()
+    const input = screen.getByRole('textbox', { name: 'Budget' })
+    expect(input).toHaveFocus()
+    expect(input).toHaveAccessibleDescription(/Leave it empty for the default task budget \(\$5\.00\)/)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled() // unchanged
+    await user.type(input, '12.5')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(12.5)
+  })
+
+  it('removes it when emptied, says when there is no default, and refuses an invalid amount', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<BudgetDialog taskName="Fix login" initial={2.5} defaultBudget={null} onSave={onSave} onCancel={vi.fn()} />)
+    const input = screen.getByRole('textbox', { name: 'Budget' })
+    expect(input).toHaveValue('2.50')
+    expect(input).toHaveAccessibleDescription(/Leave it empty for no budget/)
+    await user.clear(input)
+    await user.type(input, 'abc')
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter an amount from $0.01 to $100,000')
+    expect(input).toBeInvalid()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    await user.clear(input)
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    expect(onSave).toHaveBeenCalledWith(null)
+  })
+
+  it('cancels with Escape', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={vi.fn()} onCancel={onCancel} />)
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalled()
   })
 })
 

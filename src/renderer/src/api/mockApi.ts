@@ -28,7 +28,8 @@ import { checkCloneName, checkCloneUrl } from '../../../shared/clone'
 import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { moveActiveTask, moveEntry } from '../../../shared/reorder'
-import { demoUsage, demoUsageReport } from './demoUsage'
+import { normalizeBudget } from '../../../shared/budget'
+import { demoBudgets, demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
 /** The branches a demo task can start from; listBranches' default is the first. */
@@ -272,6 +273,15 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (trimmed) task.notes = trimmed
         else delete task.notes
       }),
+    setTaskBudget: (themeId, repoId, taskId, budgetUsd) =>
+      edit(themeId, (t) => {
+        const repo = t.items.find((i) => i.id === repoId)
+        const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
+        if (!task) throw new Error(`Task not found: ${taskId}`)
+        const budget = normalizeBudget(budgetUsd)
+        if (budget === null) delete task.budgetUsd
+        else task.budgetUsd = budget
+      }),
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: (themeId, repoId, taskId) =>
       edit(themeId, (t) => {
@@ -402,11 +412,13 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     },
     getUsage: async (target) => demoUsage(targetKey(target)),
     getUsageReport: async () => demoUsageReport(state),
+    getBudgets: async () => demoBudgets(state, settings),
     ptyWrite: () => {},
     ptyResize: () => {},
     onPtyData: () => () => {},
     onPtyExit: () => () => {},
     onSelectTarget: () => () => {},
+    onBudgetAlert: () => () => {},
   }
   return { ...api, ...overrides }
 }

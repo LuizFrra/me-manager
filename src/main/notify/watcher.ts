@@ -7,8 +7,8 @@ export interface DesktopNotice {
   title: string
   /** "Theme › Repo › Task" or "Theme › Folder". */
   body: string
-  /** Selected when the notification is clicked. */
-  target: Target
+  /** Selected when the notification is clicked; without one, a click only brings the window to the front. */
+  target?: Target
 }
 
 export interface NotificationWatcherDeps {

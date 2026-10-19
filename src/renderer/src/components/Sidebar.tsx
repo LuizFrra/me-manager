@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { budgetSummary } from '../../../shared/budget'
 import {
   isArchived,
   type AppState,
+  type BudgetStatus,
   type Item,
   type LiveStatus,
   type Target,
@@ -29,6 +31,8 @@ export interface SidebarProps {
   status: LiveStatus
   /** Git status of the visible tasks, by task id; a task without one shows no badges. */
   gitStatus?: Readonly<Record<string, TaskGitStatus>>
+  /** Where each task's budget stands, by task id (BudgetReport.tasks): a task over its budget gets a small badge. */
+  budgets?: Readonly<Record<string, BudgetStatus>>
   selected: Target | null
   /** Ids of collapsed themes and repos. App owns this, since Alt+1..9 (Cmd+1..9 on macOS) counts only visible entries. */
   collapsed: ReadonlySet<string>
@@ -94,6 +98,17 @@ function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string
 }
 
 /** The theme row's colour stripe, as a CSS variable; none for no colour or one not in the palette. */
+/** A small "$" after the name of a task over its budget, explained by its tooltip; nothing otherwise. */
+function OverBudget({ status }: { status?: BudgetStatus }): React.JSX.Element | null {
+  if (status?.level !== 'over') return null
+  const text = `Over budget: ${budgetSummary(status, 'task budget')}`
+  return (
+    <span className="budget-badge" role="img" aria-label={text} title={text}>
+      $
+    </span>
+  )
+}
+
 function themeStripe(color: unknown): React.CSSProperties | undefined {
   const css = themeColorCss(color)
   return css ? ({ '--theme-color': css } as React.CSSProperties) : undefined
@@ -457,6 +472,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 >
                                   {dot(task.id)} {task.name}
                                 </button>
+                                <OverBudget status={p.budgets?.[task.id]} />
                                 {p.gitStatus?.[task.id] && (
                                   <GitBadges status={p.gitStatus[task.id]} baseRef={task.baseRef} />
                                 )}

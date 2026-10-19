@@ -1,6 +1,10 @@
 import { messageCost, totalTokens, type TokenCounts } from '../../../shared/pricing'
+import { budgetStatus, effectiveTaskBudget } from '../../../shared/budget'
 import type {
   AppState,
+  BudgetReport,
+  BudgetStatus,
+  Settings,
   UsageBucket,
   UsageModelTotals,
   UsagePeriod,
@@ -8,7 +12,7 @@ import type {
   UsageSummary,
   UsageTargetReport,
 } from '../../../shared/types'
-import { USAGE_PERIODS } from '../../../shared/types'
+import { isArchived, USAGE_PERIODS } from '../../../shared/types'
 import { targetKey } from '../../../shared/naming'
 import { emptyUsageBucket, emptyUsageSummary } from '../../../shared/usage'
 
@@ -134,4 +138,21 @@ export function demoUsageReport(state: AppState): UsageReport {
     total: addSummaries(themes.map((t) => t.usage)),
     themes,
   }
+}
+
+/** Where the demo's budgets stand, from the same numbers as demoUsageReport (as main does). */
+export function demoBudgets(state: AppState, settings: Settings): BudgetReport {
+  const report = demoUsageReport(state)
+  const tasks: Record<string, BudgetStatus> = {}
+  for (const theme of state.themes)
+    for (const item of theme.items) {
+      if (item.kind !== 'repo') continue
+      for (const task of item.tasks) {
+        const status = isArchived(task)
+          ? null
+          : budgetStatus(demoUsage(task.id).all.cost, effectiveTaskBudget(task, settings))
+        if (status) tasks[task.id] = status
+      }
+    }
+  return { daily: budgetStatus(report.total.today.cost, settings.dailyBudgetUsd), tasks }
 }
