@@ -34,6 +34,21 @@ export interface NewTaskOptions {
 /** The longest text sendToClaude types into Claude's tab (a review: every comment and its note). */
 export const MAX_CLAUDE_MESSAGE = 50_000
 
+/**
+ * A saved preset for new tasks (Settings.taskTemplates), picked in the New task dialog to prefill its fields, all
+ * of which stay editable. See shared/templates.ts for the rules.
+ */
+export interface TaskTemplate {
+  /** Unique among the templates (ignoring case), at most MAX_TEMPLATE_NAME characters. */
+  name: string
+  /** A pattern for the task's name: `{date}` is today as YYYYMMDD, `{n}` the next number (see expandTaskName). */
+  taskName?: string
+  /** The base branch to start from, when the repo has it (see templateBase); the repo's default otherwise. */
+  base?: string
+  /** The initial prompt, up to MAX_TASK_PROMPT characters. */
+  prompt?: string
+}
+
 /** The longest commit message "Commit all" accepts. */
 export const MAX_COMMIT_MESSAGE = 5_000
 
@@ -211,6 +226,8 @@ export interface Settings {
   cloneDirectory: string
   /** The thin status bar at the bottom of the main area, for the selected task or folder. */
   showStatusBar: boolean
+  /** Presets for new tasks, in the order the New task dialog lists them; at most MAX_TASK_TEMPLATES. */
+  taskTemplates: TaskTemplate[]
 }
 
 /**

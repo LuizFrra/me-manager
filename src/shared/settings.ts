@@ -1,3 +1,4 @@
+import { normalizeTaskTemplates } from './templates'
 import { UPDATE_STRATEGIES, type EffectiveClaudeFlags, type Settings, type UpdateStrategy } from './types'
 
 export const POLL_INTERVAL_LIMITS = { min: 1000, max: 30_000 } as const
@@ -14,6 +15,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   updateStrategy: 'rebase',
   cloneDirectory: '',
   showStatusBar: true,
+  taskTemplates: [],
 })
 
 type ClaudeFlagSettings = Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'>
@@ -61,7 +63,8 @@ const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Num
 /**
  * Turns anything (a parsed settings.json, a renderer's patch merged over the current settings) into valid
  * Settings. Known keys only; unknown ones are dropped. A missing or wrongly typed value falls back to `base`'s;
- * numbers are rounded and clamped to their limits, and the editor command is trimmed.
+ * numbers are rounded and clamped to their limits, and the editor command is trimmed. Task templates are checked
+ * one by one (see normalizeTaskTemplates): invalid ones are dropped, the rest kept.
  */
 export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAULT_SETTINGS): Settings {
   const r = isRecord(raw) ? raw : {}
@@ -84,5 +87,6 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
         ? r.cloneDirectory.trim()
         : base.cloneDirectory,
     showStatusBar: typeof r.showStatusBar === 'boolean' ? r.showStatusBar : base.showStatusBar,
+    taskTemplates: normalizeTaskTemplates(Array.isArray(r.taskTemplates) ? r.taskTemplates : base.taskTemplates),
   }
 }
