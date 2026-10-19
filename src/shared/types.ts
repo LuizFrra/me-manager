@@ -377,6 +377,8 @@ export interface MeManagerApi {
   unarchiveTask(themeId: string, repoId: string, taskId: string): Promise<AppState>
 
   openTarget(target: Target): Promise<TabInfo[]>
+  /** Detaches the terminal (an archived task is selected): no session is shown, so none counts as selected. */
+  detachTerminal(): Promise<void>
   listTabs(target: Target): Promise<TabInfo[]>
   newTab(target: Target): Promise<TabInfo[]>
   selectTab(target: Target, index: number): Promise<TabInfo[]>

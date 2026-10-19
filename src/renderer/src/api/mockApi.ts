@@ -253,6 +253,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         delete task.archivedAt
       }),
     openTarget: async () => tabs,
+    detachTerminal: async () => {},
     listTabs: async () => tabs,
     newTab: async () => tabs,
     selectTab: async () => tabs,

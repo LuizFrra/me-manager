@@ -472,7 +472,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     select(target)
     setSessionEnded(false)
     setTabs([])
-    if (isArchivedTarget(known, target)) return
+    if (isArchivedTarget(known, target)) {
+      void api.detachTerminal().catch(() => {}) // the previous task is no longer shown
+      return
+    }
     const result = quiet
       ? await api.openTarget(target).catch(() => undefined)
       : await attempt(() => api.openTarget(target))
