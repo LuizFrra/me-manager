@@ -560,6 +560,15 @@ describe('SidePanel', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
 
+    it('shows the note main adds about how it searched', async () => {
+      const user = userEvent.setup()
+      const note = 'git has no PCRE support here, so this repo was searched with extended regular expressions.'
+      const api = createMockApi({ searchFiles: async () => ({ matches: [], truncated: false, note }) })
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      await user.type(await screen.findByRole('textbox', { name: 'Search in files' }), 'x{Enter}')
+      expect(await screen.findByText(note)).toBeInTheDocument()
+    })
+
     it('opens a result in Files at its line', async () => {
       const user = userEvent.setup()
       const api = createMockApi()
