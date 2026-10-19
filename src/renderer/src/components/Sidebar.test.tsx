@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { createEvent, fireEvent, render, screen, type RenderResult } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { LiveStatus, TaskGitStatus } from '../../../shared/types'
@@ -7,39 +7,44 @@ import { Sidebar, type SidebarProps } from './Sidebar'
 
 const state = appState(theme('Client', [repo('api', [task('fix'), task('docs')]), folder('notes')]))
 
-function renderSidebar(patch: Partial<SidebarProps> = {}): void {
+/** Every prop, with no-op callbacks, and `patch` on top. */
+function sidebarProps(patch: Partial<SidebarProps> = {}): SidebarProps {
   const status: LiveStatus = { running: [], missing: [], activity: {} }
-  render(
-    <Sidebar
-      state={state}
-      status={status}
-      selected={null}
-      collapsed={new Set()}
-      onToggleCollapsed={vi.fn()}
-      filter=""
-      onFilterChange={vi.fn()}
-      onSelect={vi.fn()}
-      onAddTheme={vi.fn()}
-      onRenameTheme={vi.fn()}
-      onCustomizeTheme={vi.fn()}
-      onRemoveTheme={vi.fn()}
-      onAddRepo={vi.fn()}
-      onCloneRepo={vi.fn()}
-      onAddFolder={vi.fn()}
-      onRemoveItem={vi.fn()}
-      onAddTask={vi.fn()}
-      onRenameTask={vi.fn()}
-      onRemoveTask={vi.fn()}
-      onArchiveTask={vi.fn()}
-      onToggleArchived={vi.fn()}
-      onRestoreTask={vi.fn()}
-      onDeleteArchivedTask={vi.fn()}
-      onEditRunCommand={vi.fn()}
-      onOpenSettings={vi.fn()}
-      onOpenUsage={vi.fn()}
-      {...patch}
-    />,
-  )
+  return {
+    state,
+    status,
+    selected: null,
+    collapsed: new Set(),
+    onToggleCollapsed: vi.fn(),
+    filter: '',
+    onFilterChange: vi.fn(),
+    onSelect: vi.fn(),
+    onAddTheme: vi.fn(),
+    onRenameTheme: vi.fn(),
+    onCustomizeTheme: vi.fn(),
+    onRemoveTheme: vi.fn(),
+    onAddRepo: vi.fn(),
+    onCloneRepo: vi.fn(),
+    onAddFolder: vi.fn(),
+    onRemoveItem: vi.fn(),
+    onAddTask: vi.fn(),
+    onRenameTask: vi.fn(),
+    onRemoveTask: vi.fn(),
+    onArchiveTask: vi.fn(),
+    onToggleArchived: vi.fn(),
+    onRestoreTask: vi.fn(),
+    onDeleteArchivedTask: vi.fn(),
+    onEditRunCommand: vi.fn(),
+    onMove: vi.fn(),
+    onAnnounce: vi.fn(),
+    onOpenSettings: vi.fn(),
+    onOpenUsage: vi.fn(),
+    ...patch,
+  }
+}
+
+function renderSidebar(patch: Partial<SidebarProps> = {}): RenderResult {
+  return render(<Sidebar {...sidebarProps(patch)} />)
 }
 
 const git = (patch: Partial<TaskGitStatus>): TaskGitStatus => ({
@@ -227,5 +232,202 @@ describe('Sidebar run commands', () => {
       ['Client', 'api'],
       ['Client', 'notes'],
     ])
+  })
+})
+
+describe('Sidebar reordering', () => {
+  const twoThemes = appState(
+    theme('Client', [repo('api', [task('fix'), task('docs'), task('ship')]), folder('notes')]),
+    theme('Personal', [repo('web', [task('ui')]), folder('diary')]),
+  )
+
+  /** A stand-in for the browser's DataTransfer, which jsdom lacks. */
+  const dataTransfer = (): Pick<DataTransfer, 'dropEffect' | 'effectAllowed' | 'setData' | 'getData'> => ({
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    setData: vi.fn(),
+    getData: vi.fn(() => ''),
+  })
+
+  /** The row of a task or folder (its button reads "<dot> [📁 ]<name>"), or of a theme or repo (by its name). */
+  const rowOf = (name: string): HTMLElement => {
+    const button = screen.getByRole('button', { name: new RegExp(`^\\S (📁 |📦 )?${name}$`, 'u') })
+    return button.closest('.row') as HTMLElement
+  }
+  const taskRow = rowOf
+  const themeRow = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: `▼ ${name}` }).closest('.row') as HTMLElement
+
+  /** Every row block is 20px high, from y = 100: the top half is "before", the bottom half "after". */
+  const placeRows = (): void => {
+    for (const el of document.querySelectorAll<HTMLElement>('[data-drop]'))
+      vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({ top: 100, height: 20 } as DOMRect)
+  }
+
+  /** Fires a drag event at `clientY` (jsdom's events have none); true when the default was not prevented. */
+  const drag = (
+    type: 'dragOver' | 'drop',
+    el: HTMLElement,
+    dt: ReturnType<typeof dataTransfer>,
+    clientY: number,
+  ): boolean => {
+    const event = createEvent[type](el, { dataTransfer: dt })
+    Object.defineProperty(event, 'clientY', { value: clientY })
+    return fireEvent(el, event)
+  }
+
+  it('moves a task by dropping it on another task of its repo, with an indicator line while over it', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, onMove })
+    placeRows()
+    const dt = dataTransfer()
+    expect(taskRow('fix')).toHaveAttribute('draggable', 'true')
+    fireEvent.dragStart(taskRow('fix'), { dataTransfer: dt })
+    expect(dt.effectAllowed).toBe('move')
+    expect(taskRow('fix')).toHaveClass('dragging')
+
+    expect(drag('dragOver', taskRow('ship'), dt, 115)).toBe(false) // allowed: the default is prevented
+    expect(dt.dropEffect).toBe('move')
+    expect(taskRow('ship')).toHaveClass('drop-after')
+    drag('dragOver', taskRow('ship'), dt, 105)
+    expect(taskRow('ship')).toHaveClass('drop-before')
+    expect(taskRow('ship')).not.toHaveClass('drop-after')
+
+    drag('drop', taskRow('ship'), dt, 115)
+    expect(onMove).toHaveBeenCalledWith({ kind: 'task', themeId: 'Client', repoId: 'api', taskId: 'fix', toIndex: 2 })
+    expect(document.querySelector('.drop-before, .drop-after, .dragging')).toBeNull()
+  })
+
+  it('shows no line, and moves nothing, where the drop would leave the row where it is', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, onMove })
+    placeRows()
+    const dt = dataTransfer()
+    fireEvent.dragStart(taskRow('fix'), { dataTransfer: dt })
+    drag('dragOver', taskRow('docs'), dt, 105) // just after itself
+    expect(taskRow('docs')).not.toHaveClass('drop-before')
+    drag('drop', taskRow('docs'), dt, 105)
+    expect(onMove).not.toHaveBeenCalled()
+  })
+
+  it('refuses a task over another repo, and an item over another theme, with the not-allowed cursor', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, onMove })
+    placeRows()
+    const dt = dataTransfer()
+    fireEvent.dragStart(taskRow('fix'), { dataTransfer: dt })
+    expect(drag('dragOver', taskRow('ui'), dt, 115)).toBe(true) // not prevented: no drop here
+    expect(dt.dropEffect).toBe('none')
+    expect(taskRow('ui')).not.toHaveClass('drop-after')
+    expect(drag('dragOver', rowOf('api'), dt, 115)).toBe(true) // its own repo's row is no task either
+    drag('drop', taskRow('ui'), dt, 115)
+    fireEvent.dragEnd(taskRow('fix'), { dataTransfer: dt })
+
+    const dt2 = dataTransfer()
+    fireEvent.dragStart(rowOf('notes'), { dataTransfer: dt2 })
+    expect(drag('dragOver', rowOf('diary'), dt2, 105)).toBe(true)
+    expect(dt2.dropEffect).toBe('none')
+    expect(drag('dragOver', rowOf('ui'), dt2, 105)).toBe(true) // inside another theme's repo
+    drag('drop', rowOf('diary'), dt2, 105)
+    expect(onMove).not.toHaveBeenCalled()
+
+    fireEvent.dragStart(rowOf('notes'), { dataTransfer: dt2 })
+    expect(drag('dragOver', taskRow('fix'), dt2, 105)).toBe(false) // over its theme's repo, tasks included
+    expect(rowOf('api').parentElement).toHaveClass('drop-before')
+    drag('drop', taskRow('fix'), dt2, 105)
+    expect(onMove).toHaveBeenCalledWith({ kind: 'item', themeId: 'Client', itemId: 'notes', toIndex: 0 })
+  })
+
+  it('moves a theme by dropping it anywhere over another theme, its items included', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, onMove })
+    placeRows()
+    const dt = dataTransfer()
+    fireEvent.dragStart(themeRow('Client'), { dataTransfer: dt })
+    expect(drag('dragOver', taskRow('ui'), dt, 115)).toBe(false)
+    expect(themeRow('Personal').parentElement).toHaveClass('drop-after')
+    drag('drop', taskRow('ui'), dt, 115)
+    expect(onMove).toHaveBeenCalledWith({ kind: 'theme', themeId: 'Client', toIndex: 1 })
+  })
+
+  it('ignores drags that did not start on one of its rows, like files from the desktop', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, onMove })
+    placeRows()
+    const dt = dataTransfer()
+    expect(drag('dragOver', taskRow('ship'), dt, 115)).toBe(true)
+    drag('drop', taskRow('ship'), dt, 115)
+    expect(onMove).not.toHaveBeenCalled()
+  })
+
+  it('turns dragging off while the filter is active, as only some rows show', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, filter: 'i', onMove })
+    expect(taskRow('fix')).toHaveAttribute('draggable', 'false')
+    expect(themeRow('Client')).toHaveAttribute('draggable', 'false')
+    expect(rowOf('api')).toHaveAttribute('draggable', 'false')
+  })
+
+  it('refuses a drag that starts while filtering', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, filter: 'i', onMove })
+    placeRows()
+    const dt = dataTransfer()
+    expect(fireEvent.dragStart(taskRow('fix'), { dataTransfer: dt })).toBe(false)
+    expect(drag('dragOver', taskRow('ship'), dt, 115)).toBe(true)
+    drag('drop', taskRow('ship'), dt, 115)
+    expect(onMove).not.toHaveBeenCalled()
+  })
+
+  it('moves the focused row with Alt+Shift+↑/↓, keeping the focus on it', () => {
+    const onMove = vi.fn()
+    const props = sidebarProps({ state: twoThemes, onMove })
+    const { rerender } = render(<Sidebar {...props} />)
+    const fix = screen.getByRole('button', { name: '○ fix' })
+    fix.focus()
+    fireEvent.keyDown(fix, { key: 'ArrowDown', altKey: true, shiftKey: true })
+    expect(onMove).toHaveBeenLastCalledWith({
+      kind: 'task',
+      themeId: 'Client',
+      repoId: 'api',
+      taskId: 'fix',
+      toIndex: 1,
+    })
+    // As App shows the move: fix's row moves below docs.
+    const moved = appState(
+      theme('Client', [repo('api', [task('docs'), task('fix'), task('ship')]), folder('notes')]),
+      twoThemes.themes[1],
+    )
+    fix.blur() // what Chromium does to a focused element the DOM moves; jsdom keeps the focus
+    rerender(<Sidebar {...props} state={moved} />)
+    expect(screen.getByRole('button', { name: '○ fix' })).toHaveFocus()
+
+    fireEvent.keyDown(themeRow('Personal'), { key: 'ArrowUp', altKey: true, shiftKey: true })
+    expect(onMove).toHaveBeenLastCalledWith({ kind: 'theme', themeId: 'Personal', toIndex: 0 })
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Remove notes' }), {
+      key: 'ArrowUp',
+      altKey: true,
+      shiftKey: true,
+    })
+    expect(onMove).toHaveBeenLastCalledWith({ kind: 'item', themeId: 'Client', itemId: 'notes', toIndex: 0 })
+  })
+
+  it('does nothing at either end of the list, nor without both Alt and Shift', () => {
+    const onMove = vi.fn()
+    renderSidebar({ state: twoThemes, onMove })
+    fireEvent.keyDown(taskRow('fix'), { key: 'ArrowUp', altKey: true, shiftKey: true })
+    fireEvent.keyDown(taskRow('ship'), { key: 'ArrowDown', altKey: true, shiftKey: true })
+    fireEvent.keyDown(taskRow('docs'), { key: 'ArrowDown', altKey: true })
+    fireEvent.keyDown(taskRow('docs'), { key: 'ArrowDown', shiftKey: true })
+    expect(onMove).not.toHaveBeenCalled()
+  })
+
+  it('says to clear the filter instead of moving a row while filtering', () => {
+    const onMove = vi.fn()
+    const onAnnounce = vi.fn()
+    renderSidebar({ state: twoThemes, filter: 'i', onMove, onAnnounce })
+    fireEvent.keyDown(taskRow('fix'), { key: 'ArrowDown', altKey: true, shiftKey: true })
+    expect(onMove).not.toHaveBeenCalled()
+    expect(onAnnounce).toHaveBeenCalledWith('Clear the filter to move rows')
   })
 })
