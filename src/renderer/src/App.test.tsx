@@ -8,7 +8,9 @@ import { emptyUsageSummary } from '../../shared/usage'
 import { fuzzyFilter } from './lib/fuzzy'
 
 vi.mock('./components/TerminalView', () => ({
-  TerminalView: ({ fontSize }: { fontSize: number }) => <div data-testid="terminal" data-font-size={fontSize} />,
+  TerminalView: ({ fontSize, focusSeq }: { fontSize: number; focusSeq?: number }) => (
+    <div data-testid="terminal" data-font-size={fontSize} data-focus-seq={focusSeq} />
+  ),
 }))
 // The real matcher, spied on: the palette must not re-run it on App renders that change none of its inputs.
 vi.mock('./lib/fuzzy', async (importOriginal) => {
@@ -433,6 +435,167 @@ describe('App side panel', () => {
     await togglePanel(user)
     await user.click(taskButton('fix login bug')) // re-open triggers a status refresh
     expect(await within(panel()).findByText("⚠ This task's folder is missing.")).toBeInTheDocument()
+  })
+})
+
+describe('App review comments', () => {
+  const togglePanel = (user: UserEvent): Promise<void> =>
+    user.click(screen.getByRole('button', { name: 'Toggle files panel' }))
+  const panel = (): HTMLElement => screen.getByRole('complementary', { name: 'Files panel' })
+  const codeText = (): string => document.querySelector('.code-body')?.textContent ?? ''
+  const tray = (): HTMLElement => screen.getByRole('region', { name: 'Review comments' })
+  const main = (): Element => document.querySelector('main')!
+  const gutter = (): HTMLElement => within(panel()).getByRole('group', { name: 'Line numbers' })
+  /** Clicks line `n`'s number (8px padding, 18px lines; jsdom has no layout). */
+  const clickLine = (n: number, shiftKey = false): boolean =>
+    fireEvent.click(gutter(), { clientY: 8 + (n - 1) * 18 + 5, shiftKey })
+  const targetOf = async (api: MeManagerApi, name: string): Promise<Target> => {
+    const state = await api.getState()
+    const repo = state.themes[0].items[0]
+    const task = repo.kind === 'repo' ? repo.tasks.find((t) => t.name === name) : undefined
+    return { themeId: state.themes[0].id, itemId: repo.id, taskId: task?.id ?? '' }
+  }
+  /** Opens package.json in the panel of the selected task. */
+  const openPackageJson = async (user: UserEvent): Promise<void> => {
+    await togglePanel(user)
+    await user.click(await within(panel()).findByRole('button', { name: 'package.json' }))
+    await waitFor(() => expect(codeText()).toContain('demo-project'))
+  }
+  const addComment = async (user: UserEvent, location: string, note: string): Promise<void> => {
+    const dialog = within(await screen.findByRole('dialog', { name: `Comment on ${location}` }))
+    await user.type(dialog.getByRole('textbox', { name: 'Comment' }), note)
+    await user.click(dialog.getByRole('button', { name: 'Add comment' }))
+  }
+
+  it('collects comments on lines, keeps them per task, and pastes them into Claude without Enter', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const sendToClaude = vi.spyOn(api, 'sendToClaude')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await user.click(taskButton('task A'))
+    await openPackageJson(user)
+    expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+
+    clickLine(2)
+    clickLine(3, true)
+    await user.click(within(panel()).getByRole('button', { name: 'Comment' }))
+    expect(main().closest('[inert]')).not.toBeNull() // a modal like the others
+    await addComment(user, 'package.json:2-3', 'Pin this version')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(gutter()).toHaveFocus() // given back by the dialog, for the next selection
+    expect(within(panel()).queryByRole('button', { name: 'Comment' })).toBeNull() // the selection is done
+
+    // From the keyboard: a line, then C.
+    await user.keyboard('{ArrowDown}c')
+    const dialog = within(await screen.findByRole('dialog', { name: 'Comment on package.json:1' }))
+    await user.type(dialog.getByRole('textbox', { name: 'Comment' }), 'Second{Control>}{Enter}{/Control}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(within(tray()).getAllByRole('listitem')).toHaveLength(2)
+
+    // Another task has its own (none); switching back finds them again.
+    await user.click(taskButton('task B'))
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+    await togglePanel(user)
+    expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+    await user.click(taskButton('task A'))
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+    expect(within(tray()).getAllByRole('listitem')).toHaveLength(2)
+
+    const terminal = screen.getByTestId('terminal')
+    const focusBefore = terminal.dataset.focusSeq
+    await user.click(within(tray()).getByRole('button', { name: 'Send to Claude' }))
+    expect(sendToClaude).toHaveBeenCalledWith(
+      await targetOf(api, 'task A'),
+      'Please address these review comments:\n\npackage.json:2-3\nPin this version\n\npackage.json:1\nSecond',
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      "Pasted 2 review comments into Claude's prompt: read them and press Enter to send",
+    )
+    expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+    expect(screen.getByTestId('terminal').dataset.focusSeq).not.toBe(focusBefore) // Claude's tab has focus
+  })
+
+  it('keeps the comments when Claude is busy', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      sendToClaude: async () => Promise.reject(new Error("Claude is busy — try again when it's idle")),
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await openPackageJson(user)
+    clickLine(1)
+    await user.click(within(panel()).getByRole('button', { name: 'Comment' }))
+    await addComment(user, 'package.json:1', 'Note')
+    await user.click(within(tray()).getByRole('button', { name: 'Send to Claude' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("Claude is busy — try again when it's idle")
+    expect(within(tray()).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(tray()).getByRole('button', { name: 'Send to Claude' })).toBeEnabled()
+  })
+
+  it('edits, copies and deletes comments', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await openPackageJson(user)
+    clickLine(4)
+    await user.click(within(panel()).getByRole('button', { name: 'Comment' }))
+    await addComment(user, 'package.json:4', 'First draft')
+
+    await user.click(within(tray()).getByRole('button', { name: 'Edit the comment on package.json:4' }))
+    const edit = within(screen.getByRole('dialog', { name: 'Edit the comment on package.json:4' }))
+    const box = edit.getByRole('textbox', { name: 'Comment' })
+    expect(box).toHaveValue('First draft')
+    expect(edit.getByRole('button', { name: 'Save' })).toBeDisabled() // unchanged
+    await user.clear(box)
+    await user.type(box, 'Final')
+    await user.click(edit.getByRole('button', { name: 'Save' }))
+    expect(within(tray()).getByText('Final')).toBeInTheDocument()
+    expect(within(tray()).getByRole('button', { name: 'Edit the comment on package.json:4' })).toHaveFocus()
+
+    const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await user.click(within(tray()).getByRole('button', { name: 'Copy' }))
+    expect(writeText).toHaveBeenCalledWith('Please address these review comments:\n\npackage.json:4\nFinal')
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied the review comments')
+    expect(within(tray()).getAllByRole('listitem')).toHaveLength(1) // copying keeps them
+
+    await user.click(within(tray()).getByRole('button', { name: 'Delete the comment on package.json:4' }))
+    expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+  })
+
+  it('cancels a comment with Escape, keeping the selection', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await openPackageJson(user)
+    clickLine(2)
+    await user.click(within(panel()).getByRole('button', { name: 'Comment' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+    expect(within(panel()).getByRole('button', { name: 'Comment' })).toBeInTheDocument()
+  })
+
+  it("sends a folder's comments to its Claude tab", async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({ pickDirectory: async () => '/home/me/notes' })
+    const sendToClaude = vi.spyOn(api, 'sendToClaude')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(await screen.findByRole('button', { name: /📁 notes$/ }))
+    await openPackageJson(user)
+    clickLine(1)
+    await user.click(within(panel()).getByRole('button', { name: 'Comment' }))
+    await addComment(user, 'package.json:1', 'Rename')
+    await user.click(within(tray()).getByRole('button', { name: 'Send to Claude' }))
+    const state = await api.getState()
+    expect(sendToClaude).toHaveBeenCalledWith(
+      { themeId: state.themes[0].id, itemId: state.themes[0].items[0].id },
+      'Please address these review comments:\n\npackage.json:1\nRename',
+    )
   })
 })
 

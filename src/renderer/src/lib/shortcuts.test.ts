@@ -4,6 +4,7 @@ import {
   isModEnter,
   isPanelShortcut,
   matchShortcut,
+  REVIEW_HELP,
   shortcutHelp,
   shortcutLabel,
   worksWhileTyping,
@@ -106,6 +107,7 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+=', 'Ctrl++'], description: 'Terminal: larger font' },
       { keys: ['Ctrl+-'], description: 'Terminal: smaller font' },
       { keys: ['Ctrl+0'], description: 'Terminal: reset the font size' },
+      ...REVIEW_HELP,
     ])
     expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
       ['⌘K', '⌘⇧P'],
@@ -124,6 +126,15 @@ describe('shortcut labels', () => {
       ['⌘=', '⌘+'],
       ['⌘-'],
       ['⌘0'],
+      ...REVIEW_HELP.map((e) => e.keys),
+    ])
+  })
+
+  it('ends with the review keys of the focused line numbers, the same everywhere', () => {
+    expect(REVIEW_HELP).toEqual([
+      { keys: ['↑ ↓', 'Shift+↑ ↓'], description: 'Line numbers: select lines, extend the selection' },
+      { keys: ['C', 'Enter'], description: 'Line numbers: comment on the selected lines' },
+      { keys: ['Esc'], description: 'Line numbers: clear the selection' },
     ])
   })
 })

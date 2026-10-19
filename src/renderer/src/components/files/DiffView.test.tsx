@@ -1,6 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { useState } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import type { DiffLayout } from '../../lib/diff/layout'
+import type { LineSelection } from '../../lib/lineSelection'
+import { selectedLinesLabel, type SelectedLines } from '../../lib/review'
 import { DiffView } from './DiffView'
 import {
   ADDED_FILE,
@@ -174,5 +178,94 @@ describe('DiffView split layout', () => {
     const { container } = render(<DiffView diff={UNTRACKED_NO_INDEX} layout="split" />)
     expect(screen.getByText('<script>alert(1)</script>')).toBeInTheDocument()
     expect(container.querySelector('script')).toBeNull()
+  })
+})
+
+/** A DiffView whose line selection is kept here; the selected lines show in an <output>. */
+function Selectable(props: { diff: string; layout?: DiffLayout; onComment?: () => void }): React.JSX.Element {
+  const [selection, setSelection] = useState<LineSelection | null>(null)
+  const [lines, setLines] = useState<SelectedLines | null>(null)
+  return (
+    <>
+      <DiffView
+        diff={props.diff}
+        layout={props.layout}
+        select={{
+          selection,
+          onSelect: (next, covered) => {
+            setSelection(next)
+            setLines(covered)
+          },
+          onComment: props.onComment ?? (() => {}),
+        }}
+      />
+      <output>{lines ? selectedLinesLabel(lines) : 'none'}</output>
+    </>
+  )
+}
+
+/** The line-number cells of the row showing `text`. */
+const numbersOf = (text: string): HTMLElement[] => [
+  ...screen.getByText(text).closest('tr')!.querySelectorAll<HTMLElement>('td.diff-ln, td:nth-child(-n + 2)'),
+]
+
+describe('DiffView line selection', () => {
+  it('selects a line by its number, Shift-click extends, with deleted lines by their old number', () => {
+    render(<Selectable diff={SINGLE_HUNK} />)
+    fireEvent.click(numbersOf('BETA')[1])
+    expect(screen.getByRole('status')).toHaveTextContent('Line 2')
+    expect(screen.getByText('BETA').closest('tr')).toHaveClass('diff-selected')
+    fireEvent.click(numbersOf('gamma')[0], { shiftKey: true })
+    expect(screen.getByRole('status')).toHaveTextContent('Lines 2–3')
+    fireEvent.click(numbersOf('alpha')[1], { shiftKey: true })
+    expect(screen.getByRole('status')).toHaveTextContent('Lines 1–2 and removed line 2')
+    expect(screen.getByText('beta').closest('tr')).toHaveClass('diff-selected')
+    expect(screen.getByText('gamma').closest('tr')).not.toHaveClass('diff-selected')
+    // The only selected line, clicked again, is unselected; text cells select nothing.
+    fireEvent.click(numbersOf('alpha')[0])
+    fireEvent.click(numbersOf('alpha')[0])
+    expect(screen.getByRole('status')).toHaveTextContent('none')
+    fireEvent.click(screen.getByText('alpha'))
+    expect(screen.getByRole('status')).toHaveTextContent('none')
+  })
+
+  it('selects with the keyboard and comments with C', async () => {
+    const user = userEvent.setup()
+    const onComment = vi.fn()
+    render(<Selectable diff={MULTI_HUNK} onComment={onComment} />)
+    const table = screen.getByRole('table', { name: 'Diff' })
+    table.focus()
+    await user.keyboard('c')
+    expect(onComment).not.toHaveBeenCalled() // nothing selected yet
+    await user.keyboard('{ArrowDown}{ArrowDown}{Shift>}{ArrowDown}{ArrowDown}{/Shift}')
+    expect(screen.getByRole('status')).toHaveTextContent('Lines 2–3 and removed line 3')
+    await user.keyboard('c')
+    expect(onComment).toHaveBeenCalledTimes(1)
+    // Across hunks: the last line of the first one and the first of the second.
+    await user.keyboard('{End}')
+    expect(screen.getByRole('status')).toHaveTextContent('Line 30')
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('status')).toHaveTextContent('none')
+  })
+
+  it('selects either side of the split layout, both for unchanged lines', () => {
+    render(<Selectable diff={SINGLE_HUNK} layout="split" />)
+    const row = screen.getByText('beta').closest('tr')!
+    const [oldNo, , newNo] = row.querySelectorAll<HTMLElement>('td')
+    fireEvent.click(oldNo)
+    expect(screen.getByRole('status')).toHaveTextContent('Removed line 2')
+    expect(screen.getByText('beta')).toHaveClass('diff-selected')
+    expect(screen.getByText('BETA')).not.toHaveClass('diff-selected')
+    fireEvent.click(newNo, { shiftKey: true })
+    expect(screen.getByRole('status')).toHaveTextContent('Line 2 and removed line 2')
+    fireEvent.click(screen.getAllByText('gamma')[0].closest('tr')!.querySelector('td')!)
+    expect(screen.getByRole('status')).toHaveTextContent('Line 3')
+    for (const cell of screen.getAllByText('gamma')) expect(cell).toHaveClass('diff-selected')
+  })
+
+  it('offers no selection without the select prop', () => {
+    render(<DiffView diff={SINGLE_HUNK} />)
+    expect(screen.getByRole('table')).not.toHaveAttribute('tabindex')
+    expect(document.querySelector('[data-sel]')).toBeNull()
   })
 })

@@ -171,6 +171,27 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmt_long_x_y')
   })
 
+  it('pastes text without pressing Enter when asked, multi-line text included', async () => {
+    // Not canonical, so cat passes on what it gets at once, Enter or not: a pressed Enter would show as a newline.
+    const out = join(cwd, 'no-enter.txt')
+    const ready = join(cwd, 'no-enter.ready')
+    await svc.newSession('mmt_noenter_x_y', cwd, 'shell', 'sh')
+    await svc.newWindow('mmt_noenter_x_y', cwd, 'claude', `stty -icanon -echo; : > '${ready}'; cat > '${out}'`)
+    for (let i = 0; i < 50 && !existsSync(ready); i++) await new Promise((r) => setTimeout(r, 50))
+    const text = 'Please address these review comments:\n\na.ts:3\nfix it'
+    await svc.sendText('mmt_noenter_x_y', 'claude', text, { enter: false })
+    let typed = ''
+    for (let i = 0; i < 50 && typed.length < text.length; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      typed = existsSync(out) ? await readFile(out, 'utf8') : ''
+    }
+    await new Promise((r) => setTimeout(r, 300)) // time for an Enter, if one were sent
+    typed = await readFile(out, 'utf8')
+    // tmux turns the newlines into carriage returns, which the terminal reads as newlines again (icrnl).
+    expect(typed).toBe(text)
+    await svc.killSession('mmt_noenter_x_y')
+  })
+
   it('leaves copy mode before typing, so the text reaches the app', async () => {
     const out = join(cwd, 'copy-mode.txt')
     const ready = join(cwd, 'copy-mode.ready')

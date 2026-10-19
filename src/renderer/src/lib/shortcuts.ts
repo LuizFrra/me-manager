@@ -249,12 +249,23 @@ export interface ShortcutHelpEntry {
   description: string
 }
 
-/** Every shortcut, as listed in the help overlay. */
+/**
+ * The keys of the code view's and the diff's line numbers when they have focus (see lib/lineSelection.ts): plain
+ * keys, so not app shortcuts; listed in the help overlay after them.
+ */
+export const REVIEW_HELP: readonly ShortcutHelpEntry[] = [
+  { keys: ['↑ ↓', 'Shift+↑ ↓'], description: 'Line numbers: select lines, extend the selection' },
+  { keys: ['C', 'Enter'], description: 'Line numbers: comment on the selected lines' },
+  { keys: ['Esc'], description: 'Line numbers: clear the selection' },
+]
+
+/** Every shortcut, as listed in the help overlay, then the line numbers' keys (REVIEW_HELP). */
 export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
-  return SHORTCUTS.map((def) => ({
+  const app = SHORTCUTS.map((def) => ({
     keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
+  return [...app, ...REVIEW_HELP]
 }
 
 /** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */

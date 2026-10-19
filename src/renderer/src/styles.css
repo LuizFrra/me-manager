@@ -436,6 +436,9 @@ button:disabled {
 .notes-dialog {
   width: min(560px, 92vw);
 }
+.review-dialog-title {
+  overflow-wrap: anywhere;
+}
 .notes-dialog textarea {
   min-height: 140px;
   padding: 8px;
@@ -1106,6 +1109,77 @@ body.resizing .side-panel {
   font-size: 12px;
 }
 
+/* Review comments (ReviewTray), between the panel's tabs and its body. */
+.review-tray {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 34%;
+  border-bottom: 1px solid var(--border);
+  background: #4fa3ff0d;
+}
+.review-tray-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 4px;
+}
+.review-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.review-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.review-item {
+  padding: 3px 8px 5px 12px;
+  border-top: 1px solid #ffffff0d;
+}
+.review-item-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.review-location {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  margin-left: -4px;
+  text-align: left;
+  font: 12px var(--mono);
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-item .panel-icon {
+  width: 22px;
+  height: 20px;
+  font-size: 12px;
+}
+.review-note {
+  margin: 1px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: #c5c5c5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* Search tab */
 .search-view {
   flex: 1;
@@ -1452,6 +1526,28 @@ body.resizing .side-panel {
   background: #4fa3ff2e;
   color: var(--text);
 }
+/* Lines selected in the code view or the diff: what they are, and Comment. */
+.viewer-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--border);
+  background: #4fa3ff14;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+.viewer-selection-label {
+  font-weight: 600;
+}
+.viewer-selection-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
 .viewer-body {
   flex: 1;
   min-height: 0;
@@ -1555,6 +1651,38 @@ body.resizing .side-panel {
     inset 0 -1px 0 #e3b34126;
   pointer-events: none;
   scroll-margin: 48px;
+}
+/* Lines selected for a review comment, over the gutter and the text like .code-line-mark. */
+.code-line-sel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(8px + var(--sel-line, 0) * 18px);
+  height: calc(var(--sel-lines, 1) * 18px);
+  background: #4fa3ff1f;
+  box-shadow: inset 2px 0 0 var(--accent);
+  pointer-events: none;
+}
+/* The selection's moving end, scrolled into view as the arrow keys move it. */
+.code-line-cursor {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  top: calc(8px + var(--sel-line, 0) * 18px);
+  height: 18px;
+  pointer-events: none;
+  scroll-margin: 24px;
+}
+.code-gutter-select {
+  cursor: pointer;
+  outline: none;
+}
+.code-gutter-select:hover,
+.code-gutter-select:focus-visible {
+  color: #a8b1bb;
+}
+.code-gutter-select:focus-visible {
+  box-shadow: inset -1px 0 0 var(--accent);
 }
 .code-view pre {
   margin: 0;
@@ -1714,6 +1842,27 @@ body.resizing .side-panel {
 .diff-split td.diff-note {
   color: var(--muted);
   font-style: italic;
+}
+/* Line selection for review comments: line numbers are clicked, the table takes focus for the keys. */
+.diff-table[tabindex] {
+  outline: none;
+}
+.diff-table[tabindex]:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.diff-table td[data-sel] {
+  cursor: pointer;
+}
+.diff-table td[data-sel]:hover {
+  color: #a8b1bb;
+}
+.diff-unified tr.diff-selected td,
+.diff-split td.diff-selected {
+  background-image: linear-gradient(#4fa3ff2e, #4fa3ff2e);
+}
+.diff-unified tr.diff-selected td:first-child,
+.diff-split td.diff-ln.diff-selected {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 pre.diff-raw {
   margin: 0;
@@ -3172,4 +3321,17 @@ button.status-seg:focus-visible {
 }
 .archived-task-actions button {
   padding: 5px 14px;
+}
+
+/* Read by assistive technology only. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }

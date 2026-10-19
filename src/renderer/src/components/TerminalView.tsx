@@ -19,6 +19,8 @@ export interface TerminalViewProps {
    * its way, or focus that never left, must not type into Claude behind the modal).
    */
   modalOpen?: boolean
+  /** Bumped to move keyboard focus to the terminal (e.g. after text was pasted into Claude's tab). */
+  focusSeq?: number
 }
 
 // OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
@@ -27,7 +29,13 @@ const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboar
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
 const RESIZE_SETTLE_MS = 100
 
-export function TerminalView({ api, sessionKey, fontSize, modalOpen = false }: TerminalViewProps): React.JSX.Element {
+export function TerminalView({
+  api,
+  sessionKey,
+  fontSize,
+  modalOpen = false,
+  focusSeq = 0,
+}: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   // Read by the key handler, which is attached once with the terminal.
   const modalOpenRef = useRef(modalOpen)
@@ -112,6 +120,10 @@ export function TerminalView({ api, sessionKey, fontSize, modalOpen = false }: T
     api.ptyResize(term.cols, term.rows)
     term.focus()
   }, [sessionKey, api])
+
+  useEffect(() => {
+    if (focusSeq > 0) termRef.current?.focus()
+  }, [focusSeq])
 
   useEffect(() => {
     const term = termRef.current

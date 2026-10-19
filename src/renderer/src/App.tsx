@@ -37,6 +37,7 @@ import {
   NewTaskDialog,
   NotesDialog,
   RemoveTaskDialog,
+  ReviewCommentDialog,
   type RemovalKind,
 } from './components/Dialogs'
 import { TaskHeader } from './components/TaskHeader'
@@ -65,6 +66,7 @@ import { StatusBar } from './components/StatusBar'
 import { ThemeStyleDialog } from './components/ThemeStyleDialog'
 import { Home, Welcome } from './components/Welcome'
 import { ArchivedTaskView } from './components/ArchivedTaskView'
+import { formatReview, reviewLocation, type ReviewComment, type ReviewDraft } from './lib/review'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -91,6 +93,8 @@ type DialogBody =
       onConfirm: () => Promise<void>
     }
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
+  /** A review comment's note: a new one (no `initial`) or an edit. */
+  | { kind: 'reviewComment'; location: string; initial?: string; onSave: (note: string) => void }
   | { kind: 'newTask'; themeId: string; repoId: string; repoName: string }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
@@ -152,6 +156,7 @@ interface AppCommand extends PaletteCommand {
 const RENAME_NOTE = 'The branch and folder keep their original name.'
 
 const EMPTY: AppState = { version: 1, themes: [] }
+const NO_COMMENTS: readonly ReviewComment[] = []
 /** Terminal zoom saves the font size once the keys have been still this long. */
 export const ZOOM_SAVE_MS = 500
 /** UI state (selection, collapsed groups, panels, filter) is saved once it has been still this long. */
@@ -298,6 +303,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [],
   )
   const { toasts, showError, showInfo, dismiss } = useToasts()
+  // Review comments by targetKey, in the order they were made; kept for the session only (never saved).
+  const [reviews, setReviews] = useState<Record<string, ReviewComment[]>>({})
+  const reviewIds = useRef(0)
+  // Targets whose comments are being sent to Claude, by targetKey; the ref also blocks a second click that lands
+  // before the Send button is disabled.
+  const [reviewSending, setReviewSending] = useState<Record<string, true>>({})
+  const reviewSendingRef = useRef(new Set<string>())
+  // Bumped to focus the terminal: after the comments were pasted into Claude's prompt.
+  const [terminalFocus, setTerminalFocus] = useState(0)
   // The tmux socket name, for "copy attach command"; null until main has told us.
   const [tmuxSocket, setTmuxSocket] = useState<string | null>(null)
   // Mirrors `selected` synchronously, so async responses can check whether their target is still selected.
@@ -1053,6 +1067,85 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     showInfo('Asked Claude to resolve the conflicts')
   }
 
+  // Review comments: kept per target in `reviews`; the dialog asks for the note.
+
+  const setComments = (key: string, change: (comments: ReviewComment[]) => ReviewComment[]): void =>
+    setReviews((all) => {
+      const next = { ...all, [key]: change(all[key] ?? []) }
+      if (next[key].length === 0) delete next[key]
+      return next
+    })
+
+  /** Asks for the note on `draft`'s lines; `done` (the viewer clears its selection) once it is added. */
+  const addComment = (target: Target, draft: ReviewDraft, done: () => void): void => {
+    const id = openDialog({
+      kind: 'reviewComment',
+      location: reviewLocation(draft),
+      onSave: (note) => {
+        setComments(targetKey(target), (comments) => [...comments, { ...draft, id: ++reviewIds.current, note }])
+        closeDialog(id)
+        done()
+      },
+    })
+  }
+
+  const editComment = (target: Target, comment: ReviewComment): void => {
+    const id = openDialog({
+      kind: 'reviewComment',
+      location: reviewLocation(comment),
+      initial: comment.note,
+      onSave: (note) => {
+        setComments(targetKey(target), (comments) => comments.map((c) => (c.id === comment.id ? { ...c, note } : c)))
+        closeDialog(id)
+      },
+    })
+  }
+
+  const deleteComment = (target: Target, comment: ReviewComment): void =>
+    setComments(targetKey(target), (comments) => comments.filter((c) => c.id !== comment.id))
+
+  /**
+   * Pastes the target's comments into its Claude tab (main refuses while Claude is busy or waiting, or without a
+   * Claude tab), then shows that tab and focuses the terminal, for the user to read them and press Enter. The
+   * comments sent are dropped; any added meanwhile stay.
+   */
+  const sendReview = async (target: Target): Promise<void> => {
+    const key = targetKey(target)
+    const comments = reviews[key] ?? []
+    if (comments.length === 0 || reviewSendingRef.current.has(key)) return
+    reviewSendingRef.current.add(key)
+    setReviewSending((s) => ({ ...s, [key]: true }))
+    try {
+      const tabs = await attempt(() => api.sendToClaude(target, formatReview(comments)))
+      if (!tabs) return
+      const sent = new Set(comments.map((c) => c.id))
+      setComments(key, (current) => current.filter((c) => !sent.has(c.id)))
+      if (sameTarget(selectedRef.current, target)) {
+        setTabs(tabs)
+        setTerminalFocus((n) => n + 1)
+      }
+      showInfo(
+        `Pasted ${plural(comments.length, 'review comment')} into Claude's prompt: read them and press Enter to send`,
+      )
+    } finally {
+      reviewSendingRef.current.delete(key)
+      setReviewSending((s) => {
+        const next = { ...s }
+        delete next[key]
+        return next
+      })
+    }
+  }
+
+  const copyReview = async (target: Target): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(formatReview(reviews[targetKey(target)] ?? []))
+      showInfo('Copied the review comments')
+    } catch {
+      showError('Could not copy the review comments to the clipboard')
+    }
+  }
+
   // App shortcuts arrive here from anywhere in the window; TerminalView's key handler lets them through
   // instead of sending them to tmux. Which ones act when:
   // - a name or remove dialog is open: none (it is a modal flow of its own);
@@ -1358,6 +1451,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                   sessionKey={targetKey(selected)}
                   fontSize={settings.terminalFontSize}
                   modalOpen={modalOpen}
+                  focusSeq={terminalFocus}
                 />
                 {sessionEnded && (
                   <div className="session-ended">
@@ -1388,6 +1482,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                         onClose={() => updatePanel({ open: false })}
                         searchFocus={searchFocus}
                         takeSearchFocus={takeSearchFocus}
+                        review={{
+                          comments: reviews[targetKey(selected)] ?? NO_COMMENTS,
+                          sending: Boolean(reviewSending[targetKey(selected)]),
+                          onComment: (draft, done) => addComment(selected, draft, done),
+                          onEdit: (comment) => editComment(selected, comment),
+                          onDelete: (comment) => deleteComment(selected, comment),
+                          onSend: () => void sendReview(selected),
+                          onCopy: () => void copyReview(selected),
+                        }}
                       />
                     </Suspense>
                   </aside>
@@ -1522,6 +1625,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         <NotesDialog
           taskName={dialog.taskName}
           initial={dialog.notes}
+          onSave={dialog.onSave}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'reviewComment' && (
+        <ReviewCommentDialog
+          location={dialog.location}
+          initial={dialog.initial}
           onSave={dialog.onSave}
           onCancel={() => closeDialog(dialog.id)}
         />
