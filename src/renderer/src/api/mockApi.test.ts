@@ -28,6 +28,28 @@ describe('createMockApi', () => {
     expect(s.themes[0].items[0]).not.toMatchObject({ tasks: [{ archivedAt: expect.anything() }] })
     await expect(api.unarchiveTask(themeId, repoId, taskId)).rejects.toThrow('"fix" is not archived')
   })
+  it('moves themes, items and active tasks like main, refusing an archived task', async () => {
+    const api = createMockApi()
+    let s = await api.createTheme('A')
+    const themeId = s.themes[0].id
+    await api.createTheme('B')
+    await api.addFolder(themeId, '/f/notes')
+    s = await api.addRepo(themeId, '/code/r')
+    const repoId = s.themes[0].items[1].id
+    for (const name of ['one', 'old', 'two']) s = await api.createTask(themeId, repoId, name)
+    const repo = s.themes[0].items[1]
+    const [one, old, two] = repo.kind === 'repo' ? repo.tasks.map((t) => t.id) : []
+    await api.archiveTask(themeId, repoId, old)
+    s = await api.moveTheme(themeId, 9)
+    expect(s.themes.map((t) => t.name)).toEqual(['B', 'A'])
+    s = await api.moveItem(themeId, repoId, 0)
+    expect(s.themes[1].items.map((i) => i.name)).toEqual(['r', 'notes'])
+    s = await api.moveTask(themeId, repoId, two, 0)
+    expect(s.themes[1].items[0]).toMatchObject({ tasks: [{ id: two }, { id: old }, { id: one }] })
+    await expect(api.moveTask(themeId, repoId, old, 0)).rejects.toThrow('"old" is archived: restore it first')
+    await expect(api.moveTheme('nope', 0)).rejects.toThrow('Theme not found: nope')
+    await expect(api.moveItem(themeId, 'nope', 0)).rejects.toThrow('Item not found: nope')
+  })
   it('lists demo branches and creates tasks from a chosen one', async () => {
     const api = createMockApi()
     let s = await api.createTheme('T')
