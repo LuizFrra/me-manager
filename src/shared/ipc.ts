@@ -28,6 +28,8 @@ export const INVOKE_METHODS = [
   'setTaskNotes',
   'checkTaskRemoval',
   'removeTask',
+  'archiveTask',
+  'unarchiveTask',
   'openTarget',
   'listTabs',
   'newTab',

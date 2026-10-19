@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join } from 'node:path'
 import { checkCloneName, checkCloneUrl } from '../../shared/clone'
-import { MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
+import { isArchived, MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
 import type {
   AppState,
   BranchList,
@@ -146,6 +146,14 @@ const themeGroup = (themeId: string): string => `theme:${themeId}`
 /** Settings as the renderer gets them: with the built-in Claude flags that apply. */
 const withEffective = (settings: Settings): SettingsView => ({ ...settings, effective: effectiveClaudeFlags(settings) })
 
+/** What archiving a task with uncommitted or untracked files (or a worktree it could not check) is refused with. */
+export const ARCHIVE_REFUSAL = 'Commit or discard the changes first'
+
+/** Refuses the target's sessions, worktree and git: an archived task has neither, until it is restored. */
+function assertNotArchived(task: Task): void {
+  if (isArchived(task)) throw new Error(`"${task.name}" is archived: restore it first`)
+}
+
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
 
@@ -248,6 +256,7 @@ export class Orchestrator implements AppService {
     }
     if (!target.taskId) throw new Error('Choose a task to open')
     const task = m.getTask(this.state, theme.id, item.id, target.taskId)
+    assertNotArchived(task)
     return {
       session: sessionName(theme.slug, item.slug, task.slug),
       cwd: task.worktreePath,
@@ -327,7 +336,8 @@ export class Orchestrator implements AppService {
 
   /**
    * Sessions, missing folders and Claude's activity. Kept cheap for polling: two tmux calls, plus a screen capture
-   * only for a quiet session whose window printed something since its last capture.
+   * only for a quiet session whose window printed something since its last capture. Archived tasks are left out:
+   * their worktree is gone on purpose, and they have no session.
    */
   async getStatus(): Promise<LiveStatus> {
     const [sessionList, activityBySession] = await Promise.all([
@@ -351,6 +361,7 @@ export class Orchestrator implements AppService {
           continue
         }
         for (const task of item.tasks) {
+          if (isArchived(task)) continue
           if (!this.deps.pathExists(task.worktreePath)) missing.push(task.id)
           check(task.id, sessionName(theme.slug, item.slug, task.slug))
         }
@@ -395,7 +406,7 @@ export class Orchestrator implements AppService {
     const tasks = new Map<string, { root: string; baseRef: string }>()
     for (const target of Array.isArray(targets) ? targets : []) {
       if (!target?.taskId) continue
-      const resolved = this.tryTargetRoot(target) // null: removed meanwhile
+      const resolved = this.tryTargetRoot(target) // null: removed or archived meanwhile
       if (resolved?.baseRef === undefined || !this.deps.pathExists(resolved.root)) continue
       tasks.set(targetKey(target), { root: resolved.root, baseRef: resolved.baseRef })
     }
@@ -595,14 +606,77 @@ export class Orchestrator implements AppService {
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)
     this.detachIf((t) => t.taskId === taskId)
-    await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
-    // GitService deletes the folder directly when the original repo was moved or deleted.
-    await this.deps.git.removeWorktree(repo.path, task.worktreePath)
+    // An archived task's session and worktree are gone already; whatever is at its path now isn't its own.
+    if (!isArchived(task)) {
+      await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+      // GitService deletes the folder directly when the original repo was moved or deleted.
+      await this.deps.git.removeWorktree(repo.path, task.worktreePath)
+    }
     // The branch lived in the original repo; if that is gone there is nothing to delete.
     if (deleteBranch && this.deps.pathExists(repo.path)) {
       await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
     }
     return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+  }
+
+  /** Like removeTask, after the task's queued git actions, so nothing runs in a worktree being removed. */
+  async archiveTask(themeId: string, repoId: string, taskId: string, force = false): Promise<AppState> {
+    return this.exclusive(() =>
+      this.exclusive(() => this.archiveTaskNow(themeId, repoId, taskId, force === true), taskQueue(taskId)),
+    )
+  }
+
+  private async archiveTaskNow(themeId: string, repoId: string, taskId: string, force: boolean): Promise<AppState> {
+    const { git, tmux } = this.deps
+    const theme = m.getTheme(this.state, themeId)
+    const repo = m.getRepo(this.state, themeId, repoId)
+    const task = m.getTask(this.state, themeId, repoId, taskId)
+    if (isArchived(task)) throw new Error(`"${task.name}" is already archived`)
+    // The branch lives in the original repo: without it there would be nothing to restore from.
+    if (!this.deps.pathExists(repo.path)) {
+      throw new Error(
+        `The repository was not found at ${repo.path}, so the branch can't be kept: remove the task instead`,
+      )
+    }
+    if (!force) {
+      // Commits are safe on the kept branch; only what the worktree holds outside git would be lost.
+      const work = await git.getUnsavedWork(repo.path, task.worktreePath, task.branch, task.baseRef)
+      const n = work.uncommittedFiles.length
+      if (n > 0) {
+        throw new Error(
+          `"${task.name}" has ${n} uncommitted or untracked ${n === 1 ? 'file' : 'files'}. ${ARCHIVE_REFUSAL}`,
+        )
+      }
+      if (work.warning) throw new Error(`${work.warning} ${ARCHIVE_REFUSAL}`)
+    }
+    this.detachIf((t) => t.taskId === taskId)
+    await tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+    // Prunes the worktree entry when its folder is already gone.
+    await git.removeWorktree(repo.path, task.worktreePath)
+    this.gitStatusCache.delete(task.worktreePath)
+    return this.commit(m.archiveTask(this.state, themeId, repoId, taskId, new Date(this.now()).toISOString()))
+  }
+
+  /** On the task's queue too, like archiveTask. The session is started by the next openTarget, as for any task. */
+  async unarchiveTask(themeId: string, repoId: string, taskId: string): Promise<AppState> {
+    return this.exclusive(() => this.exclusive(() => this.unarchiveTaskNow(themeId, repoId, taskId), taskQueue(taskId)))
+  }
+
+  private async unarchiveTaskNow(themeId: string, repoId: string, taskId: string): Promise<AppState> {
+    const repo = m.getRepo(this.state, themeId, repoId)
+    const task = m.getTask(this.state, themeId, repoId, taskId)
+    const next = m.unarchiveTask(this.state, themeId, repoId, taskId) // throws if it isn't archived
+    if (!this.deps.pathExists(repo.path)) throw new Error(`Repository not found: ${repo.path}`)
+    if (this.deps.pathExists(task.worktreePath)) {
+      throw new Error(`${task.worktreePath} is already taken; move it away, then restore the task`)
+    }
+    await this.deps.git.restoreWorktree(repo.path, task.worktreePath, task.branch)
+    try {
+      return await this.commit(next)
+    } catch (err) {
+      await this.deps.git.removeWorktree(repo.path, task.worktreePath).catch(() => {}) // still archived: no worktree
+      throw err
+    }
   }
 
   async openTarget(target: Target): Promise<TabInfo[]> {
@@ -712,6 +786,7 @@ export class Orchestrator implements AppService {
     const item = m.getItem(this.state, target.themeId, target.itemId)
     if (item.kind !== 'repo' || !target.taskId) throw new Error('Git actions are only available for repository tasks')
     const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
+    assertNotArchived(task)
     return { task, repo: item }
   }
 
@@ -783,12 +858,13 @@ export class Orchestrator implements AppService {
 
   // File viewer. Read-only, so these skip the mutation queue.
 
-  /** A target's folder (task worktree or folder path), whether or not it still exists. */
+  /** A target's folder (task worktree or folder path), whether or not it still exists. Throws for archived tasks. */
   private targetRoot(target: Target): { root: string; isRepo: boolean; baseRef?: string } {
     const item = m.getItem(this.state, target.themeId, target.itemId)
     if (item.kind === 'folder') return { root: item.path, isRepo: false }
     if (!target.taskId) throw new Error('Choose a task to open')
     const task = m.getTask(this.state, target.themeId, item.id, target.taskId)
+    assertNotArchived(task)
     return { root: task.worktreePath, isRepo: true, baseRef: task.baseRef }
   }
 
@@ -871,7 +947,10 @@ export class Orchestrator implements AppService {
 
   // Claude usage, from Claude Code's transcripts. Read-only, and it works for targets whose folder is gone too.
 
-  /** Every task and folder, in sidebar order, with the folder its usage is counted for. */
+  /**
+   * Every task and folder, in sidebar order, with the folder its usage is counted for. Archived tasks are in too:
+   * only their transcripts are read, never their (gone) worktree, and their past cost still counts.
+   */
   private usageTargets(): Omit<UsageTargetReport, 'usage'>[] {
     const targets: Omit<UsageTargetReport, 'usage'>[] = []
     for (const theme of this.state.themes) {
@@ -889,7 +968,7 @@ export class Orchestrator implements AppService {
           targets.push({
             target: { themeId: theme.id, itemId: item.id, taskId: task.id },
             kind: 'task',
-            label: `${item.name} › ${task.name}`,
+            label: `${item.name} › ${task.name}${isArchived(task) ? ' (archived)' : ''}`,
             path: task.worktreePath,
           })
         }
