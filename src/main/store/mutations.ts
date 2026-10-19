@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename, isAbsolute } from 'node:path'
 import {
+  isArchived,
   MAX_TASK_NOTES,
   type AppState,
   type Folder,
@@ -50,10 +51,13 @@ export function getTask(state: AppState, themeId: string, repoId: string, taskId
   return task
 }
 
+/** " (archived)" for a task that is, so a clash with a task the sidebar tucks away is not a mystery. */
+const archivedNote = (task: Task): string => (isArchived(task) ? ' (archived)' : '')
+
+/** Archived tasks count too: their branch and worktree path are still theirs. */
 export function assertTaskSlugFree(repo: Repo, slug: string): void {
-  if (repo.tasks.some((t) => t.slug === slug)) {
-    throw new Error(`A task named "${slug}" already exists in ${repo.name}`)
-  }
+  const clash = repo.tasks.find((t) => t.slug === slug)
+  if (clash) throw new Error(`A task named "${slug}" already exists in ${repo.name}${archivedNote(clash)}`)
 }
 
 /** Display names are unique (ignoring case) among themes, and among the tasks of one repo. */
@@ -68,9 +72,8 @@ export function requireName(name: string, what: string): string {
 
 /** `exceptId`: the task being renamed, which may keep its own name. */
 export function assertTaskNameFree(repo: Repo, name: string, exceptId?: string): void {
-  if (repo.tasks.some((t) => t.id !== exceptId && sameName(t.name, name))) {
-    throw new Error(`A task named "${name.trim()}" already exists in ${repo.name}`)
-  }
+  const clash = repo.tasks.find((t) => t.id !== exceptId && sameName(t.name, name))
+  if (clash) throw new Error(`A task named "${name.trim()}" already exists in ${repo.name}${archivedNote(clash)}`)
 }
 
 function assertThemeNameFree(state: AppState, name: string, exceptId?: string): void {
@@ -270,6 +273,30 @@ export function removeTask(state: AppState, themeId: string, repoId: string, tas
   const next = clone(state)
   const repo = getRepo(next, themeId, repoId)
   repo.tasks = repo.tasks.filter((t) => t.id !== taskId)
+  return next
+}
+
+/** Marks a task archived at `archivedAt` (ISO time); everything else about it is kept. */
+export function archiveTask(
+  state: AppState,
+  themeId: string,
+  repoId: string,
+  taskId: string,
+  archivedAt: string,
+): AppState {
+  const task = getTask(state, themeId, repoId, taskId)
+  if (isArchived(task)) throw new Error(`"${task.name}" is already archived`)
+  const next = clone(state)
+  getTask(next, themeId, repoId, taskId).archivedAt = archivedAt
+  return next
+}
+
+/** Makes an archived task active again. */
+export function unarchiveTask(state: AppState, themeId: string, repoId: string, taskId: string): AppState {
+  const task = getTask(state, themeId, repoId, taskId)
+  if (!isArchived(task)) throw new Error(`"${task.name}" is not archived`)
+  const next = clone(state)
+  delete getTask(next, themeId, repoId, taskId).archivedAt
   return next
 }
 
