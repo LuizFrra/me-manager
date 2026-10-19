@@ -34,6 +34,7 @@ function renderSidebar(patch: Partial<SidebarProps> = {}): void {
       onToggleArchived={vi.fn()}
       onRestoreTask={vi.fn()}
       onDeleteArchivedTask={vi.fn()}
+      onEditRunCommand={vi.fn()}
       onOpenSettings={vi.fn()}
       onOpenUsage={vi.fn()}
       {...patch}
@@ -205,5 +206,26 @@ describe('Sidebar archived tasks', () => {
     expect(screen.getByRole('button', { name: 'older' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'old' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '○ fix' })).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar run commands', () => {
+  it("opens a repo's or folder's run command from its row, showing the command in the tooltip", async () => {
+    const user = userEvent.setup()
+    const onEditRunCommand = vi.fn()
+    const withCommand = appState(
+      theme('Client', [{ ...repo('api', [task('fix')]), runCommand: 'npm run dev' }, folder('notes')]),
+    )
+    renderSidebar({ state: withCommand, onEditRunCommand })
+    const repoButton = screen.getByRole('button', { name: 'Run command for api…' })
+    expect(repoButton).toHaveAttribute('title', 'Run command: npm run dev')
+    const folderButton = screen.getByRole('button', { name: 'Run command for notes…' })
+    expect(folderButton).toHaveAttribute('title', 'Set a run command…')
+    await user.click(repoButton)
+    await user.click(folderButton)
+    expect(onEditRunCommand.mock.calls).toEqual([
+      ['Client', 'api'],
+      ['Client', 'notes'],
+    ])
   })
 })

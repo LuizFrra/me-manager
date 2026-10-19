@@ -88,3 +88,65 @@ describe('TabBar tab menu', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+describe('TabBar run tab', () => {
+  const runTabs = (dead: boolean): TabInfo[] => [
+    { index: 0, name: 'claude', active: false },
+    { index: 1, name: 'run', active: true, ...(dead ? { dead: true as const } : {}) },
+  ]
+  function renderRun(dead: boolean): { onRestartRun: ReturnType<typeof vi.fn>; onStopRun: ReturnType<typeof vi.fn> } {
+    const handlers = { onRestartRun: vi.fn(), onStopRun: vi.fn() }
+    render(
+      <TabBar
+        tabs={runTabs(dead)}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onNew={() => {}}
+        onRestartClaude={() => {}}
+        onCopyTranscript={() => {}}
+        onSaveTranscript={() => {}}
+        panelOpen={false}
+        onTogglePanel={() => {}}
+        {...handlers}
+      />,
+    )
+    return handlers
+  }
+
+  it("adds Restart and Stop to a running run tab's menu", async () => {
+    const user = userEvent.setup()
+    const { onRestartRun, onStopRun } = renderRun(false)
+    const tab = screen.getByRole('tab', { name: 'run' })
+    expect(tab).not.toHaveClass('dead')
+    fireEvent.contextMenu(tab)
+    const items = within(screen.getByRole('menu', { name: 'Tab run' })).getAllByRole('menuitem')
+    expect(items.map((i) => i.textContent)).toEqual([
+      'Restart',
+      'Stop',
+      'Copy transcript',
+      'Save transcript…',
+      'Close tab',
+    ])
+    await user.click(items[0])
+    fireEvent.contextMenu(tab)
+    await user.click(screen.getByRole('menuitem', { name: 'Stop' }))
+    expect(onRestartRun).toHaveBeenCalledTimes(1)
+    expect(onStopRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks a stopped run tab, and offers Restart only', () => {
+    renderRun(true)
+    const tab = screen.getByRole('tab', { name: 'run' })
+    expect(tab).toHaveClass('dead')
+    expect(tab).toHaveAttribute('title', 'Stopped: the command exited. Restart it from the tab menu.')
+    fireEvent.contextMenu(tab)
+    expect(screen.getByRole('menuitem', { name: 'Restart' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Stop' })).not.toBeInTheDocument()
+  })
+
+  it("leaves other tabs' menus as they are", () => {
+    renderRun(false)
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'claude' }))
+    expect(screen.queryByRole('menuitem', { name: 'Restart' })).not.toBeInTheDocument()
+  })
+})

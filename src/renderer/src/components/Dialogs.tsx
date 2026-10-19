@@ -11,6 +11,7 @@ import {
   type UpdateStrategy,
 } from '../../../shared/types'
 import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
+import { MAX_RUN_COMMAND, runCommandError } from '../../../shared/runCommand'
 import { expandTaskName, templateBase } from '../../../shared/templates'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
@@ -76,6 +77,90 @@ export function NameDialog(props: {
           </button>
           <button type="submit" disabled={busy || !name.trim() || unchanged}>
             {busy ? 'Working…' : (props.submitLabel ?? 'Create')}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+/**
+ * Sets, changes or (emptied) removes a repo's or folder's run command: one line of shell, checked as main checks it.
+ * Enter saves, Esc cancels.
+ */
+export function RunCommandDialog(props: {
+  itemName: string
+  kind: 'repo' | 'folder'
+  /** The current command; '' when there is none. */
+  initial: string
+  onSave: (command: string) => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const [command, setCommand] = useState(props.initial)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const noteId = useId()
+  const errorId = useId()
+  const error = runCommandError(command)
+  const trimmed = command.trim()
+  const unchanged = trimmed === props.initial.trim()
+  const removing = trimmed === '' && !unchanged
+  const save = async (): Promise<void> => {
+    if (busyRef.current || unchanged || error) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await props.onSave(trimmed)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  const where =
+    props.kind === 'repo'
+      ? `It runs in a “run” tab of the selected task, in its worktree, for every task of ${props.itemName}.`
+      : 'It runs in a “run” tab of the folder’s session, in the folder.'
+  return (
+    <div className="overlay">
+      <form
+        className="dialog"
+        role="dialog"
+        aria-label={`Run command for ${props.itemName}`}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void save()
+        }}
+      >
+        <h2>Run command for “{props.itemName}”</h2>
+        <input
+          autoFocus
+          className="run-command-input"
+          aria-label="Command"
+          aria-describedby={`${noteId}${error ? ` ${errorId}` : ''}`}
+          aria-invalid={error ? true : undefined}
+          placeholder="e.g. npm run dev"
+          spellCheck={false}
+          maxLength={MAX_RUN_COMMAND + 100}
+          value={command}
+          onChange={(e) => setCommand(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
+        />
+        {error && (
+          <p id={errorId} className="dialog-field-hint dialog-field-error" role="alert">
+            {error}
+          </p>
+        )}
+        <p id={noteId} className="dialog-note">
+          {where} Your shell runs it, so pipes, <code>&amp;&amp;</code> and variables work; the tab stays open with its
+          output when it exits. Leave it empty to remove it.
+        </p>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={busy || unchanged || error !== null}>
+            {busy ? 'Saving…' : removing ? 'Remove' : 'Save'}
           </button>
         </div>
       </form>

@@ -14,6 +14,7 @@ import {
   NewTaskDialog,
   NotesDialog,
   RemoveTaskDialog,
+  RunCommandDialog,
 } from './Dialogs'
 
 const work = { uncommittedFiles: ['src/login.ts'], unpushedCommits: [] }
@@ -176,6 +177,48 @@ describe('ConfirmRemoveDialog', () => {
   })
 })
 
+describe('RunCommandDialog', () => {
+  it('saves a new command, trimmed, saying where it runs', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<RunCommandDialog itemName="my-api" kind="repo" initial="" onSave={onSave} onCancel={vi.fn()} />)
+    const dialog = screen.getByRole('dialog', { name: 'Run command for my-api' })
+    expect(dialog).toHaveTextContent('every task of my-api')
+    const input = screen.getByRole('textbox', { name: 'Command' })
+    expect(input).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled() // unchanged
+    await user.type(input, '  npm run dev ')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith('npm run dev')
+  })
+
+  it("edits a folder's command, and removes it when emptied", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<RunCommandDialog itemName="site" kind="folder" initial="hugo server" onSave={onSave} onCancel={vi.fn()} />)
+    expect(screen.getByRole('dialog')).toHaveTextContent('in the folder')
+    const input = screen.getByRole('textbox', { name: 'Command' })
+    expect(input).toHaveValue('hugo server')
+    await user.clear(input)
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    expect(onSave).toHaveBeenCalledWith('')
+  })
+
+  it('refuses an over-long command before saving', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<RunCommandDialog itemName="api" kind="repo" initial="" onSave={onSave} onCancel={vi.fn()} />)
+    const input = screen.getByRole('textbox', { name: 'Command' })
+    // Typing it would be slow: paste it.
+    await user.click(input)
+    await user.paste('x'.repeat(1001))
+    expect(screen.getByRole('alert')).toHaveTextContent('The run command is limited to 1,000 characters')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(onSave).not.toHaveBeenCalled()
+  })
+})
+
 describe('dialogs give focus back when they close', () => {
   /** A button that opens the dialog; the dialog gets a `close` callback. */
   function Opener({ dialog }: { dialog: (close: () => void) => React.ReactNode }): React.JSX.Element {
@@ -224,6 +267,12 @@ describe('dialogs give focus back when they close', () => {
           onAskClaude={async () => {}}
           onClose={close}
         />
+      ),
+    ],
+    [
+      'RunCommand',
+      (close: () => void) => (
+        <RunCommandDialog itemName="api" kind="repo" initial="" onSave={async () => {}} onCancel={close} />
       ),
     ],
     [

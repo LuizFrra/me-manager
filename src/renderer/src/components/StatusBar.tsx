@@ -1,5 +1,6 @@
 import type { TaskGitStatus } from '../../../shared/types'
 import { baseSummary, plural } from '../lib/gitStatus'
+import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { formatCost } from '../lib/usageFormat'
 import { claudeStateText, STATUS_SUBJECT_MAX, truncate } from '../lib/statusText'
@@ -24,6 +25,9 @@ export interface StatusBarProps {
   todayCost?: number
   /** New Claude sessions skip permission prompts (see effectiveSessionFlags). */
   skipPermissions: boolean
+  /** The session's run tab; shown (a click shows the tab) unless there is none. */
+  run?: RunState
+  onShowRun?: () => void
   /** Copies the branch the bar shows. */
   onCopyBranch: (branch: string) => void
   onOpenChanges: () => void
@@ -42,11 +46,26 @@ function ClaudeState({ session }: { session: SessionState }): React.JSX.Element 
   )
 }
 
+function RunSegment({ run, onShow }: { run?: RunState; onShow?: () => void }): React.JSX.Element | null {
+  if (!run || run === 'none') return null
+  const info = RUN_STATE_INFO[run]
+  return (
+    <button
+      className={`status-seg status-run ${run}`}
+      aria-label={`Run tab ${run}: show it`}
+      title={`${info.title}. Click to show it.`}
+      onClick={onShow}
+    >
+      <span aria-hidden="true">{info.glyph}</span> {info.label}
+    </button>
+  )
+}
+
 /**
  * A thin bar at the bottom of the main area for the selected target, from data the app already polls. A task's
  * left side: branch (click copies it), ↑ahead ↓behind its base, uncommitted files (click opens Changes) and the
- * last commit; its right side: Claude's state, the tab count, today's cost (click opens the usage view) and a
- * warning while permission prompts are skipped. A folder shows its path and the session state.
+ * last commit; its right side: the run tab's state (click shows it), Claude's state, the tab count, today's cost (click opens the usage view) and a
+ * warning while permission prompts are skipped. A folder shows its path, the run tab's state and the session state.
  */
 export function StatusBar(p: StatusBarProps): React.JSX.Element {
   if (!p.task) {
@@ -58,6 +77,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
           </span>
         </div>
         <div className="status-right">
+          <RunSegment run={p.run} onShow={p.onShowRun} />
           <ClaudeState session={p.session} />
         </div>
       </div>
@@ -110,6 +130,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
         )}
       </div>
       <div className="status-right">
+        <RunSegment run={p.run} onShow={p.onShowRun} />
         <ClaudeState session={p.session} />
         <span className="status-seg" title="Terminal tabs in this session">
           {plural(p.tabs, 'tab')}
