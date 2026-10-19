@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppState,
+  DevUrl,
   GitTools,
   Item,
   LiveStatus,
@@ -164,6 +165,7 @@ type AppAction =
     }
   | { type: 'copy'; kind: CopyKind }
   | { type: 'newTaskFromTemplate'; themeId: string; repoId: string; template: string }
+  | { type: 'openUrl'; url: string }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
 interface AppCommand extends PaletteCommand {
@@ -175,6 +177,7 @@ const RENAME_NOTE = 'The branch and folder keep their original name.'
 
 const EMPTY: AppState = { version: 1, themes: [] }
 const NO_COMMENTS: readonly ReviewComment[] = []
+const NO_URLS: readonly DevUrl[] = []
 /** Terminal zoom saves the font size once the keys have been still this long. */
 export const ZOOM_SAVE_MS = 500
 /** UI state (selection, collapsed groups, panels, filter) is saved once it has been still this long. */
@@ -210,6 +213,8 @@ function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | n
 interface PaletteLive {
   /** The session's run tab. */
   run: RunState
+  /** Dev-server URLs printed in its tabs. */
+  urls: readonly DevUrl[]
 }
 
 /** The repo or folder of `target`. */
@@ -238,7 +243,7 @@ function buildPaletteCommands(
   }))
   const action = (
     label: string,
-    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate'>,
+    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate' | 'openUrl'>,
     shortcut?: string,
   ): void => {
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
@@ -287,6 +292,15 @@ function buildPaletteCommands(
       })
     }
   }
+  if (selected && !isArchivedTarget(state, selected)) {
+    for (const { url } of live.urls)
+      commands.push({
+        id: `action:openUrl:${url}`,
+        kind: 'action',
+        label: `Open ${url}`,
+        action: { type: 'openUrl', url },
+      })
+  }
   const copies = isArchivedTarget(state, selected) ? [] : copiesOf(state, selected, tmuxSocket)
   for (const { kind, label } of copies)
     commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
@@ -328,6 +342,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     overlayOpenRef.current = overlayOpen
     if (overlayOpen) modalEpoch.current++
   }, [overlayOpen])
+  // The selected target's dev-server URLs, tagged with its targetKey like `usage`.
+  const [devUrls, setDevUrls] = useState<{ key: string; urls: DevUrl[] } | null>(null)
   // The selected target's usage, tagged with its targetKey so another target's numbers never show.
   const [usage, setUsage] = useState<{ key: string; summary: UsageSummary } | null>(null)
   // gh is assumed missing until main says otherwise; the PR button then explains how to install it.
@@ -483,13 +499,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     )
     refreshGit()
     const current = selectedRef.current
-    if (current && !isArchivedTarget(stateRef.current, current))
-      api.listTabs(current).then(
-        (next) => {
-          if (sameTarget(selectedRef.current, current)) setTabs(keepIfEqual(next))
-        },
-        () => {},
-      )
+    if (!current || isArchivedTarget(stateRef.current, current)) return
+    api.listTabs(current).then(
+      (next) => {
+        if (sameTarget(selectedRef.current, current)) setTabs(keepIfEqual(next))
+      },
+      () => {},
+    )
+    // Main captures a tab again only after it printed something, and at most every few seconds.
+    api.getDevUrls(current).then(
+      (urls) => {
+        if (!sameTarget(selectedRef.current, current)) return
+        const next = { key: targetKey(current), urls }
+        setDevUrls((prev) => (prev ? keepIfEqual(next)(prev) : next))
+      },
+      () => {}, // the links keep their last values
+    )
   }, [api, refreshGit])
 
   const refreshUsage = useCallback((): Promise<void> | undefined => {
@@ -665,6 +690,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const result = await attempt(() => fn(target))
     if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
+
+  /** A dev-server URL, in the system browser (main takes http(s) only). */
+  const openUrl = (url: string): void => void attempt(() => api.openExternal(url))
 
   /** Run (shows the run tab, or opens one), Restart or Stop the selected target's run command. */
   const runTab = (kind: 'start' | 'restart' | 'stop'): void =>
@@ -1316,14 +1344,24 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const hasActiveTab = tabs.some((t) => t.active)
   const run = runState(tabs)
+  // The selected target's URLs, without those of a tab that closed since the last poll. The same empty list when
+  // there are none, so a change of tabs doesn't rebuild the palette's commands (and re-run its matching).
+  const shownUrls = useMemo(() => {
+    if (!selected || devUrls?.key !== targetKey(selected)) return NO_URLS
+    const urls = devUrls.urls.filter((u) => tabs.some((t) => t.index === u.index && t.name === u.tab))
+    return urls.length > 0 ? urls : NO_URLS
+  }, [selected, devUrls, tabs])
   // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
   // to 50k files) whenever its commands change.
   const paletteCommands = useMemo(
     () =>
       paletteOpen
-        ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, { run })
+        ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, {
+            run,
+            urls: shownUrls,
+          })
         : [],
-    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, run],
+    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, run, shownUrls],
   )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
@@ -1433,6 +1471,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'restoreTask') withSelectedTask(restoreTask)
     else if (action.type === 'deleteArchivedTask') withSelectedTask(deleteArchivedTask)
     else if (action.type === 'newTaskFromTemplate') newTask(action.themeId, action.repoId, action.template)
+    else if (action.type === 'openUrl') openUrl(action.url)
     else if (action.type === 'run') runTab('start')
     else if (action.type === 'restartRun') runTab('restart')
     else if (action.type === 'stopRun') runTab('stop')
@@ -1553,6 +1592,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                     }
                   : undefined
               }
+              devUrls={shownUrls}
+              onOpenUrl={openUrl}
             />
             <TabBar
               tabs={tabs}
@@ -1638,6 +1679,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 skipPermissions={sessionFlags.skipPermissions}
                 run={run}
                 onShowRun={() => runTab('start')}
+                devUrls={shownUrls}
+                onOpenUrl={openUrl}
                 onCopyBranch={copyBranch}
                 onOpenChanges={() => updatePanel({ open: true, tab: 'changes' })}
                 onOpenUsage={() => setUsageOpen(true)}

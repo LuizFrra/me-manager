@@ -134,3 +134,29 @@ describe('TaskHeader run controls', () => {
     expect(screen.queryByRole('group', { name: 'Run' })).not.toBeInTheDocument()
   })
 })
+
+describe('TaskHeader dev-server links', () => {
+  const urls = [
+    { url: 'http://localhost:5173/', index: 2, tab: 'run' },
+    { url: 'http://127.0.0.1:8000/admin/', index: 1, tab: 'shell' },
+  ]
+
+  it('shows each URL as a link that opens it in the browser through onOpenUrl', async () => {
+    const user = userEvent.setup()
+    const onOpenUrl = vi.fn()
+    render(<TaskHeader {...base} devUrls={urls} onOpenUrl={onOpenUrl} />)
+    const links = within(screen.getByRole('group', { name: 'Dev-server links' })).getAllByRole('link')
+    expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['localhost:5173', 'http://localhost:5173/'],
+      ['127.0.0.1:8000/admin/', 'http://127.0.0.1:8000/admin/'],
+    ])
+    expect(links[0]).toHaveAttribute('title', 'Open http://localhost:5173/ in the browser (printed in the “run” tab)')
+    await user.click(links[1])
+    expect(onOpenUrl).toHaveBeenCalledWith('http://127.0.0.1:8000/admin/')
+  })
+
+  it('shows no links line without URLs', () => {
+    render(<TaskHeader {...base} devUrls={[]} onOpenUrl={vi.fn()} />)
+    expect(screen.queryByRole('group', { name: 'Dev-server links' })).not.toBeInTheDocument()
+  })
+})
