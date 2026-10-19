@@ -575,6 +575,11 @@ export interface MeManagerApi {
   getUsage(target: Target): Promise<UsageSummary>
   /** Usage of every task and folder, per theme, with totals. Cheap to call again: it is computed from a cache. */
   getUsageReport(): Promise<UsageReport>
+  /**
+   * Where the daily budget and each active task's budget stand, from the same cached usage as getUsageReport.
+   * Reads no usage at all while no budget is set.
+   */
+  getBudgets(): Promise<BudgetReport>
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
@@ -718,6 +723,17 @@ export interface BudgetStatus {
   limit: number
   /** spent / limit: 1 is the whole budget, above 1 over it. */
   fraction: number
+}
+
+/** Where every budget stands (see MeManagerApi.getBudgets). */
+export interface BudgetReport {
+  /** All usage today (every task and folder, since local midnight) against Settings.dailyBudgetUsd; null for none. */
+  daily: BudgetStatus | null
+  /**
+   * Each active (not archived) task that has a budget (Task.budgetUsd, else Settings.taskBudgetUsd): its all-time
+   * cost against it, by task id.
+   */
+  tasks: Record<string, BudgetStatus>
 }
 
 export interface UsageReport {
