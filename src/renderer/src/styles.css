@@ -54,6 +54,8 @@
   --error-text: light-dark(#b3261e, #f07360);
   --error-text-soft: light-dark(#8f1d17, #f59a8a);
   --danger-surface: light-dark(#fbe9e5, #4a2420);
+  /* Destructive buttons: a deep red that keeps white text readable in both appearances. */
+  --danger-bg: light-dark(#b3261e, #a1342a);
   --primary-bg: light-dark(#bc5a3a, #b5533a);
   --primary-bg-hover: light-dark(#a9502f, #c25e3f);
   /* Accent tints: selection, pressed toggles, notes. */
@@ -1109,12 +1111,12 @@ button:disabled {
   font-weight: 500;
 }
 .danger {
-  background: var(--danger);
-  border-color: var(--danger);
+  background: var(--danger-bg);
+  border-color: var(--danger-bg);
   color: white;
 }
 .danger:hover {
-  background: color-mix(in srgb, var(--danger) 88%, #000);
+  background: color-mix(in srgb, var(--danger-bg) 85%, #000);
 }
 .primary {
   background: var(--primary-bg);
@@ -1331,6 +1333,40 @@ button:disabled {
 .prereq {
   max-width: 560px;
   margin: 80px auto;
+  padding: 0 24px;
+}
+.prereq h1 {
+  margin: 0 0 8px;
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 480;
+  color: var(--text-strong);
+}
+.prereq p {
+  color: var(--muted);
+}
+.prereq ul {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 20px;
+  padding: 0;
+  list-style: none;
+}
+.prereq li {
+  padding: 12px 14px;
+  line-height: 1.5;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.prereq code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.prereq .primary {
+  padding: 7px 16px;
+  border-radius: var(--radius);
+  font-weight: 500;
 }
 
 /* ---------- Side panel ---------- */
@@ -4060,10 +4096,11 @@ button.status-seg:focus-visible {
 .archived-task-inner {
   margin: auto;
   width: min(520px, 100%);
-  padding: 20px 22px;
-  background: var(--panel);
+  padding: 24px 26px;
+  background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
+  box-shadow: 0 4px 20px var(--shadow-color);
 }
 .archived-task-where {
   margin: 0 0 4px;
@@ -4072,8 +4109,10 @@ button.status-seg:focus-visible {
 }
 .archived-task h2 {
   margin: 0 0 8px;
-  font-size: 17px;
-  font-weight: 600;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 560;
+  color: var(--text-strong);
 }
 .archived-task p {
   margin: 0 0 12px;
@@ -4107,7 +4146,18 @@ button.status-seg:focus-visible {
   gap: 8px;
 }
 .archived-task-actions button {
-  padding: 5px 14px;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-weight: 500;
+}
+/* Delete… only asks first (the dialog has the red button): quiet here, beside Restore. */
+.archived-task-actions .danger {
+  color: var(--error-text);
+  background: none;
+  border-color: var(--border);
+}
+.archived-task-actions .danger:hover {
+  background: var(--danger-surface);
 }
 
 /* Read by assistive technology only. */
