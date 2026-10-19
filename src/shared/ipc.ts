@@ -29,6 +29,7 @@ export const INVOKE_METHODS = [
   'createTask',
   'renameTask',
   'setTaskNotes',
+  'setTaskBudget',
   'checkTaskRemoval',
   'removeTask',
   'archiveTask',
@@ -65,6 +66,7 @@ export const INVOKE_METHODS = [
   'sendToClaude',
   'getUsage',
   'getUsageReport',
+  'getBudgets',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]
@@ -77,3 +79,5 @@ export const PTY_DATA = 'pty:data'
 export const PTY_EXIT = 'pty:exit'
 /** Main → renderer: select this target (a desktop notification was clicked). */
 export const SELECT_TARGET = 'app:select-target'
+/** Main → renderer: a budget reached a threshold (see MeManagerApi.onBudgetAlert). */
+export const BUDGET_ALERT = 'app:budget-alert'

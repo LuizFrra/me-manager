@@ -31,6 +31,45 @@ describe('SettingsDialog: Remote Control and permissions', () => {
   })
 })
 
+describe('SettingsDialog: budgets', () => {
+  it('shows no budgets by default and saves the ones typed', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={DEFAULT_SETTINGS} onSave={onSave} onCancel={vi.fn()} />)
+    const daily = screen.getByLabelText('Daily budget')
+    const task = screen.getByLabelText('Task budget')
+    expect(daily).toHaveValue('')
+    expect(task).toHaveValue('')
+    expect(daily).toHaveAccessibleDescription(/all tasks and folders/)
+    await user.type(daily, '20')
+    await user.type(task, '2.5')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ dailyBudgetUsd: 20, taskBudgetUsd: 2.5 }))
+  })
+
+  it('removes a budget that is emptied, and keeps Save off for an invalid amount', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(
+      <SettingsDialog
+        settings={{ ...DEFAULT_SETTINGS, dailyBudgetUsd: 20, taskBudgetUsd: 5 }}
+        onSave={onSave}
+        onCancel={vi.fn()}
+      />,
+    )
+    const daily = screen.getByLabelText('Daily budget')
+    expect(daily).toHaveValue('20')
+    await user.clear(daily)
+    await user.clear(screen.getByLabelText('Task budget'))
+    await user.type(screen.getByLabelText('Task budget'), '-1')
+    expect(screen.getByLabelText('Task budget')).toBeInvalid()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    await user.clear(screen.getByLabelText('Task budget'))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ dailyBudgetUsd: null, taskBudgetUsd: null }))
+  })
+})
+
 describe('SettingsDialog: update strategy', () => {
   it('shows rebase by default and saves merge', async () => {
     const user = userEvent.setup()

@@ -476,7 +476,8 @@ export function SettingsDialog(props: {
               Desktop notifications
             </label>
             <p id={notificationsHintId} className="settings-hint settings-checkbox-hint">
-              When Claude finishes or needs your input in a task or folder you aren&apos;t looking at.
+              When Claude finishes or needs your input in a task or folder you aren&apos;t looking at, and when a task
+              or the day reaches 80% or 100% of its budget.
             </p>
           </div>
           <div className="settings-field">
@@ -494,6 +495,48 @@ export function SettingsDialog(props: {
               cost.
             </p>
           </div>
+        </section>
+
+        <section className="settings-section" aria-label="Budgets">
+          <h3>Budgets</h3>
+          <div className="settings-row">
+            <Field
+              label="Daily budget"
+              hint="Estimated cost of all tasks and folders today, since midnight."
+              error={errors.dailyBudget}
+              suffix="USD"
+            >
+              {(aria) => (
+                <input
+                  {...aria}
+                  inputMode="decimal"
+                  placeholder="None"
+                  value={form.dailyBudget}
+                  onChange={set('dailyBudget')}
+                />
+              )}
+            </Field>
+            <Field
+              label="Task budget"
+              hint="Each task's estimated cost, all time. A task can have its own: “Set budget for current task…” in the palette."
+              error={errors.taskBudget}
+              suffix="USD"
+            >
+              {(aria) => (
+                <input
+                  {...aria}
+                  inputMode="decimal"
+                  placeholder="None"
+                  value={form.taskBudget}
+                  onChange={set('taskBudget')}
+                />
+              )}
+            </Field>
+          </div>
+          <p className="settings-note">
+            A badge turns amber at 80% and red at 100%, with a notification at each (when notifications are on). Leave a
+            field empty for no budget.
+          </p>
         </section>
 
         <TaskTemplatesSection

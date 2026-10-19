@@ -1,3 +1,4 @@
+import type { AppState } from '../../../shared/types'
 import { describe, expect, it } from 'vitest'
 import { createMockApi } from './mockApi'
 
@@ -193,6 +194,27 @@ describe('createMockApi', () => {
     const sum = theme.targets.reduce((n, t) => n + t.usage.all.cost, 0)
     expect(theme.usage.all.cost).toBeCloseTo(sum)
     expect(report.total.all.cost).toBeCloseTo(sum)
+  })
+
+  it("sets and clears a task's own budget like main", async () => {
+    const api = createMockApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const repo = (await api.createTask(themeId, repoId, 'fix')).themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    const budgetOf = (s: AppState): number | undefined => {
+      const r = s.themes[0].items[0]
+      return r.kind === 'repo' ? r.tasks[0].budgetUsd : undefined
+    }
+    await expect(api.setTaskBudget(themeId, repoId, taskId, 0)).rejects.toThrow(/The budget must be an amount/)
+    expect(budgetOf(await api.setTaskBudget(themeId, repoId, taskId, 2.345))).toBe(2.35)
+    expect(budgetOf(await api.setTaskBudget(themeId, repoId, taskId, null))).toBeUndefined()
+
+    expect(await api.getBudgets()).toEqual({ daily: null, tasks: {} })
+    await api.updateSettings({ dailyBudgetUsd: 100_000, taskBudgetUsd: 0.01 })
+    const budgets = await api.getBudgets()
+    expect(budgets.tasks[taskId]).toMatchObject({ level: 'over', limit: 0.01 })
+    expect(budgets.daily).toMatchObject({ level: 'ok', limit: 100_000 })
   })
 
   it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {

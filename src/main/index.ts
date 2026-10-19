@@ -8,15 +8,27 @@ import { Orchestrator } from './app/orchestrator'
 import { FilesService } from './files/filesService'
 import { GhService } from './git/gh'
 import { GitService } from './git/gitService'
+import { BUDGET_ALERT } from '../shared/ipc'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
+import { BudgetWatcher } from './notify/budgetWatcher'
 import { NotificationWatcher } from './notify/watcher'
-import { promptsDir, settingsFile, stateFile, tmuxConfFile, TMUX_SOCKET, uiStateFile, worktreesRoot } from './paths'
+import {
+  budgetAlertsFile,
+  promptsDir,
+  settingsFile,
+  stateFile,
+  tmuxConfFile,
+  TMUX_SOCKET,
+  uiStateFile,
+  worktreesRoot,
+} from './paths'
 import { PromptFiles } from './promptFiles'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
+import { BudgetAlertStore } from './store/budgetAlerts'
 import { SettingsService, SettingsStore } from './store/settings'
 import { UiStateStore } from './store/uiState'
 import { TmuxService } from './tmux/tmuxService'
@@ -26,6 +38,7 @@ import { isAppUrl, isHttpUrl } from './urls'
 let mainWindow: BrowserWindow | null = null
 let ptyService: PtyService | null = null
 let notificationWatcher: NotificationWatcher | null = null
+let budgetWatcher: BudgetWatcher | null = null
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -126,18 +139,30 @@ async function bootstrap(): Promise<void> {
   buildMenu()
 
   // Desktop notifications when a background task's Claude finishes or waits for input (Settings.notifications).
+  const notify = createDesktopNotifier({
+    getWindow: () => mainWindow ?? (mainWindow = createWindow()),
+    ...(process.platform === 'linux' ? { icon } : {}),
+  })
   notificationWatcher = new NotificationWatcher({
     getStatus: () => orchestrator.getStatus(),
     getState: () => orchestrator.getState(),
     getSettings: () => settings.get(),
     currentTarget: () => orchestrator.currentTarget(),
     isWindowFocused: () => mainWindow?.isFocused() ?? false,
-    notify: createDesktopNotifier({
-      getWindow: () => mainWindow ?? (mainWindow = createWindow()),
-      ...(process.platform === 'linux' ? { icon } : {}),
-    }),
+    notify,
   })
   notificationWatcher.start()
+  // And when a task or the day reaches 80% or 100% of its budget (also a toast while the window is focused).
+  budgetWatcher = new BudgetWatcher({
+    getBudgets: () => orchestrator.getBudgets(),
+    getState: () => orchestrator.getState(),
+    getSettings: () => settings.get(),
+    isWindowFocused: () => mainWindow?.isFocused() ?? false,
+    notify,
+    showInApp: (alert) => mainWindow?.webContents.send(BUDGET_ALERT, alert),
+    store: new BudgetAlertStore(budgetAlertsFile()),
+  })
+  budgetWatcher.start()
 
   // zoom: true only stops the toolkit from swallowing Mod+- and Mod+Shift+= (there is no page zoom: no menu item
   // has it), so they reach the renderer's terminal zoom.
@@ -162,6 +187,7 @@ app
 // Detach only: tmux sessions (and Claude) keep running after the app closes.
 app.on('before-quit', () => {
   notificationWatcher?.stop()
+  budgetWatcher?.stop()
   ptyService?.detach()
 })
 

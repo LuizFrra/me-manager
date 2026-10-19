@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { demoGitStatus } from '../api/mockApi'
 import { STATUS_SUBJECT_MAX, truncate } from '../lib/statusText'
+import { budgetStatus } from '../../../shared/budget'
 import { StatusBar, type StatusBarProps } from './StatusBar'
 
 const bar = (): HTMLElement => screen.getByRole('group', { name: 'Status bar' })
@@ -170,5 +171,41 @@ describe('StatusBar', () => {
       expect(onOpenUrl).toHaveBeenCalledWith('http://localhost:3000/')
       unmount()
     }
+  })
+})
+
+describe('StatusBar daily budget', () => {
+  const cost = (): HTMLElement => screen.getByRole('button', { name: /^Today's cost/ })
+
+  it("leaves today's cost as it is without a daily budget", () => {
+    renderBar({ dailyBudget: null })
+    expect(cost()).not.toHaveClass('budget-warn')
+    expect(cost()).not.toHaveClass('budget-over')
+    expect(cost()).not.toHaveAttribute('title', expect.stringContaining('budget'))
+  })
+
+  it('shows the daily budget in the tooltip, and warns from 80% of it', () => {
+    renderBar({ todayCost: 0.42, dailyBudget: budgetStatus(4.1, 5) })
+    expect(cost()).toHaveClass('budget-warn')
+    expect(cost()).toHaveAttribute(
+      'title',
+      'Estimated cost today at API prices: $0.42 here. $4.10 of $5.00 daily budget (82%), all tasks and folders. Click for the usage view.',
+    )
+    expect(cost()).toHaveAccessibleName("Today's cost $0.42, 82% of the daily budget: show usage")
+    expect(cost()).toHaveTextContent('$0.42 today')
+  })
+
+  it('is marked over budget once the day has spent it', () => {
+    renderBar({ dailyBudget: budgetStatus(5.5, 5) })
+    expect(cost()).toHaveClass('budget-over')
+    expect(cost()).toHaveAccessibleName("Today's cost $0.42, over the daily budget: show usage")
+    expect(cost()).toHaveAttribute('title', expect.stringContaining('$5.50 of $5.00 daily budget (110%)'))
+  })
+
+  it('stays plain under 80%, with the budget in the tooltip', () => {
+    renderBar({ dailyBudget: budgetStatus(1, 5) })
+    expect(cost()).not.toHaveClass('budget-warn')
+    expect(cost()).toHaveAccessibleName("Today's cost $0.42: show usage")
+    expect(cost()).toHaveAttribute('title', expect.stringContaining('$1.00 of $5.00 daily budget (20%)'))
   })
 })

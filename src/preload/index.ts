@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { INVOKE_METHODS, invokeChannel, PTY_DATA, PTY_EXIT, PTY_RESIZE, PTY_WRITE, SELECT_TARGET } from '../shared/ipc'
-import type { MeManagerApi, Target } from '../shared/types'
+import {
+  BUDGET_ALERT,
+  INVOKE_METHODS,
+  invokeChannel,
+  PTY_DATA,
+  PTY_EXIT,
+  PTY_RESIZE,
+  PTY_WRITE,
+  SELECT_TARGET,
+} from '../shared/ipc'
+import type { BudgetAlert, MeManagerApi, Target } from '../shared/types'
 
 function subscribe<T>(channel: string, cb: (value: T) => void): () => void {
   const listener = (_event: IpcRendererEvent, value: T): void => cb(value)
@@ -19,6 +28,7 @@ const api = {
   onPtyData: (cb: (data: string) => void) => subscribe(PTY_DATA, cb),
   onPtyExit: (cb: (code: number) => void) => subscribe(PTY_EXIT, cb),
   onSelectTarget: (cb: (target: Target) => void) => subscribe(SELECT_TARGET, cb),
+  onBudgetAlert: (cb: (alert: BudgetAlert) => void) => subscribe(BUDGET_ALERT, cb),
 } as unknown as MeManagerApi
 
 contextBridge.exposeInMainWorld('api', api)

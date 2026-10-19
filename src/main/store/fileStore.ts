@@ -1,5 +1,6 @@
 import type { AppState } from '../../shared/types'
 import type { StoreApi } from '../contracts'
+import { isBudget } from '../../shared/budget'
 import { isRunCommand } from '../../shared/runCommand'
 import { JsonFile } from './jsonFile'
 import { emptyState } from './mutations'
@@ -9,8 +10,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 /**
  * Drops an `archivedAt` that isn't a non-empty string (a hand edit), so the task loads as an active one rather
  * than as one whose archived state nothing can rely on, and a `runCommand` that isn't one line of shell as
- * setRunCommand saves it, so "Run" never starts what the app wouldn't have saved. Files from before archiving or
- * run commands have neither and load unchanged.
+ * setRunCommand saves it, so "Run" never starts what the app wouldn't have saved, and a task's `budgetUsd` that
+ * isn't one setTaskBudget would save (the default budget then applies). Files from before archiving, run commands
+ * or budgets have none of them and load unchanged.
  */
 function checkItems(state: AppState): void {
   for (const theme of state.themes) {
@@ -19,7 +21,9 @@ function checkItems(state: AppState): void {
       if (isRecord(item) && 'runCommand' in item && !isRunCommand(item.runCommand)) delete item.runCommand
       if (!isRecord(item) || !Array.isArray(item.tasks)) continue
       for (const task of item.tasks as unknown[]) {
-        if (!isRecord(task) || !('archivedAt' in task)) continue
+        if (!isRecord(task)) continue
+        if ('budgetUsd' in task && !isBudget(task.budgetUsd)) delete task.budgetUsd
+        if (!('archivedAt' in task)) continue
         if (typeof task.archivedAt !== 'string' || task.archivedAt === '') delete task.archivedAt
       }
     }

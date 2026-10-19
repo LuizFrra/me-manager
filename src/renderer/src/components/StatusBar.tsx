@@ -1,4 +1,5 @@
-import type { DevUrl, TaskGitStatus } from '../../../shared/types'
+import { budgetPercent, budgetSummary } from '../../../shared/budget'
+import type { BudgetStatus, DevUrl, TaskGitStatus } from '../../../shared/types'
 import { baseSummary, plural } from '../lib/gitStatus'
 import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
@@ -24,6 +25,11 @@ export interface StatusBarProps {
   tabs: number
   /** Today's estimated Claude cost in USD, once the usage is loaded. */
   todayCost?: number
+  /**
+   * All usage today against the daily budget (see BudgetReport.daily): today's cost turns amber from 80% of it and
+   * red from 100%, and its tooltip says how much is spent. Null or absent without a daily budget.
+   */
+  dailyBudget?: BudgetStatus | null
   /** New Claude sessions skip permission prompts (see effectiveSessionFlags). */
   skipPermissions: boolean
   /** The session's run tab; shown (a click shows the tab) unless there is none. */
@@ -61,6 +67,32 @@ function RunSegment({ run, onShow }: { run?: RunState; onShow?: () => void }): R
       onClick={onShow}
     >
       <span aria-hidden="true">{info.glyph}</span> {info.label}
+    </button>
+  )
+}
+
+/** Today's cost of the target, styled and explained by the daily budget (all usage) when there is one. */
+function TodayCost(props: { cost: number; budget?: BudgetStatus | null; onOpen: () => void }): React.JSX.Element {
+  const { cost, budget } = props
+  const level = budget && budget.level !== 'ok' ? ` budget-${budget.level}` : ''
+  const note =
+    budget?.level === 'over'
+      ? ', over the daily budget'
+      : budget?.level === 'warn'
+        ? `, ${budgetPercent(budget)}% of the daily budget`
+        : ''
+  const title = budget
+    ? `Estimated cost today at API prices: ${formatCost(cost)} here. ${budgetSummary(budget, 'daily budget')} (${budgetPercent(budget)}%), all tasks and folders. Click for the usage view.`
+    : 'Estimated cost today at API prices. Click for the usage view.'
+  return (
+    <button
+      className={`status-seg status-cost${level}`}
+      aria-label={`Today's cost ${formatCost(cost)}${note}: show usage`}
+      title={title}
+      onClick={props.onOpen}
+    >
+      {level && <span aria-hidden="true">⚠ </span>}
+      {formatCost(cost)} today
     </button>
   )
 }
@@ -156,16 +188,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
         <span className="status-seg" title="Terminal tabs in this session">
           {plural(p.tabs, 'tab')}
         </span>
-        {p.todayCost !== undefined && (
-          <button
-            className="status-seg status-cost"
-            aria-label={`Today's cost ${formatCost(p.todayCost)}: show usage`}
-            title="Estimated cost today at API prices. Click for the usage view."
-            onClick={p.onOpenUsage}
-          >
-            {formatCost(p.todayCost)} today
-          </button>
-        )}
+        {p.todayCost !== undefined && <TodayCost cost={p.todayCost} budget={p.dailyBudget} onOpen={p.onOpenUsage} />}
         {p.skipPermissions && (
           <span
             className="status-seg status-warn"

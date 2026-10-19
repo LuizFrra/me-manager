@@ -13,6 +13,11 @@ export interface Task {
    * branch, base and notes are kept. Absent for an active task, and in state files from before archiving existed.
    */
   archivedAt?: string
+  /**
+   * The task's own limit on its estimated cost, all time, in USD (whole cents within BUDGET_LIMITS, see
+   * shared/budget.ts), in place of Settings.taskBudgetUsd. Absent when it has none, and in state files from before.
+   */
+  budgetUsd?: number
 }
 
 /** An archived task has no worktree and no session: nothing may poll, open or attach to it until it is restored. */
@@ -240,7 +245,10 @@ export interface Settings {
   remoteControl: boolean
   /** Start every Claude session with `--dangerously-skip-permissions`: Claude runs commands without asking. */
   skipPermissions: boolean
-  /** Desktop notifications when Claude finishes or waits for input in a task or folder the user isn't looking at. */
+  /**
+   * Desktop notifications when Claude finishes or waits for input in a task or folder the user isn't looking at,
+   * and when a task or the day reaches 80% or 100% of its budget.
+   */
   notifications: boolean
   /** How "Update from base" brings the base's new commits into a task branch. */
   updateStrategy: UpdateStrategy
@@ -250,6 +258,13 @@ export interface Settings {
   showStatusBar: boolean
   /** Presets for new tasks, in the order the New task dialog lists them; at most MAX_TASK_TEMPLATES. */
   taskTemplates: TaskTemplate[]
+  /**
+   * A limit on the estimated cost of all usage today (every task and folder, since local midnight), in USD; null
+   * for none. Whole cents within BUDGET_LIMITS (see shared/budget.ts).
+   */
+  dailyBudgetUsd: number | null
+  /** The default limit on each task's estimated cost, all time, in USD (Task.budgetUsd overrides it); null for none. */
+  taskBudgetUsd: number | null
 }
 
 /**
@@ -417,6 +432,11 @@ export interface MeManagerApi {
   /** Up to MAX_TASK_NOTES characters; an empty string removes the notes. */
   setTaskNotes(themeId: string, repoId: string, taskId: string, notes: string): Promise<AppState>
   /**
+   * Sets the task's own budget (Task.budgetUsd) in USD, rounded to cents; null removes it, so the default
+   * (Settings.taskBudgetUsd) applies again. Rejects an amount outside BUDGET_LIMITS.
+   */
+  setTaskBudget(themeId: string, repoId: string, taskId: string, budgetUsd: number | null): Promise<AppState>
+  /**
    * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
    * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.
    */
@@ -555,6 +575,11 @@ export interface MeManagerApi {
   getUsage(target: Target): Promise<UsageSummary>
   /** Usage of every task and folder, per theme, with totals. Cheap to call again: it is computed from a cache. */
   getUsageReport(): Promise<UsageReport>
+  /**
+   * Where the daily budget and each active task's budget stand, from the same cached usage as getUsageReport.
+   * Reads no usage at all while no budget is set.
+   */
+  getBudgets(): Promise<BudgetReport>
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
@@ -562,6 +587,11 @@ export interface MeManagerApi {
   onPtyExit(cb: (code: number) => void): () => void
   /** Main asks to select a target (a desktop notification for it was clicked). Returns an unsubscribe function. */
   onSelectTarget(cb: (target: Target) => void): () => void
+  /**
+   * A budget reached 80% or 100% while the window was focused (a desktop notification is sent too, if
+   * notifications are on). Returns an unsubscribe function.
+   */
+  onBudgetAlert(cb: (alert: BudgetAlert) => void): () => void
 }
 
 /** The files of a target, as relative POSIX paths, sorted. */
@@ -685,6 +715,41 @@ export interface UsageThemeReport {
   name: string
   usage: UsageSummary
   targets: UsageTargetReport[]
+}
+
+/** How a cost compares with its budget (see shared/budget.ts): `warn` from 80% of it, `over` from 100%. */
+export type BudgetLevel = 'ok' | 'warn' | 'over'
+
+export interface BudgetStatus {
+  level: BudgetLevel
+  /** Estimated USD cost so far (see UsageTotals.cost). */
+  spent: number
+  /** The budget, in USD. */
+  limit: number
+  /** spent / limit: 1 is the whole budget, above 1 over it. */
+  fraction: number
+}
+
+/** Where every budget stands (see MeManagerApi.getBudgets). */
+export interface BudgetReport {
+  /** All usage today (every task and folder, since local midnight) against Settings.dailyBudgetUsd; null for none. */
+  daily: BudgetStatus | null
+  /**
+   * Each active (not archived) task that has a budget (Task.budgetUsd, else Settings.taskBudgetUsd): its all-time
+   * cost against it, by task id.
+   */
+  tasks: Record<string, BudgetStatus>
+}
+
+/** A budget that reached 80% or 100%, for an in-app toast (see MeManagerApi.onBudgetAlert). */
+export interface BudgetAlert {
+  /** e.g. "Task over its budget". */
+  title: string
+  /** e.g. "Client X › my-api › Fix login: $5.10 of $5.00 task budget". */
+  body: string
+  level: Exclude<BudgetLevel, 'ok'>
+  /** The task, for a task's budget; absent for the daily one. */
+  target?: Target
 }
 
 export interface UsageReport {

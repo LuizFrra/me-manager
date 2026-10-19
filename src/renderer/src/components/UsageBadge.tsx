@@ -1,5 +1,6 @@
 import { useId } from 'react'
-import type { UsagePeriod, UsageSummary } from '../../../shared/types'
+import { budgetPercent, budgetSummary } from '../../../shared/budget'
+import type { BudgetStatus, UsagePeriod, UsageSummary } from '../../../shared/types'
 import { usageTokens } from '../../../shared/usage'
 import { shortcutLabel } from '../lib/shortcuts'
 import { COST_LABEL, formatCost, formatTokens, formatUsageShort, SUBSCRIPTION_NOTE } from '../lib/usageFormat'
@@ -11,21 +12,45 @@ const ROWS: [UsagePeriod, string][] = [
   ['all', 'All time'],
 ]
 
+/** What the badge's name adds for a budget at 80% or more. */
+const budgetNote = (budget: BudgetStatus): string =>
+  budget.level === 'over'
+    ? ', over its budget'
+    : budget.level === 'warn'
+      ? `, ${budgetPercent(budget)}% of its budget`
+      : ''
+
 /**
  * The selected task's or folder's Claude usage, all time: "$3.42 · 1.2M tok". Hovering or focusing it shows the
- * periods and the token split; clicking opens the usage view.
+ * periods and the token split; clicking opens the usage view. With a budget, the tooltip says how much of it is
+ * spent, and the badge turns amber from 80% of it (`budget-warn`) and red from 100% (`budget-over`).
  */
-export function UsageBadge({ usage, onOpen }: { usage: UsageSummary; onOpen: () => void }): React.JSX.Element {
+export function UsageBadge({
+  usage,
+  budget,
+  onOpen,
+}: {
+  usage: UsageSummary
+  /** The task's budget, against its all-time cost; null or absent when it has none. */
+  budget?: BudgetStatus | null
+  onOpen: () => void
+}): React.JSX.Element {
   const tipId = useId()
   const all = usage.all
+  const level = budget && budget.level !== 'ok' ? ` budget-${budget.level}` : ''
   return (
     <span className="usage-badge-wrap">
       <button
-        className="usage-badge"
-        aria-label={`Claude usage: ${formatUsageShort(all)}`}
+        className={`usage-badge${level}`}
+        aria-label={`Claude usage: ${formatUsageShort(all)}${budget ? budgetNote(budget) : ''}`}
         aria-describedby={tipId}
         onClick={onOpen}
       >
+        {level && (
+          <span className="usage-badge-alert" aria-hidden="true">
+            ⚠
+          </span>
+        )}
         <span className="usage-badge-cost">{formatCost(all.cost)}</span>
         <span className="usage-badge-sep" aria-hidden="true">
           ·
@@ -34,6 +59,11 @@ export function UsageBadge({ usage, onOpen }: { usage: UsageSummary; onOpen: () 
       </button>
       <div role="tooltip" id={tipId} className="usage-tip">
         <div className="usage-tip-title">{COST_LABEL}</div>
+        {budget && (
+          <p className={`usage-tip-budget budget-${budget.level}`}>
+            {budgetSummary(budget, 'task budget')} ({budgetPercent(budget)}%)
+          </p>
+        )}
         <table className="usage-tip-periods">
           <tbody>
             {ROWS.map(([period, label]) => (

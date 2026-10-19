@@ -14,7 +14,8 @@ export interface DesktopNotifierOptions {
 
 /**
  * Native notifications from the main process: no permission prompt in Electron on Linux (libnotify) or macOS
- * (Notification Center). Clicking one brings the window to the front and tells the renderer to select the target.
+ * (Notification Center). Clicking one brings the window to the front and tells the renderer to select the target,
+ * if it has one.
  */
 export function createDesktopNotifier({ getWindow, icon }: DesktopNotifierOptions): (notice: DesktopNotice) => void {
   // A notification that gets garbage-collected loses its click handler, so keep the shown ones referenced.
@@ -29,7 +30,9 @@ export function createDesktopNotifier({ getWindow, icon }: DesktopNotifierOption
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
-      const select = (): void => win.webContents.send(SELECT_TARGET, notice.target)
+      const { target } = notice
+      if (!target) return
+      const select = (): void => win.webContents.send(SELECT_TARGET, target)
       if (win.webContents.isLoading()) win.webContents.once('did-finish-load', select)
       else select()
     })

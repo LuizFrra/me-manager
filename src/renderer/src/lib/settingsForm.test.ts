@@ -18,8 +18,14 @@ describe('settings form', () => {
         updateStrategy: 'rebase',
         showStatusBar: true,
         taskTemplates: [],
+        dailyBudget: '',
+        taskBudget: '',
       },
     )
+    expect(toForm({ ...DEFAULT_SETTINGS, dailyBudgetUsd: 20, taskBudgetUsd: 2.5 })).toMatchObject({
+      dailyBudget: '20',
+      taskBudget: '2.50',
+    })
   })
 
   it('shows each task template with every field as text, keyed for the list', () => {
@@ -92,10 +98,27 @@ describe('settings form', () => {
         updateStrategy: 'merge',
         showStatusBar: false,
         taskTemplates: [],
+        dailyBudgetUsd: null,
+        taskBudgetUsd: null,
       },
     })
     // toEqual skips the undefined cloneDirectory: the dialog never edits it.
     expect(parseForm(form())).toEqual({ settings: { ...DEFAULT_SETTINGS, cloneDirectory: undefined } })
+  })
+
+  it('parses the budgets in dollars, empty as none', () => {
+    expect(parseForm(form({ dailyBudget: ' $20 ', taskBudget: '2.5' })).settings).toMatchObject({
+      dailyBudgetUsd: 20,
+      taskBudgetUsd: 2.5,
+    })
+    expect(parseForm(form({ dailyBudget: '', taskBudget: ' ' })).settings).toMatchObject({
+      dailyBudgetUsd: null,
+      taskBudgetUsd: null,
+    })
+    expect(parseForm(form({ dailyBudget: '0', taskBudget: 'lots' })).errors).toEqual({
+      dailyBudget: 'Enter an amount from $0.01 to $100,000, or leave it empty.',
+      taskBudget: 'Enter an amount from $0.01 to $100,000, or leave it empty.',
+    })
   })
 
   it('reports each invalid field', () => {
