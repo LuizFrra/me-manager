@@ -3,10 +3,11 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
-import type { MeManagerApi } from '../../../shared/types'
+import type { MeManagerApi, ResolvedAppearance } from '../../../shared/types'
 import { createWriteOnlyClipboard } from '../lib/clipboardProvider'
 import { isMac, matchShortcut } from '../lib/shortcuts'
 import { debounceSettled } from '../lib/settledResize'
+import { TERMINAL_MIN_CONTRAST, TERMINAL_THEMES } from '../lib/terminalTheme'
 
 export interface TerminalViewProps {
   api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'>
@@ -14,6 +15,8 @@ export interface TerminalViewProps {
   sessionKey: string
   /** Applied live: the terminal refits and the pty is resized to the new rows and columns. */
   fontSize: number
+  /** The palette (see TERMINAL_THEMES), switched live. Dark by default. */
+  appearance?: ResolvedAppearance
   /**
    * A dialog or overlay is open: no key reaches the terminal (App also makes it inert, but a key event already on
    * its way, or focus that never left, must not type into Claude behind the modal).
@@ -33,6 +36,7 @@ export function TerminalView({
   api,
   sessionKey,
   fontSize,
+  appearance = 'dark',
   modalOpen = false,
   focusSeq = 0,
 }: TerminalViewProps): React.JSX.Element {
@@ -44,8 +48,10 @@ export function TerminalView({
   }, [modalOpen])
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  // The size to create the terminal with; later changes are applied by the effect below, without recreating it.
+  // The size and palette to create the terminal with; later changes are applied by the effects below, without
+  // recreating it.
   const [initialFontSize] = useState(fontSize)
+  const [initialAppearance] = useState(appearance)
 
   useEffect(() => {
     const host = hostRef.current
@@ -55,7 +61,8 @@ export function TerminalView({
       fontSize: initialFontSize,
       cursorBlink: true,
       macOptionClickForcesSelection: true,
-      theme: { background: '#1e1e1e' },
+      theme: TERMINAL_THEMES[initialAppearance],
+      minimumContrastRatio: TERMINAL_MIN_CONTRAST[initialAppearance],
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -110,7 +117,7 @@ export function TerminalView({
       termRef.current = null
       fitRef.current = null
     }
-  }, [api, initialFontSize])
+  }, [api, initialFontSize, initialAppearance])
 
   useEffect(() => {
     const term = termRef.current
@@ -132,6 +139,13 @@ export function TerminalView({
     fitRef.current?.fit() // same pixels, different cell size: new cols and rows
     api.ptyResize(term.cols, term.rows)
   }, [fontSize, api])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (!term || term.options.theme === TERMINAL_THEMES[appearance]) return
+    term.options.theme = TERMINAL_THEMES[appearance] // xterm repaints with it; the buffer and the pty stay
+    term.options.minimumContrastRatio = TERMINAL_MIN_CONTRAST[appearance]
+  }, [appearance])
 
   return <div className="terminal-host" ref={hostRef} />
 }
