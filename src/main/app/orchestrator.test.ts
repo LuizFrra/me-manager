@@ -13,6 +13,7 @@ import {
   claudeCommand,
   claudeContinueCommand,
   claudePromptCommand,
+  claudeMessage,
   MAX_RESOLVE_FILES,
   normalizeTaskOptions,
   promptArgument,
@@ -20,6 +21,7 @@ import {
 } from './orchestrator'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import {
+  MAX_CLAUDE_MESSAGE,
   MAX_COMMIT_MESSAGE,
   MAX_TASK_PROMPT,
   MAX_TRANSCRIPT_BYTES,
@@ -1810,6 +1812,80 @@ describe('Orchestrator: update from base', () => {
     await expect(orch.askClaudeToResolve({ themeId, itemId: folderId }, 'rebase', ['a'])).rejects.toThrow(
       /only available for repository/,
     )
+  })
+})
+
+describe('Orchestrator: sendToClaude', () => {
+  async function withTask(): Promise<Ctx & { target: Target; session: string }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    ctx.tmux.calls = []
+    const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
+    return { ...ctx, target, session: 'mmt_client-x_my-api_fix' }
+  }
+
+  const REVIEW = 'Please address these review comments:\n\nsrc/app.ts:12-15\nUse a map here.'
+
+  it('pastes the text into the claude window without pressing Enter, then shows that window', async () => {
+    const { orch, tmux, target, session } = await withTask()
+    await orch.newTab(target) // the shell tab is now active
+    const tabs = await orch.sendToClaude(target, REVIEW)
+    expect(tmux.sent).toEqual([`${session}:claude ${REVIEW}`]) // no ⏎: the user submits it
+    expect(tabs.find((t) => t.active)?.name).toBe('claude')
+  })
+
+  it('works for a folder with a claude tab', async () => {
+    const { orch, tmux, themeId } = await withTask()
+    const folderId = (await orch.addFolder(themeId, '/docs/notes')).themes[0].items[1].id
+    const folder = { themeId, itemId: folderId }
+    await orch.openTarget(folder)
+    await orch.sendToClaude(folder, 'README.md:3\nTypo')
+    expect(tmux.sent).toEqual(['mmf_client-x_notes:claude README.md:3\nTypo'])
+  })
+
+  it('refuses while Claude waits for an answer or is busy, sending nothing', async () => {
+    const { orch, tmux, target, session } = await withTask()
+    tmux.panes.set(session, [' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', ''].join('\n'))
+    await expect(orch.sendToClaude(target, REVIEW)).rejects.toThrow('Claude is waiting for input — answer it first')
+    tmux.panes.set(session, ['─'.repeat(40), '❯ ', '─'.repeat(40)].join('\n'))
+    tmux.activity.set(session, Math.floor(Date.now() / 1000))
+    await expect(orch.sendToClaude(target, REVIEW)).rejects.toThrow("Claude is busy — try again when it's idle")
+    expect(tmux.sent).toEqual([])
+    tmux.activity.set(session, Math.floor(Date.now() / 1000) - 60)
+    await orch.sendToClaude(target, REVIEW)
+    expect(tmux.sent).toHaveLength(1)
+  })
+
+  it('refuses without a claude tab or a running session, starting nothing', async () => {
+    const { orch, tmux, promptFiles, target, session } = await withTask()
+    await orch.newTab(target)
+    await orch.closeTab(target, 0) // the claude window
+    await expect(orch.sendToClaude(target, REVIEW)).rejects.toThrow(
+      'There is no Claude tab — start one with “Restart Claude” first',
+    )
+    expect(tmux.sessions.get(session)?.windows.map((w) => w.name)).toEqual(['shell'])
+    expect(promptFiles.calls).toEqual([])
+    tmux.sessions.clear()
+    await expect(orch.sendToClaude(target, REVIEW)).rejects.toThrow('Open the task first: its session is not running')
+    expect(tmux.sent).toEqual([])
+  })
+
+  it('refuses an empty, too long or invalid text before touching tmux', async () => {
+    const { orch, tmux, target } = await withTask()
+    await expect(orch.sendToClaude(target, ' \n ')).rejects.toThrow('Nothing to send to Claude')
+    await expect(orch.sendToClaude(target, 7 as unknown as string)).rejects.toThrow('Nothing to send to Claude')
+    await expect(orch.sendToClaude(target, 'x'.repeat(MAX_CLAUDE_MESSAGE + 1))).rejects.toThrow(
+      'The message for Claude is limited to 50,000 characters',
+    )
+    expect(tmux.calls).toEqual([])
+    expect(tmux.sent).toEqual([])
+  })
+
+  it('cleans the text: line endings, control characters, outer blank space', () => {
+    expect(claudeMessage('  a\r\nb\rc\td\n\n')).toBe('a\nb\nc\td')
+    // An escape could end the bracketed paste early and turn the next newline into Enter.
+    expect(claudeMessage('x\u001b[201~\ny\u0000\u0007\u007f')).toBe('x?[201~\ny???')
+    expect(claudeMessage('x'.repeat(MAX_CLAUDE_MESSAGE))).toHaveLength(MAX_CLAUDE_MESSAGE)
   })
 })
 

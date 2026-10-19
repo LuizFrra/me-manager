@@ -331,6 +331,10 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       if (files.length === 0) throw new Error('No conflicting files to resolve')
       return tabs
     },
+    sendToClaude: async (_target, text) => {
+      if (!text.trim()) throw new Error('Nothing to send to Claude')
+      return tabs
+    },
     createPullRequest: async (target) => {
       const task = taskOf(target)
       const created = !prs.has(task.id)

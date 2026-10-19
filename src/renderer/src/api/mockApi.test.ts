@@ -72,6 +72,15 @@ describe('createMockApi', () => {
     expect(result).toMatchObject({ kind: 'conflict', baseRef: 'origin/main' })
     await expect(api.askClaudeToResolve(conflict, 'rebase', ['a.ts'])).resolves.toHaveLength(1)
   })
+  it('takes review comments for Claude, refusing an empty text', async () => {
+    const api = createMockApi()
+    const s = await api.addFolder((await api.createTheme('T')).themes[0].id, '/notes')
+    const folder = { themeId: s.themes[0].id, itemId: s.themes[0].items[0].id }
+    await expect(api.sendToClaude(folder, 'README.md:3\nTypo')).resolves.toEqual([
+      { index: 0, name: 'claude', active: true },
+    ])
+    await expect(api.sendToClaude(folder, '  ')).rejects.toThrow('Nothing to send to Claude')
+  })
   it('renames themes and tasks, rejecting empty and duplicate names', async () => {
     const api = createMockApi()
     let s = await api.createTheme('Client X')

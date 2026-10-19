@@ -31,6 +31,9 @@ export interface NewTaskOptions {
   prompt?: string
 }
 
+/** The longest text sendToClaude types into Claude's tab (a review: every comment and its note). */
+export const MAX_CLAUDE_MESSAGE = 50_000
+
 /** The longest commit message "Commit all" accepts. */
 export const MAX_COMMIT_MESSAGE = 5_000
 
@@ -447,6 +450,14 @@ export interface MeManagerApi {
    * or is busy ("Claude is busy — try again when it's idle"), as Enter would pick a menu option.
    */
   askClaudeToResolve(target: Target, strategy: UpdateStrategy, files: string[]): Promise<TabInfo[]>
+  /**
+   * Pastes `text` (review comments) into the Claude tab of a task or folder, without pressing Enter, so the user
+   * reads it and submits it, and selects that tab. Line endings become `\n`, other control characters `?`; refuses
+   * an empty text or one over MAX_CLAUDE_MESSAGE characters. Refuses, typing nothing, when the session isn't
+   * running, when there is no Claude tab (it is not restarted), and while Claude waits for input or is busy, like
+   * askClaudeToResolve.
+   */
+  sendToClaude(target: Target, text: string): Promise<TabInfo[]>
 
   /**
    * Claude usage of one task or folder, from Claude Code's transcripts (`~/.claude/projects`). A message counts
