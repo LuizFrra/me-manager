@@ -67,3 +67,8 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 40 | Appearance: light theme and system-follow option, with the terminal colors matching | ux | done (merge of feat/f40-theme) |
 | 41 | Portuguese (pt-BR) UI translation, with a language setting (English default) | ux | todo |
 | 42 | Virtualize the diff view: an expanded large diff (over 5,000 lines) renders every row today, unlike the code viewer; render only the visible rows, keeping line selection, split layout and review comments working | perf | done (merge of feat/f42-diffvirt) |
+| 43 | Claude look: Claude's warm palette (light and dark), terracotta accent, serif titles (Source Serif 4, bundled), line icons, rounded surfaces; matching terminal and Mermaid colours | ux | done (merge of feat/claude-look) |
+| 44 | Home composer: "What should Claude work on?" starts a task from a prompt (named from its first words); New task in the sidebar, Ctrl+Shift+N, palette; Options… opens the full dialog | feature | done (merge of feat/claude-look) |
+| 45 | Collapsible sidebar: a rail of icons, Ctrl+Shift+B, remembered | ux | done (merge of feat/claude-look) |
+| 46 | Attention: "Waiting for you" on home, the waiting count in the window title, unread marks for targets whose Claude finished unseen, a turning ✻ while Claude works | feature | done (merge of feat/claude-look) |
+| 47 | Lighter task header: Editor plus a "More actions" menu (file manager, copies, notes) | ux | done (merge of feat/claude-look) |

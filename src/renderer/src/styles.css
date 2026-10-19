@@ -79,6 +79,8 @@
   --font-serif: 'Source Serif 4 Variable', ui-serif, Georgia, 'Times New Roman', serif;
   --font-sans: system-ui, -apple-system, 'Segoe UI', Ubuntu, sans-serif;
   font-family: var(--font-sans);
+  /* Checkboxes, radios and range inputs in the accent. */
+  accent-color: var(--primary-bg);
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
