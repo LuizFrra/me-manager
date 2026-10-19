@@ -28,7 +28,7 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 1 | Lazy-load the Markdown viewer and highlight.js, shrinking the 2.2 MB startup bundle | perf | done (139b497) |
 | 2 | Pause polling while the window is hidden or minimized, using `visibilitychange` | perf | done (32c97b7) |
 | 3 | Command palette (Ctrl/Cmd+Shift+P, plus Cmd+K on macOS): fuzzy jump to any task, folder, or file of the current task, and run app actions | ux | done (8561443) |
-| 4 | Keyboard shortcuts: Ctrl/Cmd+1..9 to switch tasks, Ctrl/Cmd+Shift+T for a new shell tab, Ctrl/Cmd+Shift+W to close a tab, Ctrl/Cmd+Shift+[ / ] to switch tabs, Ctrl/Cmd+Shift+/ to show a shortcut help overlay. Fixed in 6bb3820: the palette moved from Ctrl+K to Ctrl+Shift+P and help from Ctrl+/ to Ctrl+Shift+/, so Linux Ctrl+K (kill line) and Ctrl+/ (undo) reach the terminal again; macOS also keeps Cmd+K and Cmd+/ | ux | done (b082539, 6bb3820) |
+| 4 | Keyboard shortcuts: Cmd+1..9 (macOS) or Alt+1..9 (Linux, since e1111e6: Ctrl+digits belong to the terminal) to switch tasks, Ctrl/Cmd+Shift+T for a new shell tab, Ctrl/Cmd+Shift+W to close a tab, Ctrl/Cmd+Shift+[ / ] to switch tabs, Ctrl/Cmd+Shift+/ to show a shortcut help overlay. Fixed in 6bb3820: the palette moved from Ctrl+K to Ctrl+Shift+P and help from Ctrl+/ to Ctrl+Shift+/, so Linux Ctrl+K (kill line) and Ctrl+/ (undo) reach the terminal again; macOS also keeps Cmd+K and Cmd+/ | ux | done (b082539, 6bb3820) |
 | 5 | Sidebar filter box: filter themes, repos and tasks by name | ux | done (d5dc635) |
 | 6 | Rename a theme or task (display name only; slug, branch and path stay unchanged) | feature | done (68c499f) |
 | 7 | Task notes: a free-text description per task, shown in the header and editable | feature | done (c7dff9e) |
@@ -54,7 +54,7 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 27 | Welcome / onboarding empty state with quick actions | ux | done (3f0daff) |
 | 28 | Start every Claude session with Remote Control (named `<theme>/<repo>/<task>`) and skipped permissions by default, as Settings toggles, with a warning and a header badge | feature | done (7076989) |
 | 29 | Claude usage and spend: per-task, per-theme and total tokens (input, output, cache) from Claude Code's transcripts in `~/.claude/projects/`, estimated cost at API prices (labelled as an estimate for subscription users), header badge, and a usage view for today, this week and this month | feature | done (7014c87) |
-| 30 | Fix findings from the full review of the loop features (`fv-1..HEAD`) | quality | todo (waiting on review) |
+| 30 | Fix findings from the full review of the loop features (`fv-1..HEAD`): prompts via a private file (no one-word subcommands, no tmux length limit), copy-mode cancel and tmux timeouts, idle check before "Ask Claude to resolve", full refs, submodule-safe PCRE search with cancellation, dialog focus trap and restore, per-dialog closing, shared effective-flag rule | quality | done (merges of fix/rv2-backend and fix/rv2-ui) |
 | 31 | Review comments to Claude: select lines in a diff or file, write a note, "Send to Claude" types it into the task's claude window with file:line references | feature | todo |
 | 32 | Archive tasks: remove the worktree and kill the session but keep the branch; an Archived section lists them, with Restore (recreate the worktree from the branch) and Delete | feature | todo |
 | 33 | Task templates: saved new-task presets (name pattern, base branch, initial prompt), chosen in the New task dialog and managed in Settings | feature | todo |

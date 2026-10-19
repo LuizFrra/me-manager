@@ -180,6 +180,7 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
               : 'This folder is very large: not every file was searched.'}
           </div>
         )}
+        {result?.note && <div className="panel-notice">{result.note}</div>}
         {!outcome && !busy && <p className="panel-hint">Type to search the contents of every file.</p>}
         {groups.map((g) => {
           const open = !collapsed.has(g.path)
