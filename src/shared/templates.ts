@@ -98,8 +98,8 @@ export function templateErrors(fields: TemplateFields): TemplateErrors {
   const base = fields.base.trim()
   if (base && (base.length > MAX_BASE || base.startsWith('-') || /\s/.test(base) || hasControl(base)))
     errors.base = 'Enter a branch name, e.g. origin/main.'
-  if (fields.prompt.trim().length > MAX_TASK_PROMPT || fields.prompt.includes('\0'))
-    errors.prompt = `Use at most ${MAX_TASK_PROMPT} characters.`
+  if (fields.prompt.trim().length > MAX_TASK_PROMPT) errors.prompt = `Use at most ${MAX_TASK_PROMPT} characters.`
+  else if (fields.prompt.includes('\0')) errors.prompt = 'No NUL characters.'
   return errors
 }
 

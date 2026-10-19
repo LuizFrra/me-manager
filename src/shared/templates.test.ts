@@ -94,6 +94,7 @@ describe('templateErrors', () => {
     expect(templateErrors(fields({ prompt: 'x'.repeat(MAX_TASK_PROMPT + 1) })).prompt).toBe(
       `Use at most ${MAX_TASK_PROMPT} characters.`,
     )
+    expect(templateErrors(fields({ prompt: 'a\0b' })).prompt).toBe('No NUL characters.')
   })
 })
 
