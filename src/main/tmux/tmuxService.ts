@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { TabInfo } from '../../shared/types'
-import type { TmuxApi } from '../contracts'
+import type { SendTextOptions, TmuxApi } from '../contracts'
 import { CommandError, run, runTail, type RunOptions } from '../exec'
 import { TMUX_CONF } from './tmuxConf'
 
@@ -146,7 +146,7 @@ export class TmuxService implements TmuxApi {
     return { text: tidyCapture(stdout), truncated }
   }
 
-  async sendText(session: string, windowName: string, text: string): Promise<void> {
+  async sendText(session: string, windowName: string, text: string, options: SendTextOptions = {}): Promise<void> {
     // `=` on both parts: exact names, never a prefix or pattern match.
     const target = `=${session}:=${windowName}`
     // In copy mode (the user scrolled back) tmux, not the app, would get the text and the Enter: leave it first.
@@ -164,6 +164,7 @@ export class TmuxService implements TmuxApi {
       await this.tmux(['delete-buffer', '-b', buffer]).catch(() => {})
       throw err
     }
+    if (options.enter === false) return
     await new Promise((r) => setTimeout(r, this.enterDelayMs))
     await this.tmux(['send-keys', '-t', target, 'Enter'])
   }

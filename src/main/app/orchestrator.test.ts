@@ -1731,12 +1731,12 @@ describe('Orchestrator: update from base', () => {
     await orch.newTab(target) // the shell tab is now active
     const tabs = await orch.askClaudeToResolve(target, 'rebase', ['src/a.ts', 'b c.ts'])
     expect(tmux.sent).toEqual([
-      `${session}:claude Please rebase this branch onto origin/main and resolve the conflicts in: src/a.ts, b c.ts`,
+      `${session}:claude Please rebase this branch onto origin/main and resolve the conflicts in: src/a.ts, b c.ts ⏎`,
     ])
     expect(tabs.find((t) => t.active)?.name).toBe('claude')
     await orch.askClaudeToResolve(target, 'merge', ['x'])
     expect(tmux.sent.at(-1)).toBe(
-      `${session}:claude Please merge origin/main into this branch and resolve the conflicts in: x`,
+      `${session}:claude Please merge origin/main into this branch and resolve the conflicts in: x ⏎`,
     )
   })
 
