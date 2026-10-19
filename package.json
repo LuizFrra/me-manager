@@ -1,7 +1,7 @@
 {
   "name": "me-manager",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "Organize Claude Code work into themes, with a git worktree and a persistent tmux session per task",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
@@ -23,7 +23,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "node-pty": "^1.1.0"
   },
