@@ -21,6 +21,7 @@ import type {
   SearchOptions,
   SearchResult,
   Settings,
+  SettingsView,
   TabInfo,
   Target,
   Task,
@@ -35,14 +36,16 @@ import type {
   UsageSummary,
   UsageTargetReport,
 } from '../../shared/types'
+import { builtInClaudeFlags, effectiveClaudeFlags } from '../../shared/settings'
 import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
 import { mapLimit } from '../concurrency'
-import type { AppService, OrchestratorDeps } from '../contracts'
+import type { AppService, OrchestratorDeps, UsageSummaries } from '../contracts'
 import { baseBranchName } from '../git/gh'
 import { taskWorktreePath } from '../paths'
+import { promptFromFile } from '../promptFiles'
 import * as m from '../store/mutations'
 import { isRecentlyActive, looksWaiting } from '../tmux/activity'
 
@@ -52,18 +55,26 @@ import { isRecentlyActive, looksWaiting } from '../tmux/activity'
  */
 export const claudeCommand = (args: readonly string[] = []): string => ['claude', ...args].map(shellQuote).join(' ')
 /**
+ * The prompt as Claude's positional argument. Claude reads a lone one-word positional as a subcommand even after
+ * `--` (`claude -- mcp` runs `claude mcp`, `claude -- purge` would delete the project's state) and refuses a word
+ * close to one (`mcpx`: "unknown command"). A trailing space makes it never a single word, for any prompt.
+ */
+export const promptArgument = (prompt: string): string => `${prompt} `
+/**
  * The first start of a task's Claude with an initial prompt: Claude's positional `[prompt]` argument, after `--`
  * so that neither a prompt starting with '-' nor a variadic option in the user's arguments (`--add-dir a b`) can
- * swallow or misread it. Restarts use claudeContinueCommand, which never repeats the prompt.
+ * swallow or misread it. The prompt itself is read from `promptFile` (see PromptFiles, which holds
+ * promptArgument(prompt)), as tmux can't take a long one in the command. Restarts use claudeContinueCommand,
+ * which never repeats the prompt.
  */
-export const claudePromptCommand = (args: readonly string[], prompt: string | undefined): string =>
-  claudeCommand(prompt ? [...args, '--', prompt] : args)
+export const claudePromptCommand = (args: readonly string[], promptFile: string | undefined): string =>
+  promptFile === undefined ? claudeCommand(args) : `${claudeCommand([...args, '--'])} ${promptFromFile(promptFile)}`
 /**
- * `--continue` fails when there is no previous conversation; fall back to a fresh one. With a `prompt` (only to
- * hand Claude a request when its window is restarted for one), both carry it as claudePromptCommand does.
+ * `--continue` fails when there is no previous conversation; fall back to a fresh one. With a `promptFile` (only
+ * to hand Claude a request when its window is restarted for one), both carry it as claudePromptCommand does.
  */
-export const claudeContinueCommand = (args: readonly string[] = [], prompt?: string): string =>
-  `${claudePromptCommand([...args, '--continue'], prompt)} || ${claudePromptCommand(args, prompt)}`
+export const claudeContinueCommand = (args: readonly string[] = [], promptFile?: string): string =>
+  `${claudePromptCommand([...args, '--continue'], promptFile)} || ${claudePromptCommand(args, promptFile)}`
 
 export const CLAUDE_CMD = claudeCommand()
 export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
@@ -127,6 +138,12 @@ export function resolvePrompt(strategy: UpdateStrategy, baseRef: string, files: 
   return `Please ${action} and resolve the conflicts in: ${shown}${more}`
 }
 
+/** The usage group of a theme's targets. */
+const themeGroup = (themeId: string): string => `theme:${themeId}`
+
+/** Settings as the renderer gets them: with the built-in Claude flags that apply. */
+const withEffective = (settings: Settings): SettingsView => ({ ...settings, effective: effectiveClaudeFlags(settings) })
+
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
 
@@ -163,6 +180,8 @@ export class Orchestrator implements AppService {
    * captured at: the screen can't change without new activity, so it is captured again only after some.
    */
   private readonly waitingCache = new Map<string, { activitySec: number; waiting: boolean }>()
+  /** The search running for each target (by targetKey): a newer one there aborts it. */
+  private readonly searches = new Map<string, AbortController>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -240,15 +259,30 @@ export class Orchestrator implements AppService {
    * when the user's arguments already set that option. Read at each start, so a change applies to the next session.
    */
   private claudeArgs(label: string): string[] {
-    const { claudeArgs, remoteControl, skipPermissions } = this.deps.settings.get()
-    const sets = (...options: string[]): boolean =>
-      claudeArgs.some((arg) => options.some((o) => arg === o || arg.startsWith(`${o}=`)))
-    const flags: string[] = []
-    if (remoteControl && !sets('--remote-control')) flags.push('--remote-control', label)
-    if (skipPermissions && !sets('--dangerously-skip-permissions', '--permission-mode')) {
-      flags.push('--dangerously-skip-permissions')
+    const settings = this.deps.settings.get()
+    return [...builtInClaudeFlags(settings, label), ...settings.claudeArgs]
+  }
+
+  /**
+   * Runs `start` (a tmux call starting `claude`) with `prompt` in a private file (see claudePromptCommand), or
+   * without a file when there is no prompt. The file is removed once the command had time to read it, or right
+   * away when `start` fails.
+   */
+  private async withPromptFile<T>(
+    prompt: string | undefined,
+    start: (promptFile: string | undefined) => Promise<T>,
+  ): Promise<T> {
+    if (prompt === undefined) return start(undefined)
+    const { promptFiles } = this.deps
+    const file = await promptFiles.write(promptArgument(prompt))
+    try {
+      const result = await start(file)
+      promptFiles.release(file)
+      return result
+    } catch (err) {
+      promptFiles.release(file, true)
+      throw err
     }
-    return [...flags, ...claudeArgs]
   }
 
   private detachIf(pred: (t: Target) => boolean): void {
@@ -277,13 +311,16 @@ export class Orchestrator implements AppService {
     await this.deps.ui.save(normalizeUiState(state, this.state))
   }
 
-  async getSettings(): Promise<Settings> {
-    return this.deps.settings.get()
+  async getSettings(): Promise<SettingsView> {
+    return withEffective(this.deps.settings.get())
   }
 
-  /** Settings have their own file and queue, so this doesn't wait for state mutations. */
-  async updateSettings(patch: Partial<Settings>): Promise<Settings> {
-    return this.deps.settings.update(patch)
+  /**
+   * Settings have their own file and queue, so this doesn't wait for state mutations. A patch's `effective` (the
+   * renderer may send back what it got) is dropped by normalizeSettings like any unknown key.
+   */
+  async updateSettings(patch: Partial<Settings>): Promise<SettingsView> {
+    return withEffective(await this.deps.settings.update(patch))
   }
 
   /**
@@ -501,11 +538,9 @@ export class Orchestrator implements AppService {
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
-        await tmux.newSession(
-          session,
-          worktreePath,
-          CLAUDE_WINDOW,
-          claudePromptCommand(this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`), prompt),
+        const args = this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)
+        await this.withPromptFile(prompt, (file) =>
+          tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file)),
         )
         const task: Task = {
           id: randomUUID(),
@@ -687,13 +722,33 @@ export class Orchestrator implements AppService {
     if (!(await this.deps.tmux.hasSession(session))) throw new Error('Open the task first: its session is not running')
     const claude = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
     if (claude) {
+      await this.assertClaudeReady(session)
       await this.deps.tmux.sendText(session, CLAUDE_WINDOW, text)
       await this.deps.tmux.selectWindow(session, claude.index)
     } else {
       // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
-      await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label), text))
+      const args = this.claudeArgs(label)
+      await this.withPromptFile(text, (file) =>
+        this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file)),
+      )
     }
     return this.deps.tmux.listWindows(session)
+  }
+
+  /**
+   * Refuses to type into a Claude that isn't at its prompt: the Enter after the text would pick the highlighted
+   * option of a permission prompt or choice menu, and a busy Claude would only queue it behind its work.
+   */
+  private async assertClaudeReady(session: string): Promise<void> {
+    const [pane, activity] = await Promise.all([
+      this.deps.tmux.capturePane(session, CLAUDE_WINDOW),
+      this.deps.tmux.windowActivity(CLAUDE_WINDOW).catch(() => ({}) as Record<string, number>),
+    ])
+    if (pane !== null && looksWaiting(pane)) throw new Error('Claude is waiting for input — answer it first')
+    const activitySec = activity[session]
+    if (activitySec !== undefined && isRecentlyActive(activitySec, this.now())) {
+      throw new Error("Claude is busy — try again when it's idle")
+    }
   }
 
   // File viewer. Read-only, so these skip the mutation queue.
@@ -744,10 +799,21 @@ export class Orchestrator implements AppService {
     return this.deps.files.readImage(root, path)
   }
 
-  /** The query and options are checked by the files service. */
+  /**
+   * The query and options are checked by the files service. Only the latest search per target runs: one still
+   * running there is cancelled (git killed, matching stopped) and rejects, as the renderer only shows the latest.
+   */
   async searchFiles(target: Target, query: string, options?: SearchOptions): Promise<SearchResult> {
     const { root, isRepo } = this.resolveRoot(target)
-    return this.deps.files.searchFiles(root, isRepo, query, options)
+    const key = targetKey(target)
+    this.searches.get(key)?.abort()
+    const controller = new AbortController()
+    this.searches.set(key, controller)
+    try {
+      return await this.deps.files.searchFiles(root, isRepo, query, options, controller.signal)
+    } finally {
+      if (this.searches.get(key) === controller) this.searches.delete(key)
+    }
   }
 
   async listChanges(target: Target, scope: ChangeScope = 'base'): Promise<ChangeList> {
@@ -802,20 +868,27 @@ export class Orchestrator implements AppService {
     return targets
   }
 
-  /** Every known root is passed along, so a message is counted for the most specific one only. */
-  async getUsage(target: Target): Promise<UsageSummary> {
-    const { root } = this.targetRoot(target)
-    const { roots } = await this.deps.usage.summarize(this.usageTargets().map((t) => t.path))
-    return roots[root] ?? emptyUsageSummary()
-  }
-
-  async getUsageReport(): Promise<UsageReport> {
+  /**
+   * Usage of every target and theme, and the total. getUsage asks for exactly this too, so the usage service's
+   * cached aggregation serves both instead of each evicting the other's. Every known root is passed along, so a
+   * message is counted for the most specific one only.
+   */
+  private async allUsage(): Promise<{ targets: Omit<UsageTargetReport, 'usage'>[]; usage: UsageSummaries }> {
     const targets = this.usageTargets()
-    const themeGroup = (themeId: string): string => `theme:${themeId}`
     const groups: Record<string, string[]> = { total: targets.map((t) => t.path) }
     for (const theme of this.state.themes) groups[themeGroup(theme.id)] = []
     for (const t of targets) groups[themeGroup(t.target.themeId)].push(t.path)
-    const usage = await this.deps.usage.summarize(groups.total, groups)
+    return { targets, usage: await this.deps.usage.summarize(groups.total, groups) }
+  }
+
+  async getUsage(target: Target): Promise<UsageSummary> {
+    const { root } = this.targetRoot(target)
+    const { usage } = await this.allUsage()
+    return usage.roots[root] ?? emptyUsageSummary()
+  }
+
+  async getUsageReport(): Promise<UsageReport> {
+    const { targets, usage } = await this.allUsage()
     return {
       generatedAt: new Date().toISOString(),
       total: usage.groups.total ?? emptyUsageSummary(),

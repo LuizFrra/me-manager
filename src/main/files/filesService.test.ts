@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as exec from '../exec'
 import {
   FilesService,
+  isNoPcreError,
   MAX_COUNT_BYTES,
   MAX_IMAGE_BYTES,
   MAX_REPO_ENTRIES,
@@ -11,6 +12,8 @@ import {
   safePath,
 } from './filesService'
 import { MAX_SEARCH_MATCHES, MAX_SEARCH_PREVIEW, MAX_SEARCH_QUERY } from '../../shared/search'
+import type { SearchResult } from '../../shared/types'
+import { SearchCancelledError } from './lineMatcher'
 import { cleanupTempDirs, commitAll, git, makeRepo, makeTaskClone, makeTempDir, put } from './testRepos'
 
 const svc = new FilesService()
@@ -384,6 +387,26 @@ describe('listChanges', () => {
     expect(res.files.map((f) => f.path)).toEqual(['mod.txt'])
   })
 
+  it("diffs against origin's branch when a tag or local branch is named like it", async () => {
+    for (const shadow of [
+      ['tag', 'origin/main'],
+      ['branch', 'origin/main'],
+    ]) {
+      const { clone } = await makeTaskClone(SEED)
+      await git(clone, 'checkout', '-q', '--orphan', 'unrelated')
+      await put(clone, 'other.txt', 'other\n')
+      await commitAll(clone, 'unrelated')
+      await git(clone, ...shadow)
+      await git(clone, 'checkout', '-q', '-f', 'main')
+      await put(clone, 'mod.txt', 'task\n')
+      await commitAll(clone, 'task')
+      // Against the unrelated commit there would be no merge-base, and so only the uncommitted changes.
+      const res = await svc.listChanges(clone, 'origin/main')
+      expect(res).toEqual({ files: [expect.objectContaining({ path: 'mod.txt', status: 'M' })] })
+      expect(await svc.fileDiff(clone, 'origin/main', 'mod.txt')).toContain('+task')
+    }
+  })
+
   it('falls back to uncommitted changes vs HEAD when the base ref is gone', async () => {
     const { clone } = await makeTaskClone(SEED)
     await put(clone, 'mod.txt', 'committed\n')
@@ -624,7 +647,7 @@ describe('searchFiles (repo)', () => {
     // The preview drops the indentation; the match is located in it for highlighting.
     expect(r.matches[2]).toMatchObject({ preview: 'const greeting = "HELLO"', matchStart: 18, matchLength: 5 })
     expect(grepCalls().at(-1)).toBe(
-      'grep -n --column -I --no-color -z -F -i --untracked --exclude-standard -e hello --',
+      'grep -n --column -I --no-color -z -F -i --untracked --exclude-standard --no-recurse-submodules -e hello --',
     )
   })
 
@@ -635,7 +658,7 @@ describe('searchFiles (repo)', () => {
     expect(grepCalls().at(-1)).not.toContain(' -i ')
   })
 
-  it('takes the query literally without regex, and as an extended regex with it', async () => {
+  it('takes the query literally without regex, and as a regex with it', async () => {
     const root = await makeRepo({ 'a.txt': 'a.c\nabc\nabbbc\n' })
     expect((await svc.searchFiles(root, true, 'a.c')).matches.map((m) => m.line)).toEqual([1])
     const r = await svc.searchFiles(root, true, 'ab+c', { regex: true })
@@ -643,7 +666,7 @@ describe('searchFiles (repo)', () => {
       [2, 'abc'],
       [3, 'abbbc'],
     ])
-    expect(grepCalls().at(-1)).toContain('-E -i')
+    expect(grepCalls().at(-1)).toContain('-P -i')
   })
 
   it('reads an option-like query as text, never as a git option', async () => {
@@ -653,6 +676,14 @@ describe('searchFiles (repo)', () => {
     expect(r.matches[0].column).toBe(10)
     await expect(svc.searchFiles(root, true, '-v')).resolves.toEqual({ matches: [], truncated: false })
     await expect(lstat(join(root, 'x'))).rejects.toThrow()
+  })
+
+  it('searches with submodule.recurse set in the git config', async () => {
+    // git refuses --untracked together with --recurse-submodules, which this setting turns on for grep.
+    const root = await repo()
+    await git(root, 'config', 'submodule.recurse', 'true')
+    const r = await svc.searchFiles(root, true, 'hello')
+    expect(paths(r)).toEqual(['a.txt', 'a.txt', 'src/b.ts', 'untracked.txt'])
   })
 
   it('reports no matches (git exits with 1) as an empty result', async () => {
@@ -672,11 +703,97 @@ describe('searchFiles (repo)', () => {
     expect(r.matches.at(-1)).toMatchObject({ path: 'a.txt', line: MAX_SEARCH_MATCHES })
   })
 
-  it("surfaces git's error for an invalid regular expression", async () => {
+  it('reports an invalid regular expression as a folder search does, without running git', async () => {
     const root = await repo()
     await expect(svc.searchFiles(root, true, 'foo(', { regex: true })).rejects.toThrow(
-      /^Invalid regular expression: Unmatched \( or \\\($/,
+      'Invalid regular expression: Unterminated group',
     )
+    expect(grepCalls()).toEqual([])
+  })
+
+  it('reads a regular expression like a folder search does (Perl-compatible), case-insensitively too', async () => {
+    const files = { 'a.txt': 'abc 123\nno digits\nx=42;\n', 'b.txt': 'foobar\nfoo bar\n' }
+    const root = await makeRepo(files)
+    const folderRoot = await makeTempDir()
+    for (const [rel, content] of Object.entries(files)) await put(folderRoot, rel, content)
+    const shown = (r: SearchResult): string[] =>
+      r.matches.map((m) => `${m.path}:${m.line}:${m.preview.slice(m.matchStart, m.matchStart + m.matchLength)}`)
+    for (const [query, expected] of [
+      ['\\d+', ['a.txt:1:123', 'a.txt:3:42']],
+      ['foo(?=bar)', ['b.txt:1:foo']],
+      ['\\bbar\\b', ['b.txt:2:bar']],
+    ] as const) {
+      for (const caseSensitive of [false, true]) {
+        const options = { regex: true, caseSensitive }
+        const inRepo = await svc.searchFiles(root, true, query, options)
+        const inFolder = await svc.searchFiles(folderRoot, false, query, options)
+        expect(shown(inRepo), `${query} ${caseSensitive}`).toEqual(expected)
+        expect(shown(inFolder), `${query} ${caseSensitive}`).toEqual(expected)
+        expect(inRepo.note).toBeUndefined()
+      }
+    }
+    expect(grepCalls().at(-1)).toContain(' -P ')
+  })
+
+  it('falls back to POSIX extended syntax, with a note, when git has no Perl-compatible regexes', async () => {
+    const root = await makeRepo({ 'a.txt': 'abc\nabbbc\n' })
+    const noPcre = new FilesService({ perlRegex: false })
+    const r = await noPcre.searchFiles(root, true, 'ab+c', { regex: true })
+    expect(r.matches.map((m) => m.line)).toEqual([1, 2])
+    expect(r.note).toMatch(/POSIX extended/)
+    expect(grepCalls().at(-1)).toContain(' -E ')
+    // A plain-text search needs neither, so it has no note.
+    await expect(noPcre.searchFiles(root, true, 'abc')).resolves.not.toHaveProperty('note')
+  })
+
+  it("returns git's matches unhighlighted when highlighting them runs past the timeout", async () => {
+    // git's POSIX engine finishes at once; JavaScript backtracks exponentially on the run of a's.
+    const root = await makeRepo({ 'a.txt': `${'a'.repeat(40)}c\nplain c\n` })
+    const slow = new FilesService({ searchTimeoutMs: 500, perlRegex: false })
+    const started = Date.now()
+    const r = await slow.searchFiles(root, true, '(a+)+b|c', { regex: true })
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(r.matches.map((m) => [m.line, m.column, m.matchLength])).toEqual([
+      [1, 41, 0],
+      [2, 7, 0],
+    ])
+  })
+
+  it('reads on past a NUL in a matching line beyond where git looks for binary content', async () => {
+    // git -I only checks a file's start for NUL bytes, so this file counts as text and its line is printed as is.
+    const filler = `${'x'.repeat(99)}\n`.repeat(100)
+    const root = await makeRepo({
+      'a.txt': `${filler}needle\0after\0two NULs\nneedle again\n`,
+      'b.txt': 'needle in b\n',
+    })
+    const r = await svc.searchFiles(root, true, 'needle')
+    expect(r.truncated).toBe(false)
+    expect(r.matches.map((m) => [m.path, m.line, m.preview])).toEqual([
+      ['a.txt', 101, 'needle\0after\0two NULs'],
+      ['a.txt', 102, 'needle again'],
+      ['b.txt', 1, 'needle in b'],
+    ])
+  })
+
+  it('kills git and stops highlighting when its signal aborts', async () => {
+    const root = await makeRepo({ 'a.txt': `${'a'.repeat(40)}c\n` })
+    const noPcre = new FilesService({ perlRegex: false })
+    // Highlighting this backtracks for minutes: only an abort ends it before the 10 s timeout.
+    const controller = new AbortController()
+    const started = Date.now()
+    const search = noPcre.searchFiles(root, true, '(a+)+b|c', { regex: true }, controller.signal)
+    setTimeout(() => controller.abort(), 300)
+    await expect(search).rejects.toThrow(SearchCancelledError)
+    expect(Date.now() - started).toBeLessThan(3_000)
+    // Aborted before git starts: git never runs.
+    streamSpy.mockClear()
+    await expect(svc.searchFiles(root, true, 'c', {}, AbortSignal.abort())).rejects.toThrow(SearchCancelledError)
+    expect(grepCalls()).toEqual([])
+  })
+
+  it('recognizes the error of a git built without Perl-compatible regexes', () => {
+    expect(isNoPcreError('fatal: cannot use Perl-compatible regexes when not compiled with USE_LIBPCRE\n')).toBe(true)
+    expect(isNoPcreError("fatal: -e option, 'foo(': missing closing parenthesis")).toBe(false)
   })
 
   it('counts columns in characters and cuts long lines around the match', async () => {
@@ -789,6 +906,17 @@ describe('searchFiles (folder)', () => {
       'The search timed out after 0.3 s',
     )
     expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('stops at once when its signal aborts, even inside a runaway regular expression', async () => {
+    const root = await makeTempDir()
+    await put(root, 'a.txt', `${'a'.repeat(40)}b\n`)
+    const controller = new AbortController()
+    const started = Date.now()
+    const search = svc.searchFiles(root, false, '(a+)+$', { regex: true }, controller.signal)
+    setTimeout(() => controller.abort(), 200)
+    await expect(search).rejects.toThrow(SearchCancelledError)
+    expect(Date.now() - started).toBeLessThan(3_000)
   })
 
   it('reports a walk stopped at its cap as truncated', async () => {

@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { TabInfo } from '../../shared/types'
 import type { TmuxApi } from '../contracts'
-import { CommandError, run } from '../exec'
+import { CommandError, run, type RunOptions } from '../exec'
 import { TMUX_CONF } from './tmuxConf'
 
 /**
@@ -34,19 +35,28 @@ export function parseWindowActivity(out: string, windowName: string): Record<str
 
 /** sendText waits this long between the text and Enter, so the app reads Enter as a key press, not pasted text. */
 export const SEND_ENTER_DELAY_MS = 150
+/** Every tmux call gives up after this long: a wedged server must not hang the app's calls (and its polls). */
+export const TMUX_TIMEOUT_MS = 10_000
 
-/**
- * tmux splits a command where an argument ends with an unescaped ';' (even one passed as its own argv entry), so
- * a trailing ';' is escaped: tmux turns `\;` back into a literal ';'.
- */
-export const escapeTrailingSemicolon = (arg: string): string => (arg.endsWith(';') ? `${arg.slice(0, -1)}\\;` : arg)
+export interface TmuxServiceOptions {
+  /** Overrides SEND_ENTER_DELAY_MS (for tests). */
+  enterDelayMs?: number
+  /** Overrides TMUX_TIMEOUT_MS (for tests). */
+  timeoutMs?: number
+}
 
 export class TmuxService implements TmuxApi {
+  private readonly enterDelayMs: number
+  private readonly timeoutMs: number
+
   constructor(
     private readonly socket: string,
     private readonly configFile: string,
-    private readonly enterDelayMs = SEND_ENTER_DELAY_MS,
-  ) {}
+    options: TmuxServiceOptions = {},
+  ) {
+    this.enterDelayMs = options.enterDelayMs ?? SEND_ENTER_DELAY_MS
+    this.timeoutMs = options.timeoutMs ?? TMUX_TIMEOUT_MS
+  }
 
   async ensureConfig(): Promise<void> {
     await mkdir(dirname(this.configFile), { recursive: true })
@@ -57,8 +67,8 @@ export class TmuxService implements TmuxApi {
     return ['-L', this.socket, '-f', this.configFile]
   }
 
-  private tmux(args: string[]): Promise<string> {
-    return run('tmux', [...this.baseArgs(), ...args])
+  private tmux(args: string[], opts: Pick<RunOptions, 'input'> = {}): Promise<string> {
+    return run('tmux', [...this.baseArgs(), ...args], { ...opts, timeoutMs: this.timeoutMs })
   }
 
   async hasSession(name: string): Promise<boolean> {
@@ -103,9 +113,23 @@ export class TmuxService implements TmuxApi {
   }
 
   async sendText(session: string, windowName: string, text: string): Promise<void> {
-    // `=` on both parts: exact names. -l: literal text, no key names; `--`: text starting with '-' isn't a flag.
+    // `=` on both parts: exact names, never a prefix or pattern match.
     const target = `=${session}:=${windowName}`
-    await this.tmux(['send-keys', '-t', target, '-l', '--', escapeTrailingSemicolon(text)])
+    // In copy mode (the user scrolled back) tmux, not the app, would get the text and the Enter: leave it first.
+    const inMode = (await this.tmux(['display-message', '-p', '-t', target, '#{pane_in_mode}'])).trim()
+    // (Other modes, like choose-tree, may not take `cancel`; the paste still goes to the app then.)
+    if (inMode !== '0') await this.tmux(['send-keys', '-t', target, '-X', 'cancel']).catch(() => {})
+    // Through a paste buffer read from stdin, not `send-keys -l`: tmux refuses a command over ~16 KB, and the text
+    // is never parsed as tmux syntax (`;`, key names). -p: as a bracketed paste when the app asked for those, so
+    // it is read as text, never as keys; -d: the buffer is deleted once pasted.
+    const buffer = `me-manager-${randomUUID()}`
+    await this.tmux(['load-buffer', '-b', buffer, '-'], { input: text })
+    try {
+      await this.tmux(['paste-buffer', '-d', '-p', '-b', buffer, '-t', target])
+    } catch (err) {
+      await this.tmux(['delete-buffer', '-b', buffer]).catch(() => {})
+      throw err
+    }
     await new Promise((r) => setTimeout(r, this.enterDelayMs))
     await this.tmux(['send-keys', '-t', target, 'Enter'])
   }

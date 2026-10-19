@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { escapeTrailingSemicolon, parseWindowActivity, TmuxService } from './tmuxService'
+import { parseWindowActivity, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
 
 const hasTmux = await run('tmux', ['-V']).then(
   () => true,
@@ -134,6 +134,7 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
       'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts, b c.ts',
       `-x $(touch PWNED) \`id\` "q" 'q' ~ * #{session_name} Enter C-c ; mid`,
       'ends with a semicolon;',
+      'ends with an escaped semicolon\\;',
     ]
     for (const text of texts) await svc.sendText('mmt_send_x_y', 'claude', text)
     let typed = ''
@@ -149,10 +150,83 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmt_send_x_y')
   })
 
+  it("types text too long for a tmux command: 10,000 × é and 10,000 × '", async () => {
+    // tmux refuses a command over ~16 KB, and quoting inflates both: they go through a paste buffer instead.
+    const out = join(cwd, 'long.txt')
+    const ready = join(cwd, 'long.ready')
+    await svc.newSession('mmt_long_x_y', cwd, 'shell', 'sh')
+    // Not canonical: a terminal's line editor would cut a line at 4 KB.
+    await svc.newWindow('mmt_long_x_y', cwd, 'claude', `stty -icanon -echo; : > '${ready}'; cat > '${out}'`)
+    for (let i = 0; i < 50 && !existsSync(ready); i++) await new Promise((r) => setTimeout(r, 50))
+    const texts = ['é'.repeat(10_000), "'".repeat(10_000)]
+    for (const text of texts) await svc.sendText('mmt_long_x_y', 'claude', text)
+    let typed = ''
+    for (let i = 0; i < 100 && typed.split('\n').length <= texts.length; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      typed = existsSync(out) ? await readFile(out, 'utf8') : ''
+    }
+    expect(typed).toBe(texts.map((t) => `${t}\n`).join(''))
+    // The paste buffers are gone again.
+    await expect(run('tmux', ['-L', socket, 'list-buffers'])).resolves.toBe('')
+    await svc.killSession('mmt_long_x_y')
+  })
+
+  it('leaves copy mode before typing, so the text reaches the app', async () => {
+    const out = join(cwd, 'copy-mode.txt')
+    const ready = join(cwd, 'copy-mode.ready')
+    await svc.newSession('mmt_copy_x_y', cwd, 'shell', 'sh')
+    await svc.newWindow('mmt_copy_x_y', cwd, 'claude', `: > '${ready}'; cat > '${out}'`)
+    for (let i = 0; i < 50 && !existsSync(ready); i++) await new Promise((r) => setTimeout(r, 50))
+    const target = '=mmt_copy_x_y:=claude'
+    // Scrolling back in the terminal puts the pane in copy mode, where keys and pastes go to tmux, not the app.
+    await run('tmux', ['-L', socket, 'copy-mode', '-t', target])
+    const inMode = async (): Promise<string> =>
+      (await run('tmux', ['-L', socket, 'display', '-p', '-t', target, '#{pane_in_mode}'])).trim()
+    await expect(inMode()).resolves.toBe('1')
+    await svc.sendText('mmt_copy_x_y', 'claude', 'after copy mode')
+    let typed = ''
+    for (let i = 0; i < 50 && !typed.includes('\n'); i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      typed = existsSync(out) ? await readFile(out, 'utf8') : ''
+    }
+    expect(typed).toBe('after copy mode\n')
+    await expect(inMode()).resolves.toBe('0')
+    await svc.killSession('mmt_copy_x_y')
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)
     await expect(svc.killSession('mmt_a_b_c')).resolves.toBeUndefined()
+  })
+})
+
+describe('TmuxService timeouts', () => {
+  const savedPath = process.env.PATH
+  let bin: string
+  beforeAll(async () => {
+    bin = await mkdtemp(join(tmpdir(), 'mm-tmux-hang-'))
+    // A tmux that never answers (a wedged server).
+    await writeFile(join(bin, 'tmux'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 })
+  })
+  afterAll(async () => {
+    process.env.PATH = savedPath
+    await rm(bin, { recursive: true, force: true })
+  })
+
+  it(`gives up on every tmux call after ${TMUX_TIMEOUT_MS / 1000} s by default, or the given time`, async () => {
+    expect(TMUX_TIMEOUT_MS).toBe(10_000)
+    const hung = new TmuxService('mm-never', join(bin, 'tmux.conf'), { timeoutMs: 200, enterDelayMs: 0 })
+    process.env.PATH = `${bin}:${savedPath}`
+    try {
+      const started = Date.now()
+      await expect(hung.listWindows('s')).rejects.toThrow(/timed out/)
+      await expect(hung.sendText('s', 'claude', 'hi')).rejects.toThrow(/timed out/)
+      await expect(hung.newSession('s', bin, 'claude', 'sh')).rejects.toThrow(/timed out/)
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      process.env.PATH = savedPath
+    }
   })
 })
 
@@ -169,14 +243,5 @@ describe('parseWindowActivity', () => {
       '',
     ].join('\n')
     expect(parseWindowActivity(out, 'claude')).toEqual({ mmt_a_b_c: 250, mmf_t_notes: 200 })
-  })
-})
-
-describe('escapeTrailingSemicolon', () => {
-  it('escapes only a trailing semicolon, which tmux would read as a command separator', () => {
-    expect(escapeTrailingSemicolon('a;')).toBe('a\\;')
-    expect(escapeTrailingSemicolon('a\\;')).toBe('a\\\\;')
-    expect(escapeTrailingSemicolon('a; b')).toBe('a; b')
-    expect(escapeTrailingSemicolon('')).toBe('')
   })
 })

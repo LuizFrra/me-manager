@@ -86,4 +86,15 @@ describe('cloneNameError', () => {
     expect(checkCloneName(' my-api ')).toBe('my-api')
     expect(() => checkCloneName('../x')).toThrow(/“\/”/)
   })
+
+  it('refuses .git in any case, and a name ending with a dot', () => {
+    // .git would be read as the git folder of the clone's parent; Windows drops a trailing dot or space.
+    for (const name of ['.git', '.GIT', '.Git', ' .git ']) expect(cloneNameError(name), name).toMatch(/“\.git”/)
+    for (const name of ['repo.', 'repo..', 'repo. ', 'repo .']) expect(cloneNameError(name), name).toMatch(/end with/)
+    expect(cloneNameError('.github')).toBeNull()
+    expect(cloneNameError('repo.git')).toBeNull()
+    expect(checkCloneName(' repo ')).toBe('repo')
+    expect(cloneNameFromUrl('https://example.com/a/.git')).toBe('')
+    expect(cloneNameFromUrl('https://example.com/a/repo..git')).toBe('')
+  })
 })

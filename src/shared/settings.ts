@@ -1,4 +1,4 @@
-import { UPDATE_STRATEGIES, type Settings, type UpdateStrategy } from './types'
+import { UPDATE_STRATEGIES, type EffectiveClaudeFlags, type Settings, type UpdateStrategy } from './types'
 
 export const POLL_INTERVAL_LIMITS = { min: 1000, max: 30_000 } as const
 export const FONT_SIZE_LIMITS = { min: 8, max: 32 } as const
@@ -15,6 +15,41 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   cloneDirectory: '',
   showStatusBar: true,
 })
+
+type ClaudeFlagSettings = Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'>
+
+/** Whether `args` set one of `options`, as `--opt value` or `--opt=value`. */
+const setsOption = (args: readonly string[], ...options: string[]): boolean =>
+  args.some((arg) => options.some((o) => arg === o || arg.startsWith(`${o}=`)))
+
+/**
+ * The flags the app puts before the user's arguments when it starts Claude in a session labelled `label`
+ * (`<theme>/<repo>/<task>` or `<theme>/<folder>`): Remote Control and skipped permissions, when enabled. A flag
+ * is left out when the user's arguments already set that option.
+ */
+export function builtInClaudeFlags(settings: ClaudeFlagSettings, label: string): string[] {
+  const { claudeArgs, remoteControl, skipPermissions } = settings
+  const flags: string[] = []
+  if (remoteControl && !setsOption(claudeArgs, '--remote-control')) flags.push('--remote-control', label)
+  if (skipPermissions && !setsOption(claudeArgs, '--dangerously-skip-permissions', '--permission-mode')) {
+    flags.push('--dangerously-skip-permissions')
+  }
+  return flags
+}
+
+/** What applies to a session's command (builtInClaudeFlags, then the user's arguments): see EffectiveClaudeFlags. */
+export function effectiveClaudeFlags(settings: ClaudeFlagSettings): EffectiveClaudeFlags {
+  const args = [...builtInClaudeFlags(settings, 'label'), ...settings.claudeArgs]
+  const bypassMode = args.some(
+    (arg, i) =>
+      arg === '--permission-mode=bypassPermissions' ||
+      (arg === '--permission-mode' && args[i + 1] === 'bypassPermissions'),
+  )
+  return {
+    remoteControl: setsOption(args, '--remote-control'),
+    skipPermissions: setsOption(args, '--dangerously-skip-permissions') || bypassMode,
+  }
+}
 
 export const clamp = (n: number, { min, max }: { min: number; max: number }): number => Math.min(max, Math.max(min, n))
 

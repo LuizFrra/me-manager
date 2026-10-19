@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, normalizeSettings } from './settings'
+import { builtInClaudeFlags, DEFAULT_SETTINGS, effectiveClaudeFlags, normalizeSettings } from './settings'
 import type { Settings } from './types'
 
 describe('normalizeSettings', () => {
@@ -120,5 +120,48 @@ describe('normalizeSettings', () => {
     const s = normalizeSettings({ claudeArgs: args })
     expect(s.claudeArgs).not.toBe(args)
     expect(normalizeSettings({}).claudeArgs).not.toBe(DEFAULT_SETTINGS.claudeArgs)
+  })
+})
+
+describe('builtInClaudeFlags / effectiveClaudeFlags', () => {
+  const settings = (
+    claudeArgs: string[],
+    remoteControl = true,
+    skipPermissions = true,
+  ): Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'> => ({
+    claudeArgs,
+    remoteControl,
+    skipPermissions,
+  })
+
+  it('adds the enabled flags, unless the user arguments already set that option', () => {
+    expect(builtInClaudeFlags(settings([]), 't/r/x')).toEqual([
+      '--remote-control',
+      't/r/x',
+      '--dangerously-skip-permissions',
+    ])
+    expect(builtInClaudeFlags(settings([], false, false), 'l')).toEqual([])
+    expect(builtInClaudeFlags(settings(['--remote-control=mine', '--permission-mode', 'plan']), 'l')).toEqual([])
+  })
+
+  it('says what applies once the user arguments are added', () => {
+    expect(effectiveClaudeFlags(settings([]))).toEqual({ remoteControl: true, skipPermissions: true })
+    expect(effectiveClaudeFlags(settings([], false, false))).toEqual({ remoteControl: false, skipPermissions: false })
+    // --permission-mode stops the app's flag, so permissions are skipped only for bypassPermissions.
+    expect(effectiveClaudeFlags(settings(['--permission-mode', 'acceptEdits']))).toEqual({
+      remoteControl: true,
+      skipPermissions: false,
+    })
+    expect(effectiveClaudeFlags(settings(['--permission-mode=plan']))).toMatchObject({ skipPermissions: false })
+    expect(effectiveClaudeFlags(settings(['--permission-mode', 'bypassPermissions'], true, false))).toMatchObject({
+      skipPermissions: true,
+    })
+    expect(effectiveClaudeFlags(settings(['--permission-mode=bypassPermissions'], true, false))).toMatchObject({
+      skipPermissions: true,
+    })
+    // The user's own flags apply whatever the toggles say.
+    expect(
+      effectiveClaudeFlags(settings(['--dangerously-skip-permissions', '--remote-control'], false, false)),
+    ).toEqual({ remoteControl: true, skipPermissions: true })
   })
 })

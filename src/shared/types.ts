@@ -180,6 +180,27 @@ export interface Settings {
   showStatusBar: boolean
 }
 
+/**
+ * Whether each built-in Claude flag applies to the sessions the app starts, once the user's own arguments
+ * (Settings.claudeArgs) are counted: a toggle is moot when those arguments set the option themselves
+ * (`--permission-mode acceptEdits` keeps permissions on), and they can turn it on with the toggle off.
+ */
+export interface EffectiveClaudeFlags {
+  /** `--remote-control` is in the command. */
+  remoteControl: boolean
+  /** `--dangerously-skip-permissions` or `--permission-mode bypassPermissions` is in the command. */
+  skipPermissions: boolean
+}
+
+/** Settings as getSettings and updateSettings return them. */
+export interface SettingsView extends Settings {
+  /**
+   * What applies (see EffectiveClaudeFlags), worked out from the settings on every call; never saved, and
+   * dropped when sent back in an updateSettings patch. Optional for API stand-ins that predate it.
+   */
+  effective?: EffectiveClaudeFlags
+}
+
 /** `rebase`: `git rebase <base>` (a linear history); `merge`: `git merge --no-edit <base>` (a merge commit). */
 export type UpdateStrategy = 'rebase' | 'merge'
 
@@ -243,9 +264,13 @@ export interface MeManagerApi {
   /** Normalizes (see normalizeUiState) and saves the UI state for the next start. Saves run one at a time. */
   saveUiState(state: UiState): Promise<void>
 
-  getSettings(): Promise<Settings>
-  /** Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result. */
-  updateSettings(patch: Partial<Settings>): Promise<Settings>
+  /** The settings, with which built-in Claude flags apply (`effective`). */
+  getSettings(): Promise<SettingsView>
+  /**
+   * Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result, with
+   * `effective` as getSettings has it.
+   */
+  updateSettings(patch: Partial<Settings>): Promise<SettingsView>
 
   createTheme(name: string): Promise<AppState>
   /** Display name only; the slug (and so branches, worktree paths and sessions) never changes. */
@@ -355,6 +380,8 @@ export interface MeManagerApi {
   /**
    * Types a request to rebase (or merge) and resolve the conflicts in `files` into the task's Claude window,
    * then Enter, and selects that window. Starts Claude (continuing its conversation) when its window was closed.
+   * Refuses, typing nothing, while Claude waits for an answer ("Claude is waiting for input — answer it first")
+   * or is busy ("Claude is busy — try again when it's idle"), as Enter would pick a menu option.
    */
   askClaudeToResolve(target: Target, strategy: UpdateStrategy, files: string[]): Promise<TabInfo[]>
 
@@ -391,7 +418,10 @@ export type FileContent =
 /** How searchFiles matches the query. Both are off by default: a case-insensitive search for the literal text. */
 export interface SearchOptions {
   caseSensitive?: boolean
-  /** The query is a regular expression: POSIX extended (`git grep -E`) in repos, JavaScript in folders. */
+  /**
+   * The query is a regular expression, JavaScript syntax: Perl-compatible `git grep -P` in repos (POSIX extended
+   * `-E` when git lacks PCRE, see SearchResult.note), JavaScript in folders. It must compile in JavaScript.
+   */
   regex?: boolean
 }
 
@@ -414,6 +444,8 @@ export interface SearchResult {
   matches: SearchMatch[]
   /** Set when the search stopped at MAX_SEARCH_MATCHES, or didn't reach every file (a huge folder). */
   truncated: boolean
+  /** Something to tell the user about how the search ran (e.g. a repo regex read as POSIX extended); rare. */
+  note?: string
 }
 
 /** A added, M modified, D deleted, R renamed, U untracked. */

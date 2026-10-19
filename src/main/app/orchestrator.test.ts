@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Orchestrator,
@@ -11,6 +15,7 @@ import {
   claudePromptCommand,
   MAX_RESOLVE_FILES,
   normalizeTaskOptions,
+  promptArgument,
   resolvePrompt,
 } from './orchestrator'
 import { GH_INSTALL_HINT } from '../../shared/git'
@@ -37,6 +42,22 @@ async function setup(): Promise<Ctx> {
   s = await orch.addRepo(themeId, '/code/my-api/src')
   const repoId = s.themes[0].items[0].id
   return { ...ctx, orch, themeId, repoId }
+}
+
+/**
+ * The words `command` (a claude command line) hands `claude`, run by sh with `promptFile` holding `content`.
+ * printf stands in for claude.
+ */
+function claudeWords(command: (promptFile: string) => string, content: string): string[] {
+  const dir = mkdtempSync(join(tmpdir(), 'mm-prompt-'))
+  try {
+    const file = join(dir, "it's a prompt.txt")
+    writeFileSync(file, content)
+    const script = `claude() { printf '%s\\0' "$@"; }; ${command(file)}`
+    return execFileSync('sh', ['-c', script], { encoding: 'utf8' }).split('\0').slice(0, -1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 const taskOf = (s: AppState): Task => {
@@ -274,13 +295,16 @@ describe('Orchestrator: new-task options', () => {
     expect(store.saved.length).toBe(saves)
   })
 
-  it('passes the initial prompt, shell-quoted, on the first start only', async () => {
-    const { orch, tmux, themeId, repoId } = await setup()
+  it('passes the initial prompt through a private file, on the first start only', async () => {
+    const { orch, tmux, promptFiles, themeId, repoId } = await setup()
     await orch.updateSettings({ claudeArgs: ['--model', 'opus'] })
     const prompt = "Fix the login bug; don't touch $(rm -rf ~) or `id`\nthen run the tests"
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { prompt: `  ${prompt}  ` }))
-    const quoted = `'Fix the login bug; don'\\''t touch $(rm -rf ~) or \`id\`\nthen run the tests'`
-    expect(tmux.calls).toEqual([`newSession mmt_client-x_my-api_fix claude --model opus -- ${quoted}`])
+    const file = '/prompts/prompt-1.txt'
+    expect(tmux.calls).toEqual([`newSession mmt_client-x_my-api_fix claude --model opus -- "$(cat -- ${file})"`])
+    expect(promptFiles.written.get(file)).toBe(`${prompt} `)
+    // Released after the start, to be removed once the shell had time to read it.
+    expect(promptFiles.calls).toEqual([`write ${file}`, `release ${file}`])
 
     // A recreated session and a restarted Claude window continue the conversation instead.
     const target = { themeId, itemId: repoId, taskId: task.id }
@@ -296,14 +320,42 @@ describe('Orchestrator: new-task options', () => {
     }
   })
 
-  it('keeps $(…) and quotes in the prompt literal for the shell', async () => {
-    const { execFileSync } = await import('node:child_process')
-    const prompt = `$(touch /tmp/mm-pwned) \`id\` 'single' "double" $HOME ; & | --flag`
-    const command = claudePromptCommand(['--model', 'opus'], prompt)
-    // printf stands in for claude: the shell must hand it the prompt back verbatim, as one argument.
-    const words = execFileSync('sh', ['-c', `claude() { printf '%s\\0' "$@"; }; ${command}`], { encoding: 'utf8' })
-    expect(words.split('\0').slice(0, -1)).toEqual(['--model', 'opus', '--', prompt])
+  it('keeps $(…), quotes and long text in the prompt file literal for the shell', () => {
+    // The shell must hand the file's text to claude verbatim, as one argument, never running or splitting it.
+    for (const prompt of [
+      `$(touch /tmp/mm-pwned) \`id\` 'single' "double" $HOME ; & | --flag * ~ \\n`,
+      `${'é'.repeat(10_000)} `,
+      "'".repeat(10_000),
+      'two\nlines\n\n ',
+    ]) {
+      const words = claudeWords((file) => claudePromptCommand(['--model', 'opus'], file), prompt)
+      expect(words).toEqual(['--model', 'opus', '--', prompt])
+    }
     expect(claudePromptCommand([], undefined)).toBe('claude')
+  })
+
+  it('removes the prompt file right away when tmux fails, and writes none without a prompt', async () => {
+    const { orch, tmux, promptFiles, themeId, repoId } = await setup()
+    tmux.failNewSession = true
+    await expect(orch.createTask(themeId, repoId, 'fix', { prompt: 'hi there' })).rejects.toThrow('tmux failed')
+    expect(promptFiles.calls).toEqual(['write /prompts/prompt-1.txt', 'release /prompts/prompt-1.txt now'])
+    tmux.failNewSession = false
+    promptFiles.calls = []
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(promptFiles.calls).toEqual([])
+  })
+
+  it('never hands Claude a one-word prompt it would read as a subcommand', () => {
+    // `claude -- mcp` runs `claude mcp`, and a word close to a subcommand (`mcpx`) fails as an unknown command:
+    // Claude only reads its lone positional argument as a prompt when it is more than one word.
+    for (const prompt of ['mcp', 'purge', 'doctor', 'mcpx', 'hello']) {
+      // The trailing space survives the shell's `$(…)`, which only drops trailing newlines.
+      const [dashDash, arg, ...rest] = claudeWords((file) => claudePromptCommand([], file), promptArgument(prompt))
+      expect([dashDash, rest]).toEqual(['--', []])
+      expect(arg).not.toBe(prompt)
+      expect(arg).toMatch(/\s/)
+      expect(arg.trim()).toBe(prompt)
+    }
   })
 
   it('validates the options it gets over IPC', () => {
@@ -592,8 +644,22 @@ describe('Orchestrator: settings and claude arguments', () => {
     expect(await orch.getSettings()).toMatchObject({ claudeArgs: [], pollIntervalMs: 3000 })
     const next = await orch.updateSettings({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 99 })
     expect(next).toMatchObject({ claudeArgs: ['--model', 'opus'], pollIntervalMs: 1000 })
-    expect(settings.get()).toEqual(next)
+    const { effective, ...saved } = next
+    expect(settings.get()).toEqual(saved)
+    expect(effective).toEqual({ remoteControl: false, skipPermissions: false })
     expect(await orch.getSettings()).toEqual(next)
+  })
+
+  it('says which built-in Claude flags apply, after the user arguments', async () => {
+    const { orch, settings } = await setup()
+    await orch.updateSettings({ remoteControl: true, skipPermissions: true })
+    expect((await orch.getSettings()).effective).toEqual({ remoteControl: true, skipPermissions: true })
+    const next = await orch.updateSettings({ claudeArgs: ['--permission-mode', 'acceptEdits'] })
+    expect(next.effective).toEqual({ remoteControl: true, skipPermissions: false })
+    // Never saved: it is worked out from the settings each time.
+    expect(settings.get()).not.toHaveProperty('effective')
+    await orch.updateSettings({ ...next, pollIntervalMs: 2000 })
+    expect(settings.get()).not.toHaveProperty('effective')
   })
 
   it('passes the arguments to new tasks, recreated sessions and restarted Claude windows', async () => {
@@ -825,6 +891,32 @@ describe('Orchestrator: file viewer', () => {
     ])
   })
 
+  it('cancels the search still running for a target when a newer one starts there', async () => {
+    const { orch, files, taskTarget, folderTarget } = await withTaskAndFolder()
+    const signals: AbortSignal[] = []
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    files.searchFiles = async (_root, _isRepo, query, _options, signal) => {
+      signals.push(signal as AbortSignal)
+      await gate
+      if (signal?.aborted) throw new Error(`cancelled ${query}`)
+      return { matches: [], truncated: false }
+    }
+    const first = orch.searchFiles(taskTarget, 'a')
+    const other = orch.searchFiles(folderTarget, 'b')
+    const second = orch.searchFiles(taskTarget, 'ab')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(signals.map((s) => s.aborted)).toEqual([true, false, false])
+    release()
+    await expect(first).rejects.toThrow('cancelled a')
+    await expect(other).resolves.toEqual({ matches: [], truncated: false })
+    await expect(second).resolves.toEqual({ matches: [], truncated: false })
+    // A finished search is not aborted by the next one.
+    const third = orch.searchFiles(taskTarget, 'abc')
+    await expect(third).resolves.toBeDefined()
+    expect(signals.map((s) => s.aborted)).toEqual([true, false, false, false])
+  })
+
   it('refuses to search a missing root, a repo without a task or an unknown target', async () => {
     const { orch, files, deps, themeId, repoId, taskTarget } = await withTaskAndFolder()
     await expect(orch.searchFiles({ themeId, itemId: repoId }, 'x')).rejects.toThrow('Choose a task to open')
@@ -954,6 +1046,16 @@ describe('Orchestrator: usage', () => {
     expect((await orch.getUsage(taskTarget)).all.cost).toBe(1.5)
     expect((await orch.getUsage(folderTarget)).all.cost).toBe(0.25)
     expect(usage.calls[0].roots).toEqual(['/wt/client-x/my-api/fix', '/docs/notes', '/home/me/blog'])
+  })
+
+  it('asks for the same usage for a target as for the report, so the two share one cached aggregation', async () => {
+    const { orch, usage, taskTarget } = await withTargets()
+    await orch.getUsage(taskTarget)
+    await orch.getUsageReport()
+    await orch.getUsage(taskTarget)
+    expect(usage.calls).toHaveLength(3)
+    expect(usage.calls[1]).toEqual(usage.calls[0])
+    expect(usage.calls[2]).toEqual(usage.calls[0])
   })
 
   it('works for a target whose folder is gone, but not for a repo without a task', async () => {
@@ -1346,16 +1448,53 @@ describe('Orchestrator: update from base', () => {
     )
   })
 
-  it("restarts Claude with the request when its window was closed, and needs the task's session", async () => {
+  it('refuses to press Enter while Claude waits for an answer or is busy, sending nothing', async () => {
     const { orch, tmux, target, session } = await withTask()
+    // Enter would pick the highlighted option of a permission prompt or choice menu.
+    tmux.panes.set(
+      session,
+      [
+        ' Bash command',
+        '   rm -rf dist',
+        ' Do you want to proceed?',
+        ' ❯ 1. Yes',
+        '   2. No, and tell Claude what to do differently (esc)',
+        '',
+      ].join('\n'),
+    )
+    await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(
+      'Claude is waiting for input — answer it first',
+    )
+    expect(tmux.captureCalls).toEqual([`${session}:claude`])
+
+    // Working: its spinner printed something within the last few seconds.
+    tmux.panes.set(session, ['─'.repeat(40), '❯ ', '─'.repeat(40)].join('\n'))
+    tmux.activity.set(session, Math.floor(Date.now() / 1000))
+    await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(
+      "Claude is busy — try again when it's idle",
+    )
+    expect(tmux.sent).toEqual([])
+
+    // Idle at its prompt: the request goes in.
+    tmux.activity.set(session, Math.floor(Date.now() / 1000) - 60)
+    await orch.askClaudeToResolve(target, 'rebase', ['a.ts'])
+    expect(tmux.sent).toHaveLength(1)
+  })
+
+  it("restarts Claude with the request when its window was closed, and needs the task's session", async () => {
+    const { orch, tmux, promptFiles, target, session } = await withTask()
     await orch.newTab(target)
     await orch.closeTab(target, 0) // the claude window
     await orch.askClaudeToResolve(target, 'rebase', ['a.ts'])
-    const request = `'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts'`
+    const file = '/prompts/prompt-1.txt'
     expect(tmux.sessions.get(session)?.windows.at(-1)).toEqual({
       name: 'claude',
-      command: `claude --continue -- ${request} || claude -- ${request}`,
+      command: `claude --continue -- "$(cat -- ${file})" || claude -- "$(cat -- ${file})"`,
     })
+    expect(promptFiles.written.get(file)).toBe(
+      'Please rebase this branch onto origin/main and resolve the conflicts in: a.ts ',
+    )
+    expect(promptFiles.calls).toEqual([`write ${file}`, `release ${file}`])
     expect(tmux.sent).toEqual([])
     tmux.sessions.clear()
     await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow('Open the task first')
