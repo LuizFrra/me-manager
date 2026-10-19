@@ -5,6 +5,7 @@ import {
   isPanelShortcut,
   matchShortcut,
   REVIEW_HELP,
+  rowMoveStep,
   shortcutHelp,
   shortcutLabel,
   worksWhileTyping,
@@ -107,6 +108,7 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+=', 'Ctrl++'], description: 'Terminal: larger font' },
       { keys: ['Ctrl+-'], description: 'Terminal: smaller font' },
       { keys: ['Ctrl+0'], description: 'Terminal: reset the font size' },
+      { keys: ['Alt+Shift+↑ ↓'], description: 'Sidebar: move the focused row up or down' },
       ...REVIEW_HELP,
     ])
     expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
@@ -126,6 +128,7 @@ describe('shortcut labels', () => {
       ['⌘=', '⌘+'],
       ['⌘-'],
       ['⌘0'],
+      ['⌥⇧↑ ↓'],
       ...REVIEW_HELP.map((e) => e.keys),
     ])
   })
@@ -332,5 +335,23 @@ describe('isModEnter', () => {
     expect(isModEnter(enter({}), false)).toBe(false)
     expect(isModEnter(enter({ ctrlKey: true, shiftKey: true }), false)).toBe(false)
     expect(isModEnter(enter({ ctrlKey: true, altKey: true }), false)).toBe(false)
+  })
+})
+
+describe('rowMoveStep', () => {
+  const arrow = (over: Partial<Parameters<typeof rowMoveStep>[0]>): Parameters<typeof rowMoveStep>[0] =>
+    key({ key: 'ArrowUp', altKey: true, shiftKey: true, ...over })
+
+  it('is -1 for Alt+Shift+↑ and 1 for Alt+Shift+↓ (Option+Shift on macOS)', () => {
+    expect(rowMoveStep(arrow({}))).toBe(-1)
+    expect(rowMoveStep(arrow({ key: 'ArrowDown' }))).toBe(1)
+  })
+
+  it('is 0 for other keys and modifiers', () => {
+    expect(rowMoveStep(arrow({ key: 'ArrowLeft' }))).toBe(0)
+    expect(rowMoveStep(arrow({ shiftKey: false }))).toBe(0)
+    expect(rowMoveStep(arrow({ altKey: false }))).toBe(0)
+    expect(rowMoveStep(arrow({ ctrlKey: true }))).toBe(0)
+    expect(rowMoveStep(arrow({ metaKey: true }))).toBe(0)
   })
 })

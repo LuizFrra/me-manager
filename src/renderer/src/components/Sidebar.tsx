@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import {
   isArchived,
   type AppState,
@@ -10,7 +11,17 @@ import {
 import { gitBadges } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
-import { shortcutLabel } from '../lib/shortcuts'
+import { rowMoveStep, shortcutLabel } from '../lib/shortcuts'
+import {
+  dropIndex,
+  entryId,
+  entryParent,
+  siblingIds,
+  stepMove,
+  type DropSide,
+  type Move,
+  type MoveEntry,
+} from '../lib/reorder'
 import { themeColorCss } from '../../../shared/themeStyle'
 
 export interface SidebarProps {
@@ -50,9 +61,22 @@ export interface SidebarProps {
   onRestoreTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
   /** Deletes an archived task and its branch (App confirms first). */
   onDeleteArchivedTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
+  /**
+   * Moves a theme, repo, folder or active task to a new index among its siblings: dragged there, or one step with
+   * Alt+Shift+↑/↓ on its row. Never into another theme or repo. Off while filtering, when only some rows show.
+   */
+  onMove: (move: Move) => void
+  /** Something for screen readers to hear (App's live region). */
+  onAnnounce: (message: string) => void
   onOpenSettings: () => void
   onOpenUsage: () => void
 }
+
+/** The type of the sidebar's own drags, so a drop of anything else (a file) is never taken for a move. */
+const DRAG_TYPE = 'application/x-me-manager-row'
+
+/** A row's or block's props, with its `data-*` attributes. */
+type DivProps = React.HTMLAttributes<HTMLDivElement> & { [data: `data-${string}`]: string }
 
 /** ↑ ahead, ↓ behind, ● uncommitted; one accessible label for the group, a tooltip on each badge. */
 function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string }): React.JSX.Element | null {
@@ -171,9 +195,107 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   // A repo's "Archived" group: collapsed unless opened, and open (like every group) while filtering.
   const archivedExpanded = (repoId: string): boolean => filter !== null || (p.archivedOpen?.has(repoId) ?? false)
 
+  // Reordering (see onMove), only without a filter: a move would go past rows it hides.
+  const reorderable = filter === null
+  const [dragged, setDragged] = useState<MoveEntry | null>(null)
+  const [dropAt, setDropAt] = useState<{ id: string; side: DropSide } | null>(null)
+  const navRef = useRef<HTMLElement>(null)
+  // The row last moved with the keyboard. Moving a focused element in the DOM drops its focus, so once the row
+  // shows at its new place it gets it back, unless the focus went somewhere else meanwhile.
+  const refocus = useRef<string | null>(null)
+  useEffect(() => {
+    const id = refocus.current
+    refocus.current = null
+    if (id === null || (document.activeElement !== null && document.activeElement !== document.body)) return
+    const rows = navRef.current?.querySelectorAll<HTMLElement>('[data-row]') ?? []
+    const row = [...rows].find((r) => r.dataset.row === id)
+    row?.querySelector<HTMLElement>('.row-label')?.focus()
+  }, [p.state])
+
+  const endDrag = (): void => {
+    setDragged(null)
+    setDropAt(null)
+  }
+  const startDrag = (e: React.DragEvent, entry: MoveEntry): void => {
+    if (!reorderable) return e.preventDefault()
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData(DRAG_TYPE, entryId(entry))
+    setDragged(entry)
+  }
+  /**
+   * The row the dragged entry is over, if it may be dropped there, and which half of it: a sibling's (a task's in
+   * its repo, an item's in its theme, a theme's) along with what is under that row (a theme's items, a repo's
+   * tasks). Null anywhere else, which refuses the drop.
+   */
+  const dropTarget = (e: React.DragEvent): { id: string; side: DropSide } | null => {
+    if (!dragged || !(e.target instanceof Element)) return null
+    const zone = e.target.closest<HTMLElement>(`[data-drop="${dragged.kind}"]`)
+    if (!zone?.dataset.id || zone.dataset.parent !== entryParent(dragged)) return null
+    const rect = zone.getBoundingClientRect()
+    return { id: zone.dataset.id, side: e.clientY < rect.top + rect.height / 2 ? 'before' : 'after' }
+  }
+  /** Where the dragged entry ends up if dropped on `target`; null where it stays put. */
+  const dropTo = (target: { id: string; side: DropSide } | null): number | null =>
+    dragged && target && dropIndex(siblingIds(p.state, dragged), entryId(dragged), target.id, target.side)
+  const dragOver = (e: React.DragEvent): void => {
+    if (!dragged) return // not one of the sidebar's rows: no drop
+    const target = dropTarget(e)
+    // Refused: the default stays, which shows the not-allowed cursor.
+    if (target) e.preventDefault()
+    e.dataTransfer.dropEffect = target ? 'move' : 'none'
+    // A line between rows where it would go; none where it would stay where it is.
+    const line = dropTo(target) === null ? null : target
+    setDropAt((prev) => (prev?.id === line?.id && prev?.side === line?.side ? prev : line))
+  }
+  const drop = (e: React.DragEvent): void => {
+    if (!dragged) return
+    e.preventDefault()
+    const toIndex = dropTo(dropTarget(e))
+    const entry = dragged
+    endDrag()
+    if (toIndex !== null) p.onMove({ ...entry, toIndex })
+  }
+  const moveByKey = (e: React.KeyboardEvent, entry: MoveEntry): void => {
+    const step = rowMoveStep(e)
+    if (step === 0) return
+    e.preventDefault()
+    if (!reorderable) return p.onAnnounce('Clear the filter to move rows')
+    const move = stepMove(p.state, entry, step)
+    if (!move) return
+    refocus.current = entryId(entry)
+    p.onMove(move)
+  }
+  /** A row that can be dragged, and moved with Alt+Shift+↑/↓ while one of its buttons has the focus. */
+  const movable = (entry: MoveEntry): DivProps => ({
+    draggable: reorderable,
+    'data-row': entryId(entry),
+    onDragStart: (e) => startDrag(e, entry),
+    onKeyDown: (e) => moveByKey(e, entry),
+  })
+  /** What a dragged sibling of `entry` drops on (see dropTarget), with its indicator line and dragged look. */
+  const dropZone = (entry: MoveEntry, className: string): DivProps => {
+    const id = entryId(entry)
+    const isDragged = dragged !== null && entryId(dragged) === id
+    const line = dropAt?.id === id ? ` drop-${dropAt.side}` : ''
+    return {
+      className: `${className}${isDragged ? ' dragging' : ''}${line}`,
+      'data-drop': entry.kind,
+      'data-id': id,
+      'data-parent': entryParent(entry),
+    }
+  }
+
   return (
-    <nav className="sidebar" inert={p.inert}>
-      <div className="sidebar-scroll">
+    <nav ref={navRef} className="sidebar" inert={p.inert}>
+      <div
+        className="sidebar-scroll"
+        onDragOver={dragOver}
+        onDrop={drop}
+        onDragEnd={endDrag}
+        onDragLeave={(e) => {
+          if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setDropAt(null)
+        }}
+      >
         <input
           ref={filterRef}
           className="sidebar-filter"
@@ -199,10 +321,11 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
         {p.state.themes
           .filter((theme) => shown('themes', theme.id))
           .map((theme) => (
-            <div key={theme.id} className="theme">
+            <div key={theme.id} {...dropZone({ kind: 'theme', themeId: theme.id }, 'theme')}>
               <div
                 className={`row theme-row${themeColorCss(theme.color) ? ' has-color' : ''}`}
                 style={themeStripe(theme.color)}
+                {...movable({ kind: 'theme', themeId: theme.id })}
               >
                 <button className="row-label" onClick={() => toggle(theme.id)}>
                   {arrow(theme.id)}{' '}
@@ -263,7 +386,14 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                   .filter((item) => shown('items', item.id))
                   .map((item) =>
                     item.kind === 'folder' ? (
-                      <div key={item.id} className={`row item-row${isSelected(item.id) ? ' selected' : ''}`}>
+                      <div
+                        key={item.id}
+                        {...dropZone(
+                          { kind: 'item', themeId: theme.id, itemId: item.id },
+                          `row item-row${isSelected(item.id) ? ' selected' : ''}`,
+                        )}
+                        {...movable({ kind: 'item', themeId: theme.id, itemId: item.id })}
+                      >
                         <button
                           className="row-label"
                           onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id })}
@@ -282,8 +412,11 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                         </span>
                       </div>
                     ) : (
-                      <div key={item.id}>
-                        <div className="row item-row">
+                      <div key={item.id} {...dropZone({ kind: 'item', themeId: theme.id, itemId: item.id }, 'repo')}>
+                        <div
+                          className="row item-row"
+                          {...movable({ kind: 'item', themeId: theme.id, itemId: item.id })}
+                        >
                           <button className="row-label" onClick={() => toggle(item.id)}>
                             {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}📦 {item.name}
                           </button>
@@ -311,7 +444,11 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             .map((task) => (
                               <div
                                 key={task.id}
-                                className={`row task-row${isSelected(item.id, task.id) ? ' selected' : ''}`}
+                                {...dropZone(
+                                  { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id },
+                                  `row task-row${isSelected(item.id, task.id) ? ' selected' : ''}`,
+                                )}
+                                {...movable({ kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })}
                               >
                                 <button
                                   className="row-label"

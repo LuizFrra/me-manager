@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi, type MockInstance } from 'vitest'
 import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
@@ -3715,5 +3715,137 @@ describe('App dev-server links', () => {
     const header = await screen.findByRole('group', { name: 'Dev-server links' })
     await user.click(within(header).getByRole('link', { name: 'localhost:5173' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Only http(s) links can be opened')
+  })
+})
+
+describe('App reordering', () => {
+  /** The sidebar's active tasks, top to bottom. */
+  const taskNames = (): string[] =>
+    [...document.querySelectorAll('.task-row .row-label')].map((b) => b.textContent?.replace(/^\S /u, '') ?? '')
+  const rowOf = (name: string): HTMLElement => taskButton(name).closest('.row') as HTMLElement
+  const dataTransfer = (): Pick<DataTransfer, 'dropEffect' | 'effectAllowed' | 'setData' | 'getData'> => ({
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    setData: vi.fn(),
+    getData: vi.fn(() => ''),
+  })
+  /** Drags task `name` onto the top half of task `onto` (jsdom's rows are 0px high at y = 0: above 0 is "before"). */
+  const dragOnto = (name: string, onto: string): void => {
+    const dt = dataTransfer()
+    fireEvent.dragStart(rowOf(name), { dataTransfer: dt })
+    for (const type of ['dragOver', 'drop'] as const) {
+      const event = createEvent[type](rowOf(onto), { dataTransfer: dt })
+      Object.defineProperty(event, 'clientY', { value: -1 })
+      fireEvent(rowOf(onto), event)
+    }
+  }
+  const altShift = (key: 'ArrowUp' | 'ArrowDown'): KeyboardEventInit => ({ key, altKey: true, shiftKey: true })
+
+  it('moves a dropped task at once and saves it; Alt+1..9 follows the new order', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const moveTask = vi.spyOn(api, 'moveTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await user.click(taskButton('task A'))
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+
+    dragOnto('task B', 'task A')
+    expect(taskNames()).toEqual(['task B', 'task A'])
+    expect(moveTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String), 0)
+    await waitFor(async () =>
+      expect((await api.getState()).themes[0].items[0]).toMatchObject({
+        tasks: [{ name: 'task B' }, { name: 'task A' }],
+      }),
+    )
+    fireEvent.keyDown(window, { key: '1', altKey: true })
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+  })
+
+  it('puts the order back and shows the error when main refuses the move', async () => {
+    const user = userEvent.setup()
+    let refuse: (err: Error) => void = () => {}
+    const api = repoApi({
+      moveTask: () => new Promise((_, reject) => (refuse = reject)),
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    dragOnto('task B', 'task A')
+    expect(taskNames()).toEqual(['task B', 'task A'])
+    act(() => refuse(new Error("Error invoking remote method 'api:moveTask': Error: Task not found: x")))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Task not found: x')
+    await waitFor(() => expect(taskNames()).toEqual(['task A', 'task B']))
+  })
+
+  it('moves the focused task with Alt+Shift+↑/↓ and announces where it went', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const moveTask = vi.spyOn(api, 'moveTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B', 'task C')
+    taskButton('task A').focus()
+    fireEvent.keyDown(taskButton('task A'), altShift('ArrowDown'))
+    expect(taskNames()).toEqual(['task B', 'task A', 'task C'])
+    const announcer = screen.getByTestId('announcer')
+    expect(announcer).toHaveAttribute('aria-live', 'polite')
+    expect(announcer).toHaveTextContent('Moved task A to position 2 of 3')
+    expect(moveTask).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), expect.any(String), 1)
+    await waitFor(() => expect(taskButton('task A')).toHaveFocus())
+
+    fireEvent.keyDown(taskButton('task C'), altShift('ArrowUp'))
+    expect(announcer).toHaveTextContent('Moved task C to position 2 of 3')
+    await waitFor(() => expect(taskNames()).toEqual(['task B', 'task C', 'task A']))
+  })
+
+  it('moves on from the shown order when keys come faster than main answers', async () => {
+    const user = userEvent.setup()
+    const gates = [deferred(), deferred()]
+    const api = repoApi()
+    const moveTask = api.moveTask
+    vi.spyOn(api, 'moveTask').mockImplementation(async (...args) => {
+      const answer = moveTask(...args) // main applies the moves in order, answering each when its gate opens
+      await gates[vi.mocked(api.moveTask).mock.calls.length - 1].promise
+      return answer
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B', 'task C')
+    fireEvent.keyDown(taskButton('task A'), altShift('ArrowDown'))
+    fireEvent.keyDown(taskButton('task A'), altShift('ArrowDown'))
+    expect(taskNames()).toEqual(['task B', 'task C', 'task A'])
+    expect(vi.mocked(api.moveTask).mock.calls.map((c) => c[3])).toEqual([1, 2])
+    await act(async () => gates[0].resolve()) // the first answer lacks the second move: not shown
+    expect(taskNames()).toEqual(['task B', 'task C', 'task A'])
+    await act(async () => gates[1].resolve())
+    expect(taskNames()).toEqual(['task B', 'task C', 'task A'])
+  })
+
+  it('offers "Move task up/down" for the current task in the palette, where there is room', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'task A', 'task B') // task B is selected
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' })
+    expect(within(dialog).queryByRole('option', { name: 'Move task down' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('option', { name: 'Move task up' }))
+    expect(taskNames()).toEqual(['task B', 'task A'])
+    expect(screen.getByTestId('announcer')).toHaveTextContent('Moved task B to position 1 of 2')
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const again = await screen.findByRole('dialog', { name: 'Command palette' })
+    expect(within(again).queryByRole('option', { name: 'Move task up' })).not.toBeInTheDocument()
+    expect(within(again).getByRole('option', { name: 'Move task down' })).toBeInTheDocument()
+  })
+
+  it('turns dragging off and says to clear the filter while the sidebar is filtered', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const moveTask = vi.spyOn(api, 'moveTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await user.type(screen.getByRole('textbox', { name: 'Filter sidebar' }), 'task')
+    expect(rowOf('task A')).toHaveAttribute('draggable', 'false')
+    fireEvent.keyDown(taskButton('task A'), altShift('ArrowDown'))
+    expect(screen.getByTestId('announcer')).toHaveTextContent('Clear the filter to move rows')
+    expect(moveTask).not.toHaveBeenCalled()
   })
 })

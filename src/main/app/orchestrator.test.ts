@@ -146,6 +146,100 @@ describe('Orchestrator: undoing a removal', () => {
   })
 })
 
+describe('Orchestrator: reordering', () => {
+  /** Themes Client X (my-api with tasks one, two, three, and the folder notes), Personal and Work. */
+  async function withOrder(): Promise<Ctx & { folderId: string; taskIds: string[] }> {
+    const ctx = await setup()
+    const { orch, themeId, repoId } = ctx
+    for (const name of ['one', 'two', 'three']) await orch.createTask(themeId, repoId, name)
+    await orch.addFolder(themeId, '/docs/notes')
+    await orch.createTheme('Personal')
+    const s = await orch.createTheme('Work')
+    const [repo, folder] = s.themes[0].items
+    return { ...ctx, folderId: folder.id, taskIds: repo.kind === 'repo' ? repo.tasks.map((t) => t.id) : [] }
+  }
+  const themeNames = (s: AppState): string[] => s.themes.map((t) => t.name)
+  const itemNames = (s: AppState): string[] => s.themes[0].items.map((i) => i.name)
+  const taskNames = (s: AppState): string[] => {
+    const repo = s.themes.flatMap((t) => t.items).find((i) => i.name === 'my-api')
+    return repo?.kind === 'repo' ? repo.tasks.map((t) => t.name) : []
+  }
+
+  it('moves themes, items and tasks, saving each move and touching neither git nor tmux', async () => {
+    const { orch, store, git, tmux, themeId, repoId, folderId, taskIds } = await withOrder()
+    git.calls = []
+    tmux.calls = []
+    const saves = store.saved.length
+    expect(themeNames(await orch.moveTheme(themeId, 2))).toEqual(['Personal', 'Work', 'Client X'])
+    await orch.moveTheme(themeId, 0)
+    expect(itemNames(await orch.moveItem(themeId, folderId, 0))).toEqual(['notes', 'my-api'])
+    const moved = await orch.moveTask(themeId, repoId, taskIds[2], 0)
+    expect(taskNames(moved)).toEqual(['three', 'one', 'two'])
+    expect(store.saved).toHaveLength(saves + 4)
+    expect(store.saved.at(-1)).toEqual(moved)
+    expect(await orch.getState()).toEqual(moved)
+    expect(git.calls).toEqual([])
+    expect(tmux.calls).toEqual([])
+  })
+
+  it('clamps the index', async () => {
+    const { orch, themeId, repoId, folderId, taskIds } = await withOrder()
+    expect(themeNames(await orch.moveTheme(themeId, 99))).toEqual(['Personal', 'Work', 'Client X'])
+    expect(themeNames(await orch.moveTheme(themeId, -5))).toEqual(['Client X', 'Personal', 'Work'])
+    expect(itemNames(await orch.moveItem(themeId, folderId, -1))).toEqual(['notes', 'my-api'])
+    expect(taskNames(await orch.moveTask(themeId, repoId, taskIds[0], 10))).toEqual(['two', 'three', 'one'])
+  })
+
+  it('does not save when nothing moves', async () => {
+    const { orch, store, themeId, repoId, folderId, taskIds } = await withOrder()
+    const before = await orch.getState()
+    const saves = store.saved.length
+    expect(await orch.moveTheme(themeId, 0)).toBe(before)
+    expect(await orch.moveTheme(themeId, -3)).toBe(before)
+    expect(await orch.moveItem(themeId, folderId, 1)).toBe(before)
+    expect(await orch.moveItem(themeId, folderId, 8)).toBe(before)
+    expect(await orch.moveTask(themeId, repoId, taskIds[1], 1)).toBe(before)
+    expect(store.saved).toHaveLength(saves)
+  })
+
+  it('rejects unknown ids, an archived task, a folder as the repo and a bad position, without saving', async () => {
+    const { orch, store, themeId, repoId, folderId, taskIds } = await withOrder()
+    await orch.archiveTask(themeId, repoId, taskIds[1])
+    const otherTheme = (await orch.getState()).themes[1].id
+    const saves = store.saved.length
+    await expect(orch.moveTheme('nope', 0)).rejects.toThrow('Theme not found: nope')
+    await expect(orch.moveItem(themeId, 'nope', 0)).rejects.toThrow('Item not found: nope')
+    await expect(orch.moveItem(otherTheme, folderId, 0)).rejects.toThrow(`Item not found: ${folderId}`)
+    await expect(orch.moveTask(themeId, repoId, 'nope', 0)).rejects.toThrow('Task not found: nope')
+    await expect(orch.moveTask(themeId, folderId, taskIds[0], 0)).rejects.toThrow('"notes" is not a repository')
+    await expect(orch.moveTask(themeId, repoId, taskIds[1], 0)).rejects.toThrow('"two" is archived: restore it first')
+    await expect(orch.moveTheme(themeId, '1' as unknown as number)).rejects.toThrow('Invalid position to move to')
+    expect(store.saved).toHaveLength(saves)
+  })
+
+  it('keeps the order across a restart', async () => {
+    const ctx = await withOrder()
+    const { orch, themeId, repoId, folderId, taskIds } = ctx
+    await orch.moveTheme(themeId, 1)
+    await orch.moveItem(themeId, folderId, 0)
+    await orch.moveTask(themeId, repoId, taskIds[0], 2)
+    const reloaded = new Orchestrator(ctx.deps)
+    await reloaded.init()
+    const s = await reloaded.getState()
+    expect(themeNames(s)).toEqual(['Personal', 'Client X', 'Work'])
+    expect(s.themes[1].items.map((i) => i.name)).toEqual(['notes', 'my-api'])
+    expect(taskNames(s)).toEqual(['two', 'three', 'one'])
+  })
+
+  it('queues a move behind the state changes before it', async () => {
+    const { orch, themeId } = await withOrder()
+    const renamed = orch.renameTheme(themeId, 'Clients')
+    const moved = orch.moveTheme(themeId, 2)
+    await renamed
+    expect(themeNames(await moved)).toEqual(['Personal', 'Work', 'Clients'])
+  })
+})
+
 describe('Orchestrator: cloneRepo', () => {
   /** A theme "Client X"; only the folders in `existing` exist on disk. */
   async function cloneSetup(): Promise<

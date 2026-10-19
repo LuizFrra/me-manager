@@ -13,6 +13,7 @@ import {
 import { slugify } from '../../shared/naming'
 import { isThemeColor, normalizeThemeStyle, themeIconError } from '../../shared/themeStyle'
 import { isRunCommand, normalizeRunCommand } from '../../shared/runCommand'
+import { clampIndex, moveActiveTask, moveEntry } from '../../shared/reorder'
 
 export function emptyState(): AppState {
   return { version: 1, themes: [] }
@@ -344,5 +345,52 @@ export function setTaskNotes(
   const task = getTask(next, themeId, repoId, taskId)
   if (trimmed) task.notes = trimmed
   else delete task.notes
+  return next
+}
+
+/** A position to move to, from the renderer: any integer, clamped by the move. */
+function checkIndex(index: unknown): number {
+  if (typeof index !== 'number' || !Number.isInteger(index)) throw new Error('Invalid position to move to')
+  return index
+}
+
+/** Moves the theme to index `toIndex` (clamped) among the themes. The same state when it is already there. */
+export function moveTheme(state: AppState, themeId: string, toIndex: number): AppState {
+  const to = checkIndex(toIndex)
+  const from = state.themes.indexOf(getTheme(state, themeId))
+  if (clampIndex(to, state.themes.length) === from) return state
+  const next = clone(state)
+  next.themes = [...moveEntry(next.themes, from, to)]
+  return next
+}
+
+/**
+ * Moves a repo or folder to index `toIndex` (clamped) within its theme; never to another theme, as its tasks'
+ * worktree paths hold the theme's slug. The same state when it is already there.
+ */
+export function moveItem(state: AppState, themeId: string, itemId: string, toIndex: number): AppState {
+  const to = checkIndex(toIndex)
+  const { items } = getTheme(state, themeId)
+  const from = items.indexOf(getItem(state, themeId, itemId))
+  if (clampIndex(to, items.length) === from) return state
+  const next = clone(state)
+  const theme = getTheme(next, themeId)
+  theme.items = [...moveEntry(theme.items, from, to)]
+  return next
+}
+
+/**
+ * Moves an active task to position `toIndex` (clamped) among its repo's active tasks, as the sidebar lists them;
+ * archived tasks keep their slots. Refused for an archived task. The same state when it is already there.
+ */
+export function moveTask(state: AppState, themeId: string, repoId: string, taskId: string, toIndex: number): AppState {
+  const to = checkIndex(toIndex)
+  const task = getTask(state, themeId, repoId, taskId)
+  if (isArchived(task)) throw new Error(`"${task.name}" is archived: restore it first`)
+  const { tasks } = getRepo(state, themeId, repoId)
+  if (moveActiveTask(tasks, taskId, to) === tasks) return state
+  const next = clone(state)
+  const repo = getRepo(next, themeId, repoId)
+  repo.tasks = [...moveActiveTask(repo.tasks, taskId, to)]
   return next
 }

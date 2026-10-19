@@ -282,6 +282,11 @@ export class Orchestrator implements AppService {
     return next
   }
 
+  /** commit, unless the mutation handed back the state as it is (a move to where the entry already was). */
+  private async commitIfChanged(next: AppState): Promise<AppState> {
+    return next === this.state ? next : this.commit(next)
+  }
+
   /**
    * Runs state-changing operations one at a time: FileStore.save is not safe to call
    * concurrently, and overlapping operations would read stale state (lost updates,
@@ -524,6 +529,10 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commit(m.restoreTheme(this.state, theme, index)))
   }
 
+  async moveTheme(themeId: string, toIndex: number): Promise<AppState> {
+    return this.exclusive(async () => this.commitIfChanged(m.moveTheme(this.state, themeId, toIndex)))
+  }
+
   async addRepo(themeId: string, path: string): Promise<AppState> {
     return this.exclusive(async () => {
       const root = await this.deps.git.repoRoot(path)
@@ -582,6 +591,11 @@ export class Orchestrator implements AppService {
   /** The item comes from the renderer: restoreItem checks it. */
   async restoreItem(themeId: string, item: Item, index?: number): Promise<AppState> {
     return this.exclusive(async () => this.commit(m.restoreItem(this.state, themeId, item, index)))
+  }
+
+  /** Within its theme only; nothing on disk or in tmux depends on the order. */
+  async moveItem(themeId: string, itemId: string, toIndex: number): Promise<AppState> {
+    return this.exclusive(async () => this.commitIfChanged(m.moveItem(this.state, themeId, itemId, toIndex)))
   }
 
   /** The default base and every listed branch, the default first (it may be a local branch git doesn't list). */
@@ -657,6 +671,11 @@ export class Orchestrator implements AppService {
 
   async setTaskNotes(themeId: string, repoId: string, taskId: string, notes: string): Promise<AppState> {
     return this.exclusive(async () => this.commit(m.setTaskNotes(this.state, themeId, repoId, taskId, notes)))
+  }
+
+  /** Only the state queue: the move touches no worktree, so it doesn't wait for the task's git actions. */
+  async moveTask(themeId: string, repoId: string, taskId: string, toIndex: number): Promise<AppState> {
+    return this.exclusive(async () => this.commitIfChanged(m.moveTask(this.state, themeId, repoId, taskId, toIndex)))
   }
 
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {
