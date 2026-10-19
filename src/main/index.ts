@@ -10,6 +10,7 @@ import { FilesService } from './files/filesService'
 import { GhService } from './git/gh'
 import { GitService } from './git/gitService'
 import { BUDGET_ALERT } from '../shared/ipc'
+import { APPEARANCE_BACKGROUND } from '../shared/appearance'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
@@ -41,7 +42,7 @@ let ptyService: PtyService | null = null
 let notificationWatcher: NotificationWatcher | null = null
 let budgetWatcher: BudgetWatcher | null = null
 /** The window colour for the current appearance (see followAppearance); dark until the settings are loaded. */
-let windowBackground = (): string => '#1e1e1e'
+let windowBackground = (): string => APPEARANCE_BACKGROUND.dark
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({

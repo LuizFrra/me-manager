@@ -1,4 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
+import {
+  Archive,
+  ChartColumn,
+  Folder,
+  FolderDown,
+  FolderGit2,
+  FolderPlus,
+  Palette,
+  PanelLeft,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Settings,
+  Settings2,
+  X,
+} from 'lucide-react'
 import { budgetSummary } from '../../../shared/budget'
 import {
   isArchived,
@@ -27,6 +43,8 @@ import {
   type MoveEntry,
 } from '../lib/reorder'
 import { themeColorCss } from '../../../shared/themeStyle'
+import { ICON } from '../lib/icon'
+import { Chevron, Spark } from './icons'
 
 export interface SidebarProps {
   state: AppState
@@ -47,6 +65,14 @@ export interface SidebarProps {
   inert?: boolean
   onSelect: (target: Target) => void
   onAddTheme: () => void
+  /** New task: the home screen's composer. Without it, no New task button. */
+  onNewTask?: () => void
+  /** Collapsed to a rail of icons (toggle, New task, Usage, Settings), as Claude's sidebar collapses. */
+  rail?: boolean
+  /** Hides or shows the sidebar. Without it, no toggle. */
+  onToggleSidebar?: () => void
+  /** Targets (by targetKey) whose Claude finished while they weren't shown: marked until opened. */
+  unread?: ReadonlySet<string>
   onRenameTheme: (themeId: string, currentName: string) => void
   /** Opens "Customize theme…" (colour and icon). */
   onCustomizeTheme: (themeId: string) => void
@@ -149,14 +175,14 @@ function ArchivedTasks(props: {
           title="Tasks whose worktree was removed; their branches are kept"
           onClick={props.onToggle}
         >
-          {props.open ? '▼' : '▶'} Archived ({props.tasks.length})
+          <Chevron open={props.open} /> <span className="row-name">Archived ({props.tasks.length})</span>
         </button>
       </div>
       {props.open &&
         props.tasks.map((task) => (
           <div key={task.id} className={`row archived-row${props.selectedTaskId === task.id ? ' selected' : ''}`}>
             <button className="row-label" title={task.notes} onClick={(e) => props.onSelect(task.id, e)}>
-              {task.name}
+              <span className="row-name">{task.name}</span>
             </button>
             <span className="row-actions">
               <button
@@ -164,19 +190,28 @@ function ArchivedTasks(props: {
                 title="Restore (recreate the worktree from the branch)"
                 onClick={() => props.onRestore(task)}
               >
-                ↺
+                <RotateCcw {...ICON} />
               </button>
               <button
                 aria-label={`Delete archived task ${task.name}`}
                 title="Delete the task and its branch…"
                 onClick={() => props.onDelete(task)}
               >
-                ×
+                <X {...ICON} />
               </button>
             </span>
           </div>
         ))}
     </>
+  )
+}
+
+/** A target whose Claude finished while it wasn't shown, as an unread chat is marked. */
+function UnreadMark(): React.JSX.Element {
+  return (
+    <span className="unread-mark" title="Claude finished here since you last looked">
+      <span className="sr-only">, new</span>
+    </span>
   )
 }
 
@@ -188,7 +223,8 @@ function RunCommandButton({ item, onClick }: { item: Item; onClick: () => void }
       title={item.runCommand ? `Edit the run command: ${item.runCommand}` : 'Set a run command…'}
       onClick={onClick}
     >
-      {/* Not ▶: it edits the command rather than running it, and ▶ is the tree's expand arrow. */}⚙
+      {/* Not a play arrow: it edits the command rather than running it. */}
+      <Settings2 {...ICON} />
     </button>
   )
 }
@@ -204,7 +240,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   const expanded = (id: string): boolean => filter !== null || !collapsed.has(id)
   const shown = (set: keyof NonNullable<typeof filter>, id: string): boolean => !filter || filter[set].has(id)
   const missing = new Set(p.status.missing)
-  const arrow = (id: string): string => (expanded(id) ? '▼' : '▶')
+  const arrow = (id: string): React.JSX.Element => <Chevron open={expanded(id)} />
   // ○ no session, ⚠ path missing, ● running: pulsing accent while Claude works, amber while it waits for the
   // user, green when idle (or when the claude window is gone).
   const dot = (id: string): React.JSX.Element => {
@@ -376,6 +412,42 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     }
   }
 
+  if (p.rail)
+    return (
+      <nav className="sidebar sidebar-rail" aria-label="Sidebar" inert={p.inert}>
+        {p.onToggleSidebar && (
+          <button
+            aria-label="Show sidebar"
+            title={`Show sidebar (${shortcutLabel('sidebar')})`}
+            onClick={p.onToggleSidebar}
+          >
+            <PanelLeft {...ICON} size={18} />
+          </button>
+        )}
+        {p.onNewTask && (
+          <button
+            className="sidebar-rail-new"
+            aria-label="New task"
+            title={`New task (${shortcutLabel('newTask')})`}
+            onClick={p.onNewTask}
+          >
+            <Plus {...ICON} size={16} strokeWidth={2.25} />
+          </button>
+        )}
+        <span className="sidebar-rail-spacer" />
+        <button
+          aria-label="Usage"
+          title={`Claude usage and estimated cost (${shortcutLabel('usage')})`}
+          onClick={p.onOpenUsage}
+        >
+          <ChartColumn {...ICON} size={18} />
+        </button>
+        <button aria-label="Settings" title={`Settings (${shortcutLabel('settings')})`} onClick={p.onOpenSettings}>
+          <Settings {...ICON} size={18} />
+        </button>
+      </nav>
+    )
+
   return (
     <nav
       ref={navRef}
@@ -388,6 +460,32 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
         choose(new Set())
       }}
     >
+      <div className="sidebar-brand">
+        <Spark />
+        <span className="sidebar-brand-name">me-manager</span>
+        {p.onToggleSidebar && (
+          <button
+            className="sidebar-toggle"
+            aria-label="Hide sidebar"
+            title={`Hide sidebar (${shortcutLabel('sidebar')})`}
+            onClick={p.onToggleSidebar}
+          >
+            <PanelLeft {...ICON} size={18} />
+          </button>
+        )}
+      </div>
+      {p.onNewTask && (
+        <button
+          className="sidebar-new-task"
+          title={`Start a new task from a prompt (${shortcutLabel('newTask')})`}
+          onClick={p.onNewTask}
+        >
+          <span className="sidebar-new-task-icon">
+            <Plus {...ICON} strokeWidth={2.25} />
+          </span>
+          New task
+        </button>
+      )}
       <div
         className="sidebar-scroll"
         onDragOver={dragOver}
@@ -412,9 +510,9 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           }}
         />
         <div className="sidebar-header">
-          <span>THEMES</span>
+          <span>Themes</span>
           <button aria-label="New theme" title="New theme" onClick={p.onAddTheme}>
-            +
+            <Plus {...ICON} />
           </button>
         </div>
         {p.state.themes.length === 0 && !filter && <p className="hint">Create a theme to get started.</p>}
@@ -428,14 +526,14 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                 style={themeStripe(theme.color)}
                 {...movable({ kind: 'theme', themeId: theme.id })}
               >
-                <button className="row-label" onClick={() => toggle(theme.id)}>
+                <button className="row-label" aria-expanded={expanded(theme.id)} onClick={() => toggle(theme.id)}>
                   {arrow(theme.id)}{' '}
                   {theme.icon && (
                     <span className="theme-icon" aria-hidden="true">
                       {theme.icon}
                     </span>
                   )}
-                  {theme.name}
+                  <span className="row-name">{theme.name}</span>
                 </button>
                 <span className="row-actions">
                   <button
@@ -443,42 +541,42 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                     title="Add repository"
                     onClick={() => p.onAddRepo(theme.id)}
                   >
-                    📦+
+                    <FolderGit2 {...ICON} />
                   </button>
                   <button
                     aria-label={`Clone repository into ${theme.name}`}
                     title="Clone repository…"
                     onClick={() => p.onCloneRepo(theme.id)}
                   >
-                    📦⤓
+                    <FolderDown {...ICON} />
                   </button>
                   <button
                     aria-label={`Add folder to ${theme.name}`}
                     title="Add folder"
                     onClick={() => p.onAddFolder(theme.id)}
                   >
-                    📁+
+                    <FolderPlus {...ICON} />
                   </button>
                   <button
                     aria-label={`Customize theme ${theme.name}`}
                     title="Customize theme…"
                     onClick={() => p.onCustomizeTheme(theme.id)}
                   >
-                    🎨
+                    <Palette {...ICON} />
                   </button>
                   <button
                     aria-label={`Rename theme ${theme.name}`}
                     title="Rename theme"
                     onClick={() => p.onRenameTheme(theme.id, theme.name)}
                   >
-                    ✎
+                    <Pencil {...ICON} />
                   </button>
                   <button
                     aria-label={`Remove theme ${theme.name}`}
                     title="Remove theme"
                     onClick={() => p.onRemoveTheme(theme.id)}
                   >
-                    ×
+                    <X {...ICON} />
                   </button>
                 </span>
               </div>
@@ -501,7 +599,9 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             clickOther(e, { themeId: theme.id, itemId: item.id }, 'Only tasks can be selected')
                           }
                         >
-                          {dot(item.id)} 📁 {item.name}
+                          {dot(item.id)} <Folder {...ICON} className="item-icon" />{' '}
+                          <span className="row-name">{item.name}</span>
+                          {p.unread?.has(item.id) && <UnreadMark />}
                         </button>
                         <span className="row-actions">
                           <RunCommandButton item={item} onClick={() => p.onEditRunCommand(theme.id, item.id)} />
@@ -510,7 +610,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             title="Remove folder"
                             onClick={() => p.onRemoveItem(theme.id, item.id)}
                           >
-                            ×
+                            <X {...ICON} />
                           </button>
                         </span>
                       </div>
@@ -520,8 +620,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                           className="row item-row"
                           {...movable({ kind: 'item', themeId: theme.id, itemId: item.id })}
                         >
-                          <button className="row-label" onClick={() => toggle(item.id)}>
-                            {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}📦 {item.name}
+                          <button
+                            className="row-label"
+                            aria-expanded={expanded(item.id)}
+                            onClick={() => toggle(item.id)}
+                          >
+                            {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}
+                            <FolderGit2 {...ICON} className="item-icon" /> <span className="row-name">{item.name}</span>
                           </button>
                           <span className="row-actions">
                             <button
@@ -529,7 +634,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                               title="New task"
                               onClick={() => p.onAddTask(theme.id, item.id)}
                             >
-                              +
+                              <Plus {...ICON} />
                             </button>
                             <RunCommandButton item={item} onClick={() => p.onEditRunCommand(theme.id, item.id)} />
                             <button
@@ -537,7 +642,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                               title="Remove repository"
                               onClick={() => p.onRemoveItem(theme.id, item.id)}
                             >
-                              ×
+                              <X {...ICON} />
                             </button>
                           </span>
                         </div>
@@ -562,7 +667,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                   title={task.notes}
                                   onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
                                 >
-                                  {dot(task.id)} {task.name}
+                                  {dot(task.id)} <span className="row-name">{task.name}</span>
+                                  {p.unread?.has(task.id) && <UnreadMark />}
                                 </button>
                                 <OverBudget status={p.budgets?.[task.id]} />
                                 {p.gitStatus?.[task.id] && (
@@ -574,21 +680,21 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                     title="Rename task"
                                     onClick={() => p.onRenameTask(theme.id, item.id, task.id, task.name)}
                                   >
-                                    ✎
+                                    <Pencil {...ICON} />
                                   </button>
                                   <button
                                     aria-label={`Archive task ${task.name}`}
                                     title="Archive task (removes the worktree, keeps the branch)"
                                     onClick={() => p.onArchiveTask(theme.id, item.id, task.id, task.name)}
                                   >
-                                    🗄
+                                    <Archive {...ICON} />{' '}
                                   </button>
                                   <button
                                     aria-label={`Remove task ${task.name}`}
                                     title="Remove task"
                                     onClick={() => p.onRemoveTask(theme.id, item.id, task.id, task.name)}
                                   >
-                                    ×
+                                    <X {...ICON} />
                                   </button>
                                 </span>
                               </div>
@@ -674,7 +780,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           title={`Claude usage and estimated cost (${shortcutLabel('usage')})`}
           onClick={p.onOpenUsage}
         >
-          <span aria-hidden="true">$</span> Usage
+          <ChartColumn {...ICON} /> Usage
         </button>
         <button
           className="sidebar-settings"
@@ -682,7 +788,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           title={`Settings (${shortcutLabel('settings')})`}
           onClick={p.onOpenSettings}
         >
-          <span aria-hidden="true">⚙</span> Settings
+          <Settings {...ICON} /> Settings
         </button>
       </div>
     </nav>

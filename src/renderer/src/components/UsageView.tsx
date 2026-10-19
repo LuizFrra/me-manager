@@ -1,3 +1,5 @@
+import { Folder, GitBranch } from 'lucide-react'
+import { ICON } from '../lib/icon'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PRICING_SOURCE_DATE } from '../../../shared/pricing'
 import { budgetPercent, budgetSummary } from '../../../shared/budget'
@@ -123,7 +125,7 @@ function TargetRows(props: {
               onClick={() => props.onOpenTarget(t.target)}
             >
               <span className="usage-kind" aria-hidden="true">
-                {t.kind === 'task' ? '⎇' : '📁'}
+                {t.kind === 'task' ? <GitBranch {...ICON} size={12} /> : <Folder {...ICON} size={12} />}
               </span>
               {t.label}
             </button>

@@ -60,6 +60,35 @@ const git = (patch: Partial<TaskGitStatus>): TaskGitStatus => ({
   ...patch,
 })
 
+describe('Sidebar header and tree', () => {
+  it('starts a new task from the New task button, shown only with onNewTask', async () => {
+    const onNewTask = vi.fn()
+    const { unmount } = renderSidebar({ onNewTask })
+    expect(screen.getByText('me-manager')).toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('button', { name: 'New task' }))
+    expect(onNewTask).toHaveBeenCalledTimes(1)
+    unmount()
+    renderSidebar()
+    expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument()
+  })
+
+  it('marks tasks and folders whose Claude finished unseen, keeping their names', () => {
+    renderSidebar({ unread: new Set(['fix', 'notes']) })
+    expect(screen.getByRole('button', { name: '○ fix, new' }).querySelector('.unread-mark')).toHaveAttribute(
+      'title',
+      'Claude finished here since you last looked',
+    )
+    expect(screen.getByRole('button', { name: '○ notes, new' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '○ docs' })).toBeInTheDocument()
+  })
+
+  it('says whether each theme and repository is expanded', () => {
+    renderSidebar({ collapsed: new Set(['api']) })
+    expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'api' })).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
 describe('Sidebar git badges', () => {
   it('shows ahead, behind and uncommitted badges with tooltips', () => {
     renderSidebar({ gitStatus: { fix: git({ ahead: 3, behind: 1, uncommitted: 2 }) } })
@@ -87,9 +116,9 @@ describe('Sidebar git badges', () => {
 })
 
 describe('Sidebar status dot', () => {
-  /** The dot of a task or folder row: its button is named "<dot> [📁 ]<name>". */
+  /** The dot of a task or folder row: its button is named "<dot> <name>". */
   const dotOf = (name: string): HTMLElement => {
-    const dot = screen.getByRole('button', { name: new RegExp(`^\\S (📁 )?${name}$`, 'u') }).querySelector('.dot')
+    const dot = screen.getByRole('button', { name: new RegExp(`^\\S ${name}$`, 'u') }).querySelector('.dot')
     if (!(dot instanceof HTMLElement)) throw new Error('no dot')
     return dot
   }
@@ -112,7 +141,8 @@ describe('Sidebar status dot', () => {
     expect(dotOf('ship')).toHaveClass('running', 'idle')
     expect(dotOf('ship')).toHaveAttribute('title', 'Claude is idle')
     expect(dotOf('shell').className).toBe('dot running')
-    for (const name of ['fix', 'docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
+    expect(dotOf('fix')).toHaveTextContent('✻') // Claude Code's working mark
+    for (const name of ['docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
   })
 
   it('keeps ○ for no session and ⚠ for a missing path', () => {
@@ -128,12 +158,12 @@ describe('Sidebar status dot', () => {
 describe('Sidebar theme style', () => {
   it("shows the theme's icon before its name and a colour stripe, keeping the row's name", () => {
     renderSidebar({ state: appState({ ...theme('Client', []), color: 'purple', icon: '🚀' }, theme('Plain', [])) })
-    const label = screen.getByRole('button', { name: '▼ Client' })
-    expect(label).toHaveTextContent('▼ 🚀Client')
+    const label = screen.getByRole('button', { name: 'Client' })
+    expect(label).toHaveTextContent('🚀Client')
     const row = label.closest('.theme-row') as HTMLElement
     expect(row).toHaveClass('has-color')
     expect(row.style.getPropertyValue('--theme-color')).toBe('#a371f7')
-    const plain = screen.getByRole('button', { name: '▼ Plain' }).closest('.theme-row') as HTMLElement
+    const plain = screen.getByRole('button', { name: 'Plain' }).closest('.theme-row') as HTMLElement
     expect(plain).not.toHaveClass('has-color')
     expect(plain.style.getPropertyValue('--theme-color')).toBe('')
   })
@@ -141,7 +171,7 @@ describe('Sidebar theme style', () => {
   it('ignores a colour that is not in the palette', () => {
     const odd = { ...theme('Odd', []), color: 'url(x)' as never }
     renderSidebar({ state: appState(odd) })
-    const row = screen.getByRole('button', { name: '▼ Odd' }).closest('.theme-row') as HTMLElement
+    const row = screen.getByRole('button', { name: 'Odd' }).closest('.theme-row') as HTMLElement
     expect(row.getAttribute('style')).toBeNull()
   })
 
@@ -171,7 +201,7 @@ describe('Sidebar archived tasks', () => {
     renderSidebar({ state: withArchived, onToggleArchived })
     expect(screen.getByRole('button', { name: '○ fix' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /\bold/ })).not.toBeInTheDocument()
-    const toggle = screen.getByRole('button', { name: '▶ Archived (2)' })
+    const toggle = screen.getByRole('button', { name: 'Archived (2)' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getAllByRole('button', { name: /Archived/ })).toHaveLength(1) // none for "web"
     await user().click(toggle)
@@ -189,7 +219,7 @@ describe('Sidebar archived tasks', () => {
       onRestoreTask,
       onDeleteArchivedTask,
     })
-    expect(screen.getByRole('button', { name: '▼ Archived (2)' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Archived (2)' })).toHaveAttribute('aria-expanded', 'true')
     const u = user()
     await u.click(screen.getByRole('button', { name: 'old' }))
     expect(onSelect).toHaveBeenCalledWith({ themeId: 'Client', itemId: 'api', taskId: 'old' })
@@ -212,7 +242,7 @@ describe('Sidebar archived tasks', () => {
 
   it('shows matching archived tasks while filtering, with their group expanded', () => {
     renderSidebar({ state: withArchived, filter: 'older' })
-    expect(screen.getByRole('button', { name: '▼ Archived (1)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Archived (1)' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'older' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'old' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '○ fix' })).not.toBeInTheDocument()
@@ -254,14 +284,13 @@ describe('Sidebar reordering', () => {
     getData: vi.fn(() => ''),
   })
 
-  /** The row of a task or folder (its button reads "<dot> [📁 ]<name>"), or of a theme or repo (by its name). */
+  /** The row of a task or folder (its button reads "<dot> <name>"), or of a theme or repo (by its name). */
   const rowOf = (name: string): HTMLElement => {
-    const button = screen.getByRole('button', { name: new RegExp(`^\\S (📁 |📦 )?${name}$`, 'u') })
+    const button = screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}$`, 'u') })
     return button.closest('.row') as HTMLElement
   }
   const taskRow = rowOf
-  const themeRow = (name: string): HTMLElement =>
-    screen.getByRole('button', { name: `▼ ${name}` }).closest('.row') as HTMLElement
+  const themeRow = (name: string): HTMLElement => screen.getByRole('button', { name }).closest('.row') as HTMLElement
 
   /** Every row block is 20px high, from y = 100: the top half is "before", the bottom half "after". */
   const placeRows = (): void => {

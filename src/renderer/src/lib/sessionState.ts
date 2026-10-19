@@ -11,7 +11,8 @@ export function sessionState(status: LiveStatus, id: string): SessionState {
 }
 
 export const SESSION_STATE_INFO: Record<SessionState, { glyph: string; label: string; title: string }> = {
-  busy: { glyph: '●', label: 'Working', title: 'Claude is working' },
+  // Claude Code's own "working" mark, turning while it works (see .dot.running.busy).
+  busy: { glyph: '✻', label: 'Working', title: 'Claude is working' },
   waiting: {
     glyph: '●',
     label: 'Waiting for you',

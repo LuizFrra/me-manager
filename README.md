@@ -40,6 +40,11 @@ The packaged builds handle this themselves:
 
 ## Features
 
+- **Claude look:** warm light and dark themes in Claude's palette, with serif titles. The home screen greets
+  you with a composer: say what Claude should work on, pick a repository, press Enter, and a task starts with
+  that prompt.
+- **Attention:** what is waiting for you is listed on the home screen and counted in the window title; a task
+  whose Claude finished while you were elsewhere is marked in the sidebar until you open it.
 - **Tasks and sessions:** a git worktree per task, with Claude in a persistent tmux session and extra shell tabs.
   Templates pre-fill new tasks. Tasks can be archived (worktree removed, branch kept) and restored.
 - **Files panel:** a file tree, a code viewer and search. Diffs against the base (unified or split, virtualized
@@ -52,8 +57,8 @@ The packaged builds handle this themselves:
 - **Claude usage and estimated cost:** per task and folder, with daily and per-task budgets. Warnings and
   desktop notifications at 80% and 100%.
 - **Notifications:** when Claude finishes or needs input.
-- **Navigation:** a command palette, keyboard shortcuts, drag-and-drop ordering, and a light, dark or
-  follow-system appearance.
+- **Navigation:** a command palette, keyboard shortcuts, drag-and-drop ordering, a collapsible sidebar, and a
+  light, dark or follow-system appearance.
 
 ## Scripts
 

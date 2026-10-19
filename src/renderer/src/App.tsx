@@ -66,6 +66,8 @@ import { plural } from './lib/gitStatus'
 import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
+import { repoChoices, taskNameFromPrompt } from './lib/composer'
+import { finishedIds, windowTitle } from './lib/attention'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
@@ -112,7 +114,16 @@ type DialogBody =
   /** A review comment's note: a new one (no `initial`) or an edit. */
   | { kind: 'reviewComment'; location: string; initial?: string; onSave: (note: string) => void }
   /** `template`: the task template the dialog starts on, by name. */
-  | { kind: 'newTask'; themeId: string; repoId: string; repoName: string; template?: string }
+  | {
+      kind: 'newTask'
+      themeId: string
+      repoId: string
+      repoName: string
+      template?: string
+      /** From the home composer: what it held. */
+      name?: string
+      prompt?: string
+    }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | {
@@ -157,6 +168,8 @@ type AppAction =
   | {
       type:
         | 'newTheme'
+        | 'newTaskHome'
+        | 'toggleSidebar'
         | 'togglePanel'
         | 'searchFiles'
         | 'newTab'
@@ -327,7 +340,9 @@ function buildPaletteCommands(
   ): void => {
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
   }
+  if (repoChoices(state).length > 0) action('New task…', 'newTaskHome', shortcutLabel('newTask'))
   action('New theme', 'newTheme')
+  action('Show or hide the sidebar', 'toggleSidebar', shortcutLabel('sidebar'))
   if (multiSelected >= 2) {
     for (const bulk of ['push', 'update', 'archive', 'remove'] as const)
       commands.push({
@@ -466,6 +481,29 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   // Repos whose "Archived" group is expanded; each starts collapsed.
   const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+  // Targets whose Claude finished (busy → idle or waiting) while they weren't shown, by targetKey; the sidebar marks
+  // them until they are opened. For this session only.
+  const [unread, setUnread] = useState<ReadonlySet<string>>(new Set())
+  const lastActivity = useRef<LiveStatus['activity']>({})
+  const statusSeq = useRef(0)
+  const statusApplied = useRef(0)
+  // The window's title names the selection and counts the sessions waiting for the user (see windowTitle).
+  useEffect(() => {
+    document.title = windowTitle(state, status, selected)
+  }, [state, status, selected])
+  // Whether the sidebar is collapsed to its rail; remembered in the UI state.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  /** Collapses or expands the sidebar; focus inside it moves to the toggle, which the other layout also has. */
+  const toggleSidebar = (): void => {
+    const hadFocus = document.activeElement?.closest('.sidebar') != null
+    setSidebarCollapsed((c) => !c)
+    if (hadFocus)
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLElement>('.sidebar [aria-label="Show sidebar"], .sidebar [aria-label="Hide sidebar"]')
+          ?.focus(),
+      )
+  }
   const toggleArchived = useCallback(
     (repoId: string) =>
       setArchivedOpen((prev) => {
@@ -515,6 +553,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const select = (target: Target | null): void => {
     selectedRef.current = target
     setSelected(target)
+    const key = target && targetKey(target)
+    if (key)
+      setUnread((prev) => {
+        if (!prev.has(key)) return prev
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
     setPanel((target && panelsRef.current.get(targetKey(target))) || DEFAULT_PANEL)
   }
 
@@ -606,9 +652,25 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }, [gitTargets, refreshGit])
 
   const refresh = useCallback(() => {
-    // Polled every few seconds: only update (and re-render) when something actually changed.
+    // Polled every few seconds: only update (and re-render) when something actually changed. A reply older than
+    // one already applied is dropped, so activity changes are seen in order (see unread).
+    const seq = ++statusSeq.current
     api.getStatus().then(
-      (next) => setStatus(keepIfEqual(next)),
+      (next) => {
+        if (seq < statusApplied.current) return
+        statusApplied.current = seq
+        const finished = finishedIds(lastActivity.current, next.activity)
+        lastActivity.current = next.activity
+        const shown = selectedRef.current ? targetKey(selectedRef.current) : null
+        const marked = finished.filter((id) => id !== shown)
+        // Marks only targets that still exist and aren't archived; ones that left meanwhile are dropped.
+        const live = new Set(allTargets(stateRef.current).map((e) => targetKey(e.target)))
+        setUnread((prev) => {
+          const kept = [...prev, ...marked].filter((id) => live.has(id))
+          return kept.length === prev.size && kept.every((id) => prev.has(id)) ? prev : new Set(kept)
+        })
+        setStatus(keepIfEqual(next))
+      },
       () => {},
     )
     refreshGit()
@@ -741,6 +803,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     panelWidth: panelFraction,
     ...(sidebarFilter.trim() ? { sidebarFilter } : {}),
     ...(archivedOpen.size > 0 ? { archivedOpen: [...archivedOpen] } : {}),
+    ...(sidebarCollapsed ? { sidebarCollapsed: true as const } : {}),
     ...(Object.keys(lastTemplates).length > 0 ? { lastTemplates } : {}),
   }))
   const saveUiNow = useLatestCallback((): void => {
@@ -760,6 +823,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       const [ui, live] = await Promise.all([api.getUiState(), api.getStatus().catch(() => null)])
       setCollapsed(new Set(ui.collapsed))
       if (ui.archivedOpen) setArchivedOpen(new Set(ui.archivedOpen))
+      if (ui.sidebarCollapsed) setSidebarCollapsed(true)
       if (ui.lastTemplates) setLastTemplates((current) => ({ ...ui.lastTemplates, ...current }))
       if (ui.sidebarFilter) setSidebarFilter((current) => current || (ui.sidebarFilter ?? ''))
       for (const [key, entry] of Object.entries(ui.panels)) {
@@ -795,7 +859,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       uiSaveTimer.current = null
       api.saveUiState(uiSnapshot()).catch(() => {})
     }, UI_SAVE_MS)
-  }, [api, uiSnapshot, selected, collapsed, archivedOpen, sidebarFilter, panel, panelFraction, lastTemplates])
+  }, [
+    api,
+    uiSnapshot,
+    selected,
+    collapsed,
+    archivedOpen,
+    sidebarFilter,
+    panel,
+    panelFraction,
+    lastTemplates,
+    sidebarCollapsed,
+  ])
 
   // A save still waiting goes out when the window closes or reloads (and if the App unmounts).
   useEffect(() => {
@@ -1236,6 +1311,58 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (repo?.kind === 'repo') openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name, template })
   }
 
+  /** New task: back to the home screen, with the composer focused. */
+  const [composerFocus, setComposerFocus] = useState(0)
+  const goHome = (): void => {
+    if (selectedRef.current) {
+      select(null)
+      setTabs([])
+      void api.detachTerminal().catch(() => {}) // the task is no longer shown
+    }
+    setComposerFocus((n) => n + 1)
+  }
+
+  /** The composer's Options…: the New task dialog for the chosen repository, with the prompt and its name. */
+  const moreTaskOptions = (themeId: string, repoId: string, prompt: string): void => {
+    const repo = stateRef.current.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    if (repo?.kind !== 'repo') return
+    const text = prompt.trim()
+    const name = text
+      ? taskNameFromPrompt(
+          text,
+          repo.tasks.map((t) => t.slug),
+        )
+      : undefined
+    openDialog({
+      kind: 'newTask',
+      themeId,
+      repoId,
+      repoName: repo.name,
+      template: lastTemplates[repoId],
+      name,
+      prompt: text || undefined,
+    })
+  }
+
+  /** The composer's Start: a task named from the prompt, which becomes Claude's first message; then opens it. */
+  const startTaskFromHome = async (themeId: string, repoId: string, prompt: string): Promise<boolean> => {
+    const repo = stateRef.current.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    if (repo?.kind !== 'repo') return false
+    const name = taskNameFromPrompt(
+      prompt,
+      repo.tasks.map((t) => t.slug),
+    )
+    const epoch = modalEpoch.current
+    const next = await update(() => api.createTask(themeId, repoId, name, { prompt }))
+    if (!next) return false
+    const created = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    const task = created?.kind === 'repo' ? created.tasks.find((t) => t.name === name) : undefined
+    // Opened unless the user went elsewhere meanwhile; the new task is in the sidebar either way.
+    const movedOn = selectedRef.current !== null || modalEpoch.current !== epoch || overlayOpenRef.current
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
+    return true
+  }
+
   /**
    * Creates the task and opens it, unless another dialog or overlay was opened while it was being created (the
    * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). Dismissing the
@@ -1619,11 +1746,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       return
     }
     if (paletteOpen || helpOpen || usageOpen) return
-    if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target)) return
+    // The home composer has focus whenever home shows: the app's chords (none of them edits text) still work there.
+    const inComposer = e.target instanceof Element && e.target.closest('.composer') !== null
+    if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target) && !inComposer) return
     e.preventDefault()
     switch (shortcut.id) {
       case 'settings':
         return openSettings()
+      case 'newTask':
+        return goHome()
+      case 'sidebar':
+        return toggleSidebar()
       case 'openEditor':
         return openExternally('editor')
       case 'zoomIn':
@@ -1634,10 +1767,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         return togglePanel()
       case 'searchFiles':
         return searchInFiles()
-      case 'filterSidebar':
-        sidebarFilterRef.current?.focus()
-        sidebarFilterRef.current?.select()
+      case 'filterSidebar': {
+        const focusFilter = (): void => {
+          sidebarFilterRef.current?.focus()
+          sidebarFilterRef.current?.select()
+        }
+        // From the rail, the sidebar opens first; the filter is there on the next frame.
+        if (!sidebarCollapsed) return focusFilter()
+        setSidebarCollapsed(false)
+        requestAnimationFrame(focusFilter)
         return
+      }
       case 'target': {
         const target = visibleTargets(state, collapsed, filterSidebar(state, sidebarFilter))[shortcut.index]
         if (target && !sameTarget(selectedRef.current, target)) void open(target)
@@ -1797,6 +1937,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const runCommand = ({ action }: AppCommand): void => {
     if (action.type === 'open') void open(action.target)
     else if (action.type === 'newTheme') newTheme()
+    else if (action.type === 'newTaskHome') goHome()
+    else if (action.type === 'toggleSidebar') toggleSidebar()
     else if (action.type === 'togglePanel') togglePanel()
     else if (action.type === 'searchFiles') searchInFiles()
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
@@ -1858,8 +2000,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   // Everything below can read the resolved appearance (the terminal and Mermaid need it; CSS uses the root attribute).
   const content = (
-    <div className="app">
+    <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
+        rail={sidebarCollapsed}
+        unread={unread}
+        onToggleSidebar={toggleSidebar}
         state={state}
         status={status}
         gitStatus={gitStatus}
@@ -1872,6 +2017,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         filterRef={sidebarFilterRef}
         onSelect={(t) => void open(t)}
         onAddTheme={newTheme}
+        onNewTask={goHome}
         onRenameTheme={renameTheme}
         onCustomizeTheme={customizeTheme}
         onRemoveTheme={removeTheme}
@@ -2070,6 +2216,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             onAddRepo={startAddRepo}
             onCloneRepo={startClone}
             onOpenPalette={() => setPaletteOpen(true)}
+            onStartTask={startTaskFromHome}
+            onMoreTaskOptions={moreTaskOptions}
+            composerFocus={composerFocus}
           />
         )}
       </main>
@@ -2091,6 +2240,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           templates={settings.taskTemplates}
           taskNames={repoTaskNames(state, dialog.themeId, dialog.repoId)}
           initialTemplate={dialog.template}
+          initialName={dialog.name}
+          initialPrompt={dialog.prompt}
           onSubmit={(name, options, template) =>
             createTask(dialog.id, dialog.themeId, dialog.repoId, name, options, template)
           }

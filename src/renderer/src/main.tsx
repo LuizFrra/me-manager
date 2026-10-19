@@ -1,3 +1,4 @@
+import '@fontsource-variable/source-serif-4/opsz.css'
 import './styles.css'
 import React from 'react'
 import ReactDOM from 'react-dom/client'

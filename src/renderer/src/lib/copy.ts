@@ -8,8 +8,6 @@ export interface CopyEntry {
   kind: CopyKind
   /** The action's name: "Copy branch name". */
   label: string
-  /** The header button's text: "Branch". */
-  short: string
   /** For the confirmation: "Copied branch name". */
   what: string
   text: string
@@ -33,11 +31,11 @@ export function copyEntries({ theme, item, task }: ResolvedTarget, socket: strin
   const entries: CopyEntry[] = []
   if (task) {
     entries.push(
-      { kind: 'branch', label: 'Copy branch name', short: 'Branch', what: 'branch name', text: task.branch },
-      { kind: 'path', label: 'Copy worktree path', short: 'Path', what: 'worktree path', text: task.worktreePath },
+      { kind: 'branch', label: 'Copy branch name', what: 'branch name', text: task.branch },
+      { kind: 'path', label: 'Copy worktree path', what: 'worktree path', text: task.worktreePath },
     )
   } else if (item.kind === 'folder') {
-    entries.push({ kind: 'path', label: 'Copy folder path', short: 'Path', what: 'folder path', text: item.path })
+    entries.push({ kind: 'path', label: 'Copy folder path', what: 'folder path', text: item.path })
   } else {
     return entries // a repo without a task has nothing to copy
   }
@@ -45,7 +43,6 @@ export function copyEntries({ theme, item, task }: ResolvedTarget, socket: strin
     entries.push({
       kind: 'attach',
       label: 'Copy attach command',
-      short: 'Attach',
       what: 'attach command',
       text: attachCommand(socket, sessionName(theme.slug, item.slug, task?.slug)),
     })

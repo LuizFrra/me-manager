@@ -377,6 +377,21 @@ describe('NewTaskDialog templates', () => {
     expect(screen.queryByRole('combobox', { name: 'Template' })).not.toBeInTheDocument()
   })
 
+  it("keeps the composer's name and prompt when a template is chosen, and back on None", async () => {
+    const user = userEvent.setup()
+    renderDialog({ initialName: 'Bump deps', initialPrompt: 'Bump the deps carefully' })
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(name()).toHaveValue('Bump deps')
+    expect(prompt()).toHaveValue('Bump the deps carefully')
+    await user.selectOptions(template(), 'Review')
+    expect(name()).toHaveValue('Bump deps')
+    expect(prompt()).toHaveValue('Bump the deps carefully')
+    expect(base()).toHaveValue('origin/develop')
+    await user.selectOptions(template(), 'None')
+    expect(name()).toHaveValue('Bump deps')
+    expect(prompt()).toHaveValue('Bump the deps carefully')
+  })
+
   it('starts on None, then prefills name, base and prompt from the chosen template, all still editable', async () => {
     const user = userEvent.setup()
     const onSubmit = renderDialog()
