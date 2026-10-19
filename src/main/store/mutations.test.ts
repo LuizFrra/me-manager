@@ -496,3 +496,35 @@ describe('reordering', () => {
       expect(() => m.moveTheme(s, themeId, bad as number)).toThrow('Invalid position to move to')
   })
 })
+
+describe('task budgets', () => {
+  function withTask(): { s: AppState; themeId: string; repoId: string } {
+    const { s, themeId, repoId } = setup()
+    return { s: m.addTask(s, themeId, repoId, task('fix')), themeId, repoId }
+  }
+  const budgetOf = (s: AppState, themeId: string, repoId: string): number | undefined =>
+    m.getTask(s, themeId, repoId, 'task-fix').budgetUsd
+
+  it("sets a task's own budget, in cents, without touching the input state", () => {
+    const { s, themeId, repoId } = withTask()
+    const next = m.setTaskBudget(s, themeId, repoId, 'task-fix', 4.567)
+    expect(budgetOf(next, themeId, repoId)).toBe(4.57)
+    expect(budgetOf(s, themeId, repoId)).toBeUndefined()
+  })
+
+  it('removes the field for null', () => {
+    const { s, themeId, repoId } = withTask()
+    const set = m.setTaskBudget(s, themeId, repoId, 'task-fix', 5)
+    expect(
+      'budgetUsd' in m.getTask(m.setTaskBudget(set, themeId, repoId, 'task-fix', null), themeId, repoId, 'task-fix'),
+    ).toBe(false)
+  })
+
+  it('rejects an amount out of range or not a number, and unknown tasks', () => {
+    const { s, themeId, repoId } = withTask()
+    for (const bad of [0, -1, 100_001, '5', Number.NaN]) {
+      expect(() => m.setTaskBudget(s, themeId, repoId, 'task-fix', bad)).toThrow(/The budget must be an amount/)
+    }
+    expect(() => m.setTaskBudget(s, themeId, repoId, 'nope', 5)).toThrow(/Task not found/)
+  })
+})

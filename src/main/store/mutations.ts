@@ -14,6 +14,7 @@ import { slugify } from '../../shared/naming'
 import { isThemeColor, normalizeThemeStyle, themeIconError } from '../../shared/themeStyle'
 import { isRunCommand, normalizeRunCommand } from '../../shared/runCommand'
 import { clampIndex, moveActiveTask, moveEntry } from '../../shared/reorder'
+import { normalizeBudget } from '../../shared/budget'
 
 export function emptyState(): AppState {
   return { version: 1, themes: [] }
@@ -392,5 +393,22 @@ export function moveTask(state: AppState, themeId: string, repoId: string, taskI
   const next = clone(state)
   const repo = getRepo(next, themeId, repoId)
   repo.tasks = [...moveActiveTask(repo.tasks, taskId, to)]
+  return next
+}
+
+/** Sets a task's own budget from untrusted input (see normalizeBudget), in cents; null removes it. */
+export function setTaskBudget(
+  state: AppState,
+  themeId: string,
+  repoId: string,
+  taskId: string,
+  budgetUsd: unknown,
+): AppState {
+  getTask(state, themeId, repoId, taskId)
+  const budget = normalizeBudget(budgetUsd)
+  const next = clone(state)
+  const task = getTask(next, themeId, repoId, taskId)
+  if (budget === null) delete task.budgetUsd
+  else task.budgetUsd = budget
   return next
 }

@@ -596,6 +596,30 @@ describe('Orchestrator: task notes', () => {
   })
 })
 
+describe('Orchestrator: task budgets', () => {
+  it("saves a task's own budget and clears it with null, touching neither git nor tmux", async () => {
+    const { orch, store, git, tmux, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    git.calls = []
+    tmux.calls = []
+    let s = await orch.setTaskBudget(themeId, repoId, task.id, 7.5)
+    expect(taskOf(s).budgetUsd).toBe(7.5)
+    expect(store.saved.at(-1)).toEqual(s)
+    s = await orch.setTaskBudget(themeId, repoId, task.id, null)
+    expect(taskOf(s)).toEqual(task)
+    expect(git.calls).toEqual([])
+    expect(tmux.calls).toEqual([])
+  })
+
+  it('rejects an invalid budget without saving', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const saves = store.saved.length
+    await expect(orch.setTaskBudget(themeId, repoId, task.id, -1)).rejects.toThrow(/The budget must be an amount/)
+    expect(store.saved.length).toBe(saves)
+  })
+})
+
 describe('Orchestrator: removeTask', () => {
   it('detaches, kills the session, removes the worktree and optionally the branch', async () => {
     const { orch, git, tmux, pty, themeId, repoId } = await setup()
