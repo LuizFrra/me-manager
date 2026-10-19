@@ -3473,3 +3473,122 @@ button.status-seg:focus-visible {
   gap: 8px;
   font-size: 11px;
 }
+
+/* ---------- Budgets ---------- */
+:root {
+  --budget-warn: #d29922;
+  --budget-over: var(--danger);
+}
+.usage-badge.budget-warn {
+  border-color: color-mix(in srgb, var(--budget-warn) 55%, transparent);
+}
+.usage-badge.budget-over {
+  border-color: color-mix(in srgb, var(--budget-over) 65%, transparent);
+  background: color-mix(in srgb, var(--budget-over) 10%, transparent);
+}
+.usage-badge.budget-warn .usage-badge-cost,
+.usage-badge.budget-warn .usage-badge-alert {
+  color: var(--budget-warn);
+}
+.usage-badge.budget-over .usage-badge-cost,
+.usage-badge.budget-over .usage-badge-alert {
+  color: var(--budget-over);
+}
+.usage-badge-alert {
+  font-size: 11px;
+}
+.usage-tip-budget {
+  margin: 0 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-tip-budget.budget-warn {
+  color: var(--budget-warn);
+}
+.usage-tip-budget.budget-over {
+  color: var(--budget-over);
+}
+.status-cost.budget-warn {
+  color: var(--budget-warn);
+}
+.status-cost.budget-over {
+  color: var(--budget-over);
+  font-weight: 600;
+}
+/* The sidebar's mark for a task over its budget: as quiet as the git badges until hovered or selected. */
+.budget-badge {
+  flex: none;
+  padding: 0 2px;
+  color: var(--budget-over);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.75;
+  cursor: default;
+}
+.row:hover .budget-badge,
+.row.selected .budget-badge {
+  opacity: 1;
+}
+.usage-budget-list {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.usage-budget {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.usage-budget-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-budget-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ffffff12;
+}
+.usage-budget-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ok);
+}
+.usage-budget-bar.budget-warn .usage-budget-fill {
+  background: var(--budget-warn);
+}
+.usage-budget-bar.budget-over .usage-budget-fill {
+  background: var(--budget-over);
+}
+.usage-budget-amount {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.usage-budgets .usage-empty {
+  margin: 8px 0;
+  text-align: left;
+}
+.budget-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.budget-input input {
+  flex: 1;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.budget-input input:focus {
+  border-color: var(--accent);
+  outline: none;
+}

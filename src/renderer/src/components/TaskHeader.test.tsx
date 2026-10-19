@@ -1,6 +1,9 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { budgetStatus } from '../../../shared/budget'
+import type { BudgetStatus, UsageSummary } from '../../../shared/types'
+import { emptyUsageSummary } from '../../../shared/usage'
 import { TaskHeader, type RunControlsProps } from './TaskHeader'
 
 const base = {
@@ -155,5 +158,47 @@ describe('TaskHeader dev-server links', () => {
   it('shows no links line without URLs', () => {
     render(<TaskHeader {...base} devUrls={[]} onOpenUrl={vi.fn()} />)
     expect(screen.queryByRole('group', { name: 'Dev-server links' })).not.toBeInTheDocument()
+  })
+})
+
+describe('TaskHeader usage badge and budget', () => {
+  const usageOf = (cost: number): UsageSummary => {
+    const s = emptyUsageSummary()
+    s.all.cost = cost
+    s.all.output = 1000
+    return s
+  }
+  const renderBadge = (cost: number, budget?: BudgetStatus | null): HTMLElement => {
+    render(<TaskHeader {...base} usage={usageOf(cost)} onOpenUsage={vi.fn()} budget={budget} />)
+    return screen.getByRole('button', { name: /^Claude usage:/ })
+  }
+
+  it('looks as usual and says nothing of a budget when the task has none', () => {
+    const badge = renderBadge(4.1, null)
+    expect(badge).toHaveAccessibleName('Claude usage: $4.10 · 1k tok')
+    expect(badge).not.toHaveClass('budget-warn')
+    expect(badge).not.toHaveClass('budget-over')
+    expect(badge).not.toHaveAccessibleDescription(/budget/)
+  })
+
+  it('shows the budget in the tooltip while under 80%, without warning', () => {
+    const badge = renderBadge(1, budgetStatus(1, 5))
+    expect(badge).toHaveAccessibleDescription(/\$1\.00 of \$5\.00 task budget \(20%\)/)
+    expect(badge).not.toHaveClass('budget-warn')
+  })
+
+  it('warns from 80%, with the budget in its name and tooltip', () => {
+    const badge = renderBadge(4.1, budgetStatus(4.1, 5))
+    expect(badge).toHaveClass('budget-warn')
+    expect(badge).toHaveAccessibleName('Claude usage: $4.10 · 1k tok, 82% of its budget')
+    expect(badge).toHaveAccessibleDescription(/\$4\.10 of \$5\.00 task budget \(82%\)/)
+  })
+
+  it('is marked over budget from 100%', () => {
+    const badge = renderBadge(6, budgetStatus(6, 5))
+    expect(badge).toHaveClass('budget-over')
+    expect(badge).not.toHaveClass('budget-warn')
+    expect(badge).toHaveAccessibleName('Claude usage: $6.00 · 1k tok, over its budget')
+    expect(badge).toHaveAccessibleDescription(/\$6\.00 of \$5\.00 task budget \(120%\)/)
   })
 })

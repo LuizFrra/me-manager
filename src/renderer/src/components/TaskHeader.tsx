@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
+import type { BudgetStatus, DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
 import type { CopyEntry } from '../lib/copy'
 import { GIT_ACTION_BUSY, type GitActionKind } from '../lib/gitActions'
@@ -213,6 +213,8 @@ export function TaskHeader(props: {
   sessionFlags?: { remoteControl: boolean; skipPermissions: boolean }
   /** The target's Claude usage, once loaded: shown as a badge that opens the usage view. */
   usage?: UsageSummary
+  /** The task's budget against its all-time cost (see UsageBadge); null or absent when it has none. */
+  budget?: BudgetStatus | null
   onOpenUsage?: () => void
   /** A task's git status, once loaded, and the base ref it is compared with. */
   git?: TaskGitStatus
@@ -276,7 +278,9 @@ export function TaskHeader(props: {
         </div>
         <div className="task-header-actions">
           <div className="task-header-actions-row">
-            {props.usage && props.onOpenUsage && <UsageBadge usage={props.usage} onOpen={props.onOpenUsage} />}
+            {props.usage && props.onOpenUsage && (
+              <UsageBadge usage={props.usage} budget={props.budget} onOpen={props.onOpenUsage} />
+            )}
             <div className="copy-group" role="group" aria-label="Open">
               <span className="copy-group-label" aria-hidden="true">
                 Open

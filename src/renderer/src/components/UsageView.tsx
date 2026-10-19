@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PRICING_SOURCE_DATE } from '../../../shared/pricing'
+import { budgetPercent, budgetSummary } from '../../../shared/budget'
+import { targetKey } from '../../../shared/naming'
 import type {
+  BudgetReport,
+  BudgetStatus,
   MeManagerApi,
   Target,
   UsageBucket,
@@ -167,18 +171,83 @@ function Totals({ bucket }: { bucket: UsageBucket }): React.JSX.Element {
   )
 }
 
+/** One budget as a bar: how much of it is spent (full once it is over), with the amounts beside it. */
+function BudgetBar(props: { label: string; status: BudgetStatus; noun: string }): React.JSX.Element {
+  const { status } = props
+  const percent = budgetPercent(status)
+  const text = `${budgetSummary(status, props.noun)} (${percent}%)`
+  return (
+    <li className="usage-budget">
+      <span className="usage-budget-label">{props.label}</span>
+      <div
+        className={`usage-budget-bar budget-${status.level}`}
+        role="progressbar"
+        aria-label={props.label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(100, percent)}
+        aria-valuetext={text}
+      >
+        <div className="usage-budget-fill" style={{ width: `${Math.min(100, status.fraction * 100)}%` }} />
+      </div>
+      <span className="usage-budget-amount" aria-hidden="true">
+        {text}
+      </span>
+    </li>
+  )
+}
+
+/**
+ * The daily budget (all usage today) and each task's budget (its all-time cost), the closest to its limit first;
+ * how to set them when there are none.
+ */
+function Budgets(props: { budgets: BudgetReport; report: UsageReport; onOpenSettings: () => void }): React.JSX.Element {
+  const { budgets, report } = props
+  const labels = new Map(
+    report.themes.flatMap((theme) => theme.targets.map((t) => [targetKey(t.target), `${theme.name} › ${t.label}`])),
+  )
+  const tasks = Object.entries(budgets.tasks)
+    .filter(([id]) => labels.has(id))
+    .sort(([, a], [, b]) => b.fraction - a.fraction)
+  return (
+    <section className="usage-budgets" aria-label="Budgets">
+      <h3 className="usage-section-title">Budgets</h3>
+      {!budgets.daily && tasks.length === 0 ? (
+        <p className="usage-empty">
+          No budgets set.{' '}
+          <button className="link-button" onClick={props.onOpenSettings}>
+            Set budgets in Settings
+          </button>
+        </p>
+      ) : (
+        <ul className="usage-budget-list">
+          {budgets.daily && (
+            <BudgetBar label="Today, all tasks and folders" status={budgets.daily} noun="daily budget" />
+          )}
+          {tasks.map(([id, status]) => (
+            <BudgetBar key={id} label={labels.get(id)!} status={status} noun="task budget" />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 /**
  * Claude usage of every task and folder: totals, a table per theme and a per-model breakdown, for one period at
- * a time. Costs are estimates at API prices. Esc, the ✕ button or a click outside closes it.
+ * a time, with the budgets. Costs are estimates at API prices. Esc, the ✕ button or a click outside closes it.
  */
 export function UsageView(props: {
-  api: Pick<MeManagerApi, 'getUsageReport'>
+  api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets'>
   onClose: () => void
   onOpenTarget: (target: Target) => void
+  /** Closes the view for the Settings dialog, where the budgets are set. */
+  onOpenSettings: () => void
 }): React.JSX.Element {
   const { api } = props
   const ref = useRef<HTMLDivElement>(null)
   const [report, setReport] = useState<UsageReport | null>(null)
+  const [budgets, setBudgets] = useState<BudgetReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<UsagePeriod>('month')
   const [sort, setSort] = useState<Sort>({ key: 'cost', desc: true })
@@ -187,14 +256,21 @@ export function UsageView(props: {
 
   const load = useCallback(
     () =>
-      api.getUsageReport().then(
-        (next) => {
-          // generatedAt changes every call; only re-render when the numbers do.
-          setReport((prev) => (prev ? keepIfEqual({ ...next, generatedAt: prev.generatedAt })(prev) : next))
-          setError(null)
-        },
-        (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
-      ),
+      // Together, so both come from one scan of the transcripts.
+      Promise.all([
+        api.getUsageReport().then(
+          (next) => {
+            // generatedAt changes every call; only re-render when the numbers do.
+            setReport((prev) => (prev ? keepIfEqual({ ...next, generatedAt: prev.generatedAt })(prev) : next))
+            setError(null)
+          },
+          (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+        ),
+        api.getBudgets().then(
+          (next) => setBudgets((prev) => (prev ? keepIfEqual(next)(prev) : next)),
+          () => {}, // the bars keep their last values
+        ),
+      ]),
     [api],
   )
   useEffect(() => {
@@ -256,6 +332,16 @@ export function UsageView(props: {
           {report && total && (
             <>
               <Totals bucket={total} />
+              {budgets && (
+                <Budgets
+                  budgets={budgets}
+                  report={report}
+                  onOpenSettings={() => {
+                    props.onClose()
+                    props.onOpenSettings()
+                  }}
+                />
+              )}
               {unpriced.length > 0 && (
                 <p className="usage-note" role="note">
                   Unpriced models: {unpriced.map((m) => m.model).join(', ')}. {formatTokens(total.unpricedTokens)} of
