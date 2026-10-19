@@ -275,13 +275,54 @@ const rowMoveHelp = (mac: boolean): ShortcutHelpEntry => ({
   description: 'Sidebar: move the focused row up or down',
 })
 
-/** Every shortcut, as listed in the help overlay, then the sidebar rows' and the line numbers' keys (REVIEW_HELP). */
+/**
+ * Shift+↑ / ↓ on a focused task row extends the multi-selection to the task above (-1) or below (1) in its repo; 0
+ * for any other key, or with Alt (rowMoveStep), Ctrl or Cmd held too.
+ */
+export function rowExtendStep(e: KeyLike): -1 | 0 | 1 {
+  if (!e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return 0
+  return e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+}
+
+/** What a click on a task row does to the multi-selection, by its modifiers. */
+export type SelectMode = 'toggle' | 'range' | 'addRange'
+
+/**
+ * Mod+click (Ctrl on Linux, Cmd on macOS, where Ctrl+click is a right click) toggles a task in or out, Shift+click
+ * selects a range, Mod+Shift+click adds one; null for a plain click (it opens the task), or with Alt.
+ */
+export function clickSelectMode(
+  e: Pick<KeyLike, 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>,
+  mac = isMac,
+): SelectMode | null {
+  if (e.altKey || (mac ? e.ctrlKey : e.metaKey)) return null
+  const mod = mac ? e.metaKey : e.ctrlKey
+  if (e.shiftKey) return mod ? 'addRange' : 'range'
+  return mod ? 'toggle' : null
+}
+
+/** The multi-selection's keys, for the help overlay. */
+const selectionHelp = (mac: boolean): ShortcutHelpEntry[] => [
+  {
+    keys: mac ? ['⌘-click', '⇧-click'] : ['Ctrl+click', 'Shift+click'],
+    description: 'Sidebar: select several tasks, or a range in a repo',
+  },
+  {
+    keys: ['Space', mac ? '⇧↑ ↓' : 'Shift+↑ ↓'],
+    description: 'Sidebar: add the focused task to the selection, or extend it',
+  },
+  { keys: ['Esc'], description: 'Sidebar: clear the task selection' },
+]
+
+/**
+ * Every shortcut, as listed in the help overlay, then the sidebar rows' keys and the line numbers' (REVIEW_HELP).
+ */
 export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
   const app = SHORTCUTS.map((def) => ({
     keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
-  return [...app, rowMoveHelp(mac), ...REVIEW_HELP]
+  return [...app, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
 }
 
 /** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */
