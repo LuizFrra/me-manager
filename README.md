@@ -11,7 +11,9 @@ and pick up where you left off.
 
 - **Linux:** `sudo apt install tmux git build-essential`
 - **macOS:** `xcode-select --install && brew install tmux`
-- **Both:** Node.js 20 or newer, and Claude Code (`claude`) on your PATH.
+- **Both:** Node.js 22.12 or newer, and Claude Code (`claude`) on your PATH.
+
+Full install, build and test steps (for people and coding agents) are in [AGENTS.md](AGENTS.md).
 
 `build-essential` and the Xcode Command Line Tools are needed because
 `npm install` rebuilds node-pty for Electron.
@@ -36,10 +38,27 @@ The packaged builds handle this themselves:
   with `--appimage-extract-and-run`.
 - **`dist/linux-unpacked/me-manager`** does neither. Run it with `--no-sandbox`.
 
+## Features
+
+- **Tasks and sessions:** a git worktree per task, with Claude in a persistent tmux session and extra shell tabs.
+  Templates pre-fill new tasks. Tasks can be archived (worktree removed, branch kept) and restored.
+- **Files panel:** a file tree, a code viewer and search. Diffs against the base (unified or split, virtualized
+  for large diffs) and rendered Markdown with Mermaid.
+- **Review:** select lines in a diff or file, write comments, and paste them into Claude's prompt.
+- **Git:** commit, push, open a PR, and update from base (rebase or merge). When an update conflicts, you can
+  ask Claude to resolve it.
+- **Bulk actions:** push, update, archive or remove several selected tasks at once.
+- **Running code:** a run command per repo in a "run" tab. Dev-server URLs it prints become clickable links.
+- **Claude usage and estimated cost:** per task and folder, with daily and per-task budgets. Warnings and
+  desktop notifications at 80% and 100%.
+- **Notifications:** when Claude finishes or needs input.
+- **Navigation:** a command palette, keyboard shortcuts, drag-and-drop ordering, and a light, dark or
+  follow-system appearance.
+
 ## Scripts
 
 ```bash
-npm install          # install dependencies and rebuild node-pty for Electron
+npm ci               # install dependencies and rebuild node-pty for Electron
 npm run dev          # run the app with hot reload
 npm test             # run the unit tests (vitest)
 npm run typecheck    # type-check main, preload and renderer
@@ -78,8 +97,15 @@ npm run build:unpack # unpacked app in dist/, for quick checks
 Everything lives in `~/.me-manager`:
 
 - `state.json`: themes, repos, folders and tasks
+- `settings.json`: settings (Claude arguments, appearance, budgets, task templates, …)
+- `ui-state.json`: what was open, selected and collapsed
+- `budget-alerts.json`: which budget notifications were already sent
 - `tmux.conf`: tmux config for the app's socket, regenerated on every start
+- `prompts/`: short-lived files that hand a new task's first prompt to Claude
 - `worktrees/`: the task worktrees
+
+Usage and cost are read (never written) from Claude Code's transcripts in `~/.claude/projects`, or
+`$CLAUDE_CONFIG_DIR/projects`.
 
 ### Environment overrides
 
