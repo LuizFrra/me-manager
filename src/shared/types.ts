@@ -687,6 +687,19 @@ export interface UsageThemeReport {
   targets: UsageTargetReport[]
 }
 
+/** How a cost compares with its budget (see shared/budget.ts): `warn` from 80% of it, `over` from 100%. */
+export type BudgetLevel = 'ok' | 'warn' | 'over'
+
+export interface BudgetStatus {
+  level: BudgetLevel
+  /** Estimated USD cost so far (see UsageTotals.cost). */
+  spent: number
+  /** The budget, in USD. */
+  limit: number
+  /** spent / limit: 1 is the whole budget, above 1 over it. */
+  fraction: number
+}
+
 export interface UsageReport {
   /** ISO time the report was computed. */
   generatedAt: string

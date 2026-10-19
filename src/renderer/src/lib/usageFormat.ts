@@ -1,5 +1,8 @@
 import type { UsagePeriod, UsageTotals } from '../../../shared/types'
-import { usageCacheTokens, usageTokens } from '../../../shared/usage'
+import { formatCost, usageCacheTokens, usageTokens } from '../../../shared/usage'
+
+// In shared, as main formats budget notifications with it too.
+export { formatCost }
 
 export const COST_LABEL = 'Estimated cost at API prices'
 export const SUBSCRIPTION_NOTE =
@@ -10,17 +13,6 @@ export const PERIOD_LABEL: Record<UsagePeriod, string> = {
   week: 'Last 7 days',
   month: 'This month',
   all: 'All time',
-}
-
-/**
- * US dollars: "$0.00" for nothing, "<$0.01" for a fraction of a cent, cents below $1,000 ("$3.42", "$123.45"),
- * whole dollars from there on ("$1,234").
- */
-export function formatCost(usd: number): string {
-  if (!Number.isFinite(usd) || usd <= 0) return '$0.00'
-  if (usd < 0.005) return '<$0.01'
-  if (usd < 999.995) return `$${usd.toFixed(2)}`
-  return `$${Math.round(usd).toLocaleString('en-US')}`
 }
 
 const UNITS: [number, string][] = [
