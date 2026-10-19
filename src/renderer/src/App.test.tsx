@@ -1317,6 +1317,7 @@ describe('App settings', () => {
       skipPermissions: true,
       updateStrategy: 'rebase',
       showStatusBar: true,
+      taskTemplates: [],
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()
