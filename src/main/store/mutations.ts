@@ -12,6 +12,7 @@ import {
 } from '../../shared/types'
 import { slugify } from '../../shared/naming'
 import { isThemeColor, normalizeThemeStyle, themeIconError } from '../../shared/themeStyle'
+import { isRunCommand, normalizeRunCommand } from '../../shared/runCommand'
 
 export function emptyState(): AppState {
   return { version: 1, themes: [] }
@@ -181,7 +182,7 @@ function allIds(state: AppState): Set<string> {
 
 /**
  * A removed theme or item as sent back for an undo (so not trusted): only the known fields, checked. A repo comes
- * back without tasks, since one with tasks can't be removed.
+ * back without tasks, since one with tasks can't be removed. A run command that doesn't check out is dropped.
  */
 function restoredItem(raw: unknown): Item {
   if (!isRecord(raw) || (raw.kind !== 'repo' && raw.kind !== 'folder')) throw new Error('Invalid item to restore')
@@ -189,11 +190,12 @@ function restoredItem(raw: unknown): Item {
   if (!isText(id) || !isText(name) || !isSlug(slug) || !isText(path) || !isAbsolute(path)) {
     throw new Error('Invalid item to restore')
   }
-  if (raw.kind === 'folder') return { id, kind: 'folder', name, slug, path }
+  const run = isRunCommand(raw.runCommand) ? { runCommand: raw.runCommand } : {}
+  if (raw.kind === 'folder') return { id, kind: 'folder', name, slug, path, ...run }
   if (raw.tasks !== undefined && !(Array.isArray(raw.tasks) && raw.tasks.length === 0)) {
     throw new Error(`"${name}" can't be restored with tasks`)
   }
-  return { id, kind: 'repo', name, slug, path, tasks: [] }
+  return { id, kind: 'repo', name, slug, path, tasks: [], ...run }
 }
 
 /** Where a restored entry goes: its old position when given (clamped), otherwise the end. */
@@ -247,6 +249,20 @@ export function restoreTheme(state: AppState, raw: unknown, index?: number): App
   if (typeof raw.icon === 'string' && raw.icon.trim() && themeIconError(raw.icon) === null) theme.icon = raw.icon.trim()
   const next = clone(state)
   insertAt(next.themes, theme, index)
+  return next
+}
+
+/**
+ * Sets a repo's or folder's run command from untrusted input (see normalizeRunCommand), trimmed; empty removes it.
+ * Throws on a multi-line or over-long command.
+ */
+export function setRunCommand(state: AppState, themeId: string, itemId: string, command: unknown): AppState {
+  getItem(state, themeId, itemId)
+  const runCommand = normalizeRunCommand(command)
+  const next = clone(state)
+  const item = getItem(next, themeId, itemId)
+  if (runCommand) item.runCommand = runCommand
+  else delete item.runCommand
   return next
 }
 

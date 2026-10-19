@@ -94,6 +94,12 @@ export interface Repo {
   slug: string
   path: string
   tasks: Task[]
+  /**
+   * A shell command line (e.g. `npm run dev`) that "Run" starts in a `run` tab of any of the repo's tasks, in its
+   * worktree. One line, trimmed, at most MAX_RUN_COMMAND characters (see shared/runCommand.ts); absent when unset,
+   * and in state files from before run commands existed.
+   */
+  runCommand?: string
 }
 
 export interface Folder {
@@ -102,6 +108,8 @@ export interface Folder {
   name: string
   slug: string
   path: string
+  /** Like Repo.runCommand, run in the folder. */
+  runCommand?: string
 }
 
 export type Item = Repo | Folder
@@ -169,6 +177,20 @@ export interface TabInfo {
   index: number
   name: string
   active: boolean
+  /**
+   * Set when the tab's program has exited and tmux keeps the tab open with its output (remain-on-exit: the
+   * `run` tab, see MeManagerApi.startRun). Absent for every other tab, which closes when its program exits.
+   */
+  dead?: true
+}
+
+/** A dev-server URL printed in one of a session's tabs (see MeManagerApi.getDevUrls). */
+export interface DevUrl {
+  /** Normalized for opening (`http://localhost:5173/`): loopback, http or https, with a port. */
+  url: string
+  /** The tab it was printed in, as a TabInfo has it. */
+  index: number
+  tab: string
 }
 
 /** The most of a tab's scrollback a transcript holds: beyond it, only the most recent lines are kept. */
@@ -355,6 +377,11 @@ export interface MeManagerApi {
    */
   cloneRepo(themeId: string, url: string, parentDir: string, name: string): Promise<AppState>
   addFolder(themeId: string, path: string): Promise<AppState>
+  /**
+   * Sets the run command of a repo (for every one of its tasks) or folder: one line of shell, trimmed, at most
+   * MAX_RUN_COMMAND characters (see shared/runCommand.ts); '' removes it. It applies from the next Run or Restart.
+   */
+  setRunCommand(themeId: string, itemId: string, command: string): Promise<AppState>
   /** Removes a repo or folder from the theme only (nothing on disk); refused for a repo with tasks. */
   removeItem(themeId: string, itemId: string): Promise<AppState>
   /**
@@ -409,6 +436,26 @@ export interface MeManagerApi {
   selectTab(target: Target, index: number): Promise<TabInfo[]>
   closeTab(target: Target, index: number): Promise<TabInfo[]>
   restartClaude(target: Target): Promise<TabInfo[]>
+  /**
+   * Shows the target's `run` tab, or opens one (active) that runs its repo's or folder's run command with the
+   * user's shell in the worktree or folder. The tab stays open with the output when the command exits, as a `dead`
+   * TabInfo. Refuses without a run command, or when the session isn't running.
+   */
+  startRun(target: Target): Promise<TabInfo[]>
+  /**
+   * Runs the run command again in the `run` tab, and shows it: a running one gets Ctrl-C, a moment to shut down,
+   * and is killed if it still runs. Opens the tab when there is none. Refuses like startRun.
+   */
+  restartRun(target: Target): Promise<TabInfo[]>
+  /** Ctrl-C in the `run` tab, if its command is running; the tab stays open with the output. */
+  stopRun(target: Target): Promise<TabInfo[]>
+  /**
+   * Dev-server URLs (see shared/devUrls.ts: loopback http(s) with a port) printed on the screen or in the last few
+   * hundred lines of the target's open tabs: from the tab that printed last first, newest first within a tab, once
+   * each, at most MAX_DEV_URLS. [] when the session isn't running. Cheap to poll: a tab is captured again only
+   * after it printed something, and at most every few seconds.
+   */
+  getDevUrls(target: Target): Promise<DevUrl[]>
   /**
    * The scrollback of the tab at `index` (a TabInfo.index of the target's session) as plain text, for the renderer
    * to put on the clipboard. Rejects when the session isn't running or has no tab at `index`.

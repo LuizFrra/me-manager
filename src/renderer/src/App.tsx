@@ -1,7 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppState,
+  DevUrl,
   GitTools,
+  Item,
   LiveStatus,
   MeManagerApi,
   NewTaskOptions,
@@ -39,6 +41,7 @@ import {
   NotesDialog,
   RemoveTaskDialog,
   ReviewCommentDialog,
+  RunCommandDialog,
   type RemovalKind,
 } from './components/Dialogs'
 import { TaskHeader } from './components/TaskHeader'
@@ -59,6 +62,7 @@ import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
 import { effectiveSessionFlags } from './lib/sessionFlags'
 import { sessionState } from './lib/sessionState'
+import { runLabel, runState, type RunState } from './lib/run'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -103,6 +107,14 @@ type DialogBody =
   | { kind: 'settings' }
   | { kind: 'clone'; themeId: string; themeName: string }
   | { kind: 'themeStyle'; themeId: string; themeName: string; style: ThemeStyle }
+  | {
+      kind: 'runCommand'
+      themeId: string
+      itemId: string
+      itemName: string
+      itemKind: 'repo' | 'folder'
+      initial: string
+    }
   | { kind: 'chooseTheme'; title: string; onChoose: (themeId: string) => void }
   | {
       kind: 'confirmRemove'
@@ -146,9 +158,14 @@ type AppAction =
         | 'archiveTask'
         | 'restoreTask'
         | 'deleteArchivedTask'
+        | 'run'
+        | 'restartRun'
+        | 'stopRun'
+        | 'editRunCommand'
     }
   | { type: 'copy'; kind: CopyKind }
   | { type: 'newTaskFromTemplate'; themeId: string; repoId: string; template: string }
+  | { type: 'openUrl'; url: string }
 
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
 interface AppCommand extends PaletteCommand {
@@ -160,6 +177,7 @@ const RENAME_NOTE = 'The branch and folder keep their original name.'
 
 const EMPTY: AppState = { version: 1, themes: [] }
 const NO_COMMENTS: readonly ReviewComment[] = []
+const NO_URLS: readonly DevUrl[] = []
 /** Terminal zoom saves the font size once the keys have been still this long. */
 export const ZOOM_SAVE_MS = 500
 /** UI state (selection, collapsed groups, panels, filter) is saved once it has been still this long. */
@@ -191,6 +209,18 @@ function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | n
   return found ? copyEntries(found, tmuxSocket) : []
 }
 
+/** What the palette needs to know about the selected target's session, from what the app polls. */
+interface PaletteLive {
+  /** The session's run tab. */
+  run: RunState
+  /** Dev-server URLs printed in its tabs. */
+  urls: readonly DevUrl[]
+}
+
+/** The repo or folder of `target`. */
+const itemOf = (state: AppState, target: Target | null): Item | undefined =>
+  target ? state.themes.find((t) => t.id === target.themeId)?.items.find((i) => i.id === target.itemId) : undefined
+
 /**
  * The palette's entries: every task and folder, then the actions that apply to the selection (and its tab),
  * including a new task from each template in the selected task's repo.
@@ -202,6 +232,7 @@ function buildPaletteCommands(
   ghAvailable: boolean,
   tmuxSocket: string | null,
   templates: readonly TaskTemplate[],
+  live: PaletteLive,
 ): AppCommand[] {
   const commands: AppCommand[] = allTargets(state).map((entry) => ({
     id: `target:${targetKey(entry.target)}`,
@@ -212,7 +243,7 @@ function buildPaletteCommands(
   }))
   const action = (
     label: string,
-    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate'>,
+    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate' | 'openUrl'>,
     shortcut?: string,
   ): void => {
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
@@ -227,6 +258,11 @@ function buildPaletteCommands(
     action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
     action('New shell tab', 'newTab', shortcutLabel('newTab'))
     action('Restart Claude', 'restartClaude')
+    const runCommand = itemOf(state, selected)?.runCommand
+    if (runCommand) action(`Run ${runLabel(runCommand)}`, 'run')
+    if (runCommand && live.run !== 'none') action('Restart the run command', 'restartRun')
+    if (live.run === 'running') action('Stop the run command', 'stopRun')
+    action(runCommand ? 'Edit run command…' : 'Set run command…', 'editRunCommand')
     if (hasActiveTab) {
       action('Copy transcript of current tab', 'copyTranscript')
       action('Save transcript of current tab', 'saveTranscript')
@@ -255,6 +291,15 @@ function buildPaletteCommands(
         action: { type: 'newTaskFromTemplate', themeId, repoId, template: name },
       })
     }
+  }
+  if (selected && !isArchivedTarget(state, selected)) {
+    for (const { url } of live.urls)
+      commands.push({
+        id: `action:openUrl:${url}`,
+        kind: 'action',
+        label: `Open ${url}`,
+        action: { type: 'openUrl', url },
+      })
   }
   const copies = isArchivedTarget(state, selected) ? [] : copiesOf(state, selected, tmuxSocket)
   for (const { kind, label } of copies)
@@ -297,6 +342,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     overlayOpenRef.current = overlayOpen
     if (overlayOpen) modalEpoch.current++
   }, [overlayOpen])
+  // The selected target's dev-server URLs, tagged with its targetKey like `usage`.
+  const [devUrls, setDevUrls] = useState<{ key: string; urls: DevUrl[] } | null>(null)
   // The selected target's usage, tagged with its targetKey so another target's numbers never show.
   const [usage, setUsage] = useState<{ key: string; summary: UsageSummary } | null>(null)
   // gh is assumed missing until main says otherwise; the PR button then explains how to install it.
@@ -452,13 +499,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     )
     refreshGit()
     const current = selectedRef.current
-    if (current && !isArchivedTarget(stateRef.current, current))
-      api.listTabs(current).then(
-        (next) => {
-          if (sameTarget(selectedRef.current, current)) setTabs(keepIfEqual(next))
-        },
-        () => {},
-      )
+    if (!current || isArchivedTarget(stateRef.current, current)) return
+    api.listTabs(current).then(
+      (next) => {
+        if (sameTarget(selectedRef.current, current)) setTabs(keepIfEqual(next))
+      },
+      () => {},
+    )
+    // Main captures a tab again only after it printed something, and at most every few seconds.
+    api.getDevUrls(current).then(
+      (urls) => {
+        if (!sameTarget(selectedRef.current, current)) return
+        const next = { key: targetKey(current), urls }
+        setDevUrls((prev) => (prev ? keepIfEqual(next)(prev) : next))
+      },
+      () => {}, // the links keep their last values
+    )
   }, [api, refreshGit])
 
   const refreshUsage = useCallback((): Promise<void> | undefined => {
@@ -635,6 +691,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
 
+  /** A dev-server URL, in the system browser (main takes http(s) only). */
+  const openUrl = (url: string): void => void attempt(() => api.openExternal(url))
+
+  /** Run (shows the run tab, or opens one), Restart or Stop the selected target's run command. */
+  const runTab = (kind: 'start' | 'restart' | 'stop'): void =>
+    void tabAction((t) =>
+      kind === 'start' ? api.startRun(t) : kind === 'restart' ? api.restartRun(t) : api.stopRun(t),
+    )
+
   const cycleTab = (step: number): void => {
     const current = tabs.findIndex((t) => t.active)
     if (current === -1 || tabs.length < 2) return
@@ -685,6 +750,26 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       ...(theme.icon ? { icon: theme.icon } : {}),
     }
     openDialog({ kind: 'themeStyle', themeId, themeName: theme.name, style })
+  }
+
+  /** Opens the run command dialog of a repo (for all its tasks) or folder. */
+  const editRunCommand = (themeId: string, itemId: string): void => {
+    const found = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === itemId)
+    if (!found) return
+    openDialog({
+      kind: 'runCommand',
+      themeId,
+      itemId,
+      itemName: found.name,
+      itemKind: found.kind,
+      initial: found.runCommand ?? '',
+    })
+  }
+
+  const saveRunCommand = async (dialog: Extract<Dialog, { kind: 'runCommand' }>, command: string): Promise<void> => {
+    if (!(await update(() => api.setRunCommand(dialog.themeId, dialog.itemId, command)))) return
+    closeDialog(dialog.id)
+    showInfo(command ? `Saved the run command of ${dialog.itemName}` : `Removed the run command of ${dialog.itemName}`)
   }
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
@@ -1258,14 +1343,25 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   )
 
   const hasActiveTab = tabs.some((t) => t.active)
+  const run = runState(tabs)
+  // The selected target's URLs, without those of a tab that closed since the last poll. The same empty list when
+  // there are none, so a change of tabs doesn't rebuild the palette's commands (and re-run its matching).
+  const shownUrls = useMemo(() => {
+    if (!selected || devUrls?.key !== targetKey(selected)) return NO_URLS
+    const urls = devUrls.urls.filter((u) => tabs.some((t) => t.index === u.index && t.name === u.tab))
+    return urls.length > 0 ? urls : NO_URLS
+  }, [selected, devUrls, tabs])
   // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
   // to 50k files) whenever its commands change.
   const paletteCommands = useMemo(
     () =>
       paletteOpen
-        ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates)
+        ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, {
+            run,
+            urls: shownUrls,
+          })
         : [],
-    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates],
+    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, run, shownUrls],
   )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
@@ -1375,7 +1471,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'restoreTask') withSelectedTask(restoreTask)
     else if (action.type === 'deleteArchivedTask') withSelectedTask(deleteArchivedTask)
     else if (action.type === 'newTaskFromTemplate') newTask(action.themeId, action.repoId, action.template)
-    else if (action.type === 'customizeTheme') {
+    else if (action.type === 'openUrl') openUrl(action.url)
+    else if (action.type === 'run') runTab('start')
+    else if (action.type === 'restartRun') runTab('restart')
+    else if (action.type === 'stopRun') runTab('stop')
+    else if (action.type === 'editRunCommand') {
+      if (selectedRef.current) editRunCommand(selectedRef.current.themeId, selectedRef.current.itemId)
+    } else if (action.type === 'customizeTheme') {
       if (selectedRef.current) customizeTheme(selectedRef.current.themeId)
     } else if (action.type === 'copy') {
       const entry = copiesFor(selectedRef.current).find((e) => e.kind === action.kind)
@@ -1419,6 +1521,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onCloneRepo={cloneRepo}
         onAddFolder={(themeId) => void addPath(themeId, api.addFolder)}
         onRemoveItem={removeItem}
+        onEditRunCommand={editRunCommand}
         onAddTask={newTask}
         onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
@@ -1477,6 +1580,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                     }
                   : undefined
               }
+              run={
+                item
+                  ? {
+                      command: item.runCommand,
+                      state: run,
+                      onRun: () => runTab('start'),
+                      onRestart: () => runTab('restart'),
+                      onStop: () => runTab('stop'),
+                      onEdit: () => editRunCommand(selected.themeId, selected.itemId),
+                    }
+                  : undefined
+              }
+              devUrls={shownUrls}
+              onOpenUrl={openUrl}
             />
             <TabBar
               tabs={tabs}
@@ -1486,6 +1603,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onRestartClaude={() => void tabAction((t) => api.restartClaude(t))}
               onCopyTranscript={(index) => void copyTranscript(index)}
               onSaveTranscript={(index) => void saveTranscript(index)}
+              onRestartRun={() => runTab('restart')}
+              onStopRun={() => runTab('stop')}
               panelOpen={panel.open}
               onTogglePanel={togglePanel}
             />
@@ -1558,6 +1677,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 tabs={tabs.length}
                 todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
                 skipPermissions={sessionFlags.skipPermissions}
+                run={run}
+                onShowRun={() => runTab('start')}
+                devUrls={shownUrls}
+                onOpenUrl={openUrl}
                 onCopyBranch={copyBranch}
                 onOpenChanges={() => updatePanel({ open: true, tab: 'changes' })}
                 onOpenUsage={() => setUsageOpen(true)}
@@ -1657,6 +1780,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onSave={async (style) => {
             if (await update(() => api.customizeTheme(dialog.themeId, style))) closeDialog(dialog.id)
           }}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'runCommand' && (
+        <RunCommandDialog
+          itemName={dialog.itemName}
+          kind={dialog.itemKind}
+          initial={dialog.initial}
+          onSave={(command) => saveRunCommand(dialog, command)}
           onCancel={() => closeDialog(dialog.id)}
         />
       )}

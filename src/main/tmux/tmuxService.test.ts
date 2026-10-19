@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { parseWindowActivity, tidyCapture, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
+import type { TabInfo } from '../../shared/types'
+import { parseWindowActivity, shellCommandArg, tidyCapture, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
 
 const hasTmux = await run('tmux', ['-V']).then(
   () => true,
@@ -254,6 +255,135 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmt_hist_x_y')
   })
 
+  /** Polls `check` every 100 ms until it holds or 5 s have passed; returns its last value. */
+  const until = async <T>(read: () => Promise<T>, check: (value: T) => boolean): Promise<T> => {
+    let value = await read()
+    for (let i = 0; i < 50 && !check(value); i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      value = await read()
+    }
+    return value
+  }
+  const runTab = async (session: string): Promise<TabInfo | undefined> =>
+    (await svc.listWindows(session)).find((t) => t.name === 'run')
+  /** The last lines of the window named `name`, by its id. */
+  const tailOf = async (session: string, name: string, lines = 200): Promise<string | null> => {
+    const id = (await svc.listWindowActivity(session)).find((w) => w.name === name)?.id
+    return id ? svc.captureTail(id, lines) : null
+  }
+
+  it('keeps a run window open after its command exits, and reports its pane dead', async () => {
+    await svc.newSession('mmt_run_x_y', cwd, 'claude', 'sh')
+    // Exits at once: remain-on-exit is set in the same tmux call, before the exit is handled.
+    await svc.newWindow('mmt_run_x_y', cwd, 'run', "printf 'built\\n'; exit 3", { remainOnExit: true })
+    const tabs = await until(
+      () => svc.listWindows('mmt_run_x_y'),
+      (t) => t[1]?.dead === true,
+    )
+    expect(tabs).toEqual([
+      { index: 0, name: 'claude', active: false },
+      { index: 1, name: 'run', active: true, dead: true },
+    ])
+    await expect(tailOf('mmt_run_x_y', 'run')).resolves.toMatch(/^built$/m)
+    // Only that window: a shell tab that exits still closes.
+    await svc.newWindow('mmt_run_x_y', cwd, 'shell', 'exit 0')
+    await until(
+      () => svc.listWindows('mmt_run_x_y'),
+      (t) => t.length === 2,
+    )
+    await expect(svc.listWindows('mmt_run_x_y')).resolves.toHaveLength(2)
+  })
+
+  it('respawns a run window with a new command, keeping its output, and interrupts it', async () => {
+    const session = 'mmt_run_x_y'
+    await svc.respawnWindow(session, 'run', cwd, "printf '  Local:   http://localhost:%s/\\n' 5173; exec cat")
+    const text = await until(
+      () => tailOf(session, 'run'),
+      (t) => t?.includes('Local:') ?? false,
+    )
+    expect(text).not.toMatch(/Pane is dead/) // the screen starts afresh: only what scrolled off it stays
+    expect(text).toMatch(/^ {2}Local: {3}http:\/\/localhost:5173\/$/m)
+    expect((await runTab(session))?.dead).toBeUndefined()
+    // Ctrl-C, even from copy mode (the user scrolled back), where tmux would take the key itself.
+    await run('tmux', ['-L', socket, 'copy-mode', '-t', `=${session}:=run`])
+    await svc.sendInterrupt(session, 'run')
+    expect(
+      (
+        await until(
+          () => runTab(session),
+          (t) => t?.dead === true,
+        )
+      )?.dead,
+    ).toBe(true)
+    // -k: a running command is killed first.
+    await svc.respawnWindow(session, 'run', cwd, 'exec cat')
+    expect(
+      (
+        await until(
+          () => runTab(session),
+          (t) => t?.dead !== true,
+        )
+      )?.dead,
+    ).toBeUndefined()
+    await svc.respawnWindow(session, 'run', cwd, "printf 'second\\n'; exec cat")
+    await expect(
+      until(
+        () => tailOf(session, 'run'),
+        (t) => t?.includes('second') ?? false,
+      ),
+    ).resolves.toMatch(/^second$/m)
+    // Exact names only.
+    await expect(svc.respawnWindow(session, 'ru', cwd, 'true')).rejects.toThrow()
+    await expect(svc.sendInterrupt('mmt_run_x', 'run')).rejects.toThrow()
+  })
+
+  it('hands the command to the shell as typed: no tmux formats, a trailing ; or \\; kept', async () => {
+    const session = 'mmt_run_x_y'
+    const out = join(cwd, 'formats.txt')
+    // tmux reads an argument ending in `;` as the end of its own command, and `\;` as a literal `;`.
+    await svc.respawnWindow(session, 'run', cwd, `printf '%s\\n' '#{session_name}' '#(id)' > '${out}'; echo done \\;`)
+    const text = await until(
+      () => tailOf(session, 'run'),
+      (t) => t?.includes('done ;') ?? false,
+    )
+    expect(text).toMatch(/^done ;$/m)
+    await expect(readFile(out, 'utf8')).resolves.toBe('#{session_name}\n#(id)\n')
+    await svc.killSession(session)
+  })
+
+  it("captures a window's last lines, wrapped lines joined, and lists windows with their activity", async () => {
+    const session = 'mmt_tail_x_y'
+    const url = `http://localhost:3000/${'a'.repeat(150)}?q=1` // wider than the 80-column pane
+    const before = Math.floor(Date.now() / 1000)
+    await svc.newSession(session, cwd, 'claude', 'sh')
+    await svc.newWindow(
+      session,
+      cwd,
+      'dev',
+      `i=1; while [ $i -le 300 ]; do echo "line $i"; i=$((i+1)); done; printf '%s\\n' '${url}'; exec cat`,
+    )
+    const text = await until(
+      () => tailOf(session, 'dev', 50),
+      (t) => t?.includes('?q=1') ?? false,
+    )
+    const lines = (text ?? '').split('\n')
+    expect(lines).toContain(url) // one line, not two 80-column rows
+    expect(lines).not.toContain('line 200') // only the last 50 lines and the screen
+    expect(lines).toContain('line 290')
+    const windows = await svc.listWindowActivity(session)
+    expect(windows.map((w) => [w.index, w.name])).toEqual([
+      [0, 'claude'],
+      [1, 'dev'],
+    ])
+    expect(windows[1].activity).toBeGreaterThanOrEqual(before - 1)
+    expect(windows[1].activity).toBeLessThanOrEqual(Math.floor(Date.now() / 1000))
+    expect(windows[1].id).toMatch(/^@\d+$/)
+    await svc.killSession(session)
+    await expect(svc.captureTail(windows[1].id, 50)).resolves.toBeNull() // gone with its session
+    await expect(svc.captureTail('dev', 50)).rejects.toThrow(/Invalid window id/) // ids only, never names
+    await expect(svc.listWindowActivity(session)).resolves.toEqual([])
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)
@@ -296,6 +426,15 @@ describe('tidyCapture', () => {
     expect(tidyCapture('\n\nfirst\n\nlast')).toBe('\n\nfirst\n\nlast\n') // leading and inner blanks stay
     expect(tidyCapture('  \n\n')).toBe('')
     expect(tidyCapture('')).toBe('')
+  })
+})
+
+describe('shellCommandArg', () => {
+  it('adds a space after a final ; or \\; only, which tmux would read as its own syntax', () => {
+    expect(shellCommandArg('npm run dev')).toBe('npm run dev')
+    expect(shellCommandArg('a; b')).toBe('a; b')
+    expect(shellCommandArg('make;')).toBe('make; ')
+    expect(shellCommandArg('find . -exec rm {} \\;')).toBe('find . -exec rm {} \\; ')
   })
 })
 

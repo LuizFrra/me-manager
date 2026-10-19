@@ -370,3 +370,47 @@ describe('task notes', () => {
     expect(() => m.setTaskNotes(s, themeId, repoId, 'nope', 'x')).toThrow(/Task not found/)
   })
 })
+
+describe('run commands', () => {
+  function withFolder(): { s: AppState; themeId: string; repoId: string; folderId: string } {
+    const { s: base, themeId, repoId } = setup()
+    const s = m.addFolder(base, themeId, '/docs/site')
+    return { s, themeId, repoId, folderId: s.themes[0].items[1].id }
+  }
+
+  it("sets a repo's or folder's run command, trimmed, without touching the input state", () => {
+    const { s, themeId, repoId, folderId } = withFolder()
+    const next = m.setRunCommand(s, themeId, repoId, '  npm run dev ')
+    expect(m.getItem(next, themeId, repoId)).toMatchObject({ kind: 'repo', runCommand: 'npm run dev' })
+    expect(m.getItem(s, themeId, repoId)).not.toHaveProperty('runCommand')
+    const folder = m.setRunCommand(next, themeId, folderId, 'hugo server')
+    expect(m.getItem(folder, themeId, folderId)).toMatchObject({ kind: 'folder', runCommand: 'hugo server' })
+  })
+
+  it('removes the field for an empty or blank command', () => {
+    const { s, themeId, repoId } = withFolder()
+    const set = m.setRunCommand(s, themeId, repoId, 'npm start')
+    for (const empty of ['', '   '])
+      expect(m.getItem(m.setRunCommand(set, themeId, repoId, empty), themeId, repoId)).not.toHaveProperty('runCommand')
+  })
+
+  it('rejects a multi-line, over-long or non-text command, and unknown items', () => {
+    const { s, themeId, repoId } = withFolder()
+    expect(() => m.setRunCommand(s, themeId, repoId, 'a\nb')).toThrow('The run command must be one line of text')
+    expect(() => m.setRunCommand(s, themeId, repoId, 'x'.repeat(1001))).toThrow(/limited to 1,000 characters/)
+    expect(() => m.setRunCommand(s, themeId, repoId, 3 as unknown as string)).toThrow('The run command must be text')
+    expect(() => m.setRunCommand(s, themeId, 'nope', 'npm start')).toThrow(/Item not found/)
+  })
+
+  it('keeps the run command when a removed item or theme is restored, dropping one that does not check out', () => {
+    const { s: base, themeId, repoId, folderId } = withFolder()
+    const s = m.setRunCommand(m.setRunCommand(base, themeId, repoId, 'npm run dev'), themeId, folderId, 'make serve')
+    const repo = m.getItem(s, themeId, repoId)
+    const removed = m.removeItem(s, themeId, repoId)
+    expect(m.getItem(m.restoreItem(removed, themeId, repo, 0), themeId, repoId)).toEqual(repo)
+    const bad = m.restoreItem(removed, themeId, { ...repo, runCommand: 'a\nb' })
+    expect(m.getItem(bad, themeId, repoId)).not.toHaveProperty('runCommand')
+    const theme = s.themes[0]
+    expect(m.restoreTheme(m.removeTheme(s, themeId), theme).themes[0]).toEqual(theme)
+  })
+})

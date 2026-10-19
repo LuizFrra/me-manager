@@ -96,9 +96,35 @@ export interface TmuxApi {
   newSession(name: string, cwd: string, windowName: string, command: string): Promise<void>
   /** No-op if the session does not exist. */
   killSession(name: string): Promise<void>
+  /** The session's windows; `dead` is set for one whose active pane has exited (see NewWindowOptions). */
   listWindows(session: string): Promise<TabInfo[]>
   /** New window that becomes active; runs the default shell when command is omitted. */
-  newWindow(session: string, cwd: string, windowName: string, command?: string): Promise<void>
+  newWindow(
+    session: string,
+    cwd: string,
+    windowName: string,
+    command?: string,
+    options?: NewWindowOptions,
+  ): Promise<void>
+  /**
+   * Restarts the window named `windowName` (exactly) with `command` in `cwd` (`respawn-window -k`): a command
+   * still running is killed and the screen cleared (what scrolled off it stays in the scrollback), and the window's
+   * options (remain-on-exit) are kept.
+   */
+  respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void>
+  /** Presses Ctrl-C in the window named `windowName` (exactly), after leaving copy mode if it is in it. */
+  sendInterrupt(session: string, windowName: string): Promise<void>
+  /**
+   * The session's windows with their `#{window_id}` and `#{window_activity}` (the last time each printed anything,
+   * in Unix seconds); [] when the session or the server isn't running.
+   */
+  listWindowActivity(session: string): Promise<WindowActivity[]>
+  /**
+   * The window's active pane as plain text: the last `lines` lines of its scrollback and its screen
+   * (`capture-pane -p -J -S -<lines>`), wrapped lines joined, no escape sequences. `windowId` is a WindowActivity
+   * id (`@3`), never a name or index; null when the window is gone.
+   */
+  captureTail(windowId: string, lines: number): Promise<string | null>
   selectWindow(session: string, index: number): Promise<void>
   killWindow(session: string, index: number): Promise<void>
   attachCommand(session: string): { file: string; args: string[] }
@@ -120,6 +146,24 @@ export interface TmuxApi {
    * presses Enter, unless `options.enter` is false (the user reviews and submits it themselves).
    */
   sendText(session: string, windowName: string, text: string, options?: SendTextOptions): Promise<void>
+}
+
+export interface NewWindowOptions {
+  /**
+   * Keep the window, with its output, once its command exits (tmux's remain-on-exit, for this window only): its
+   * TabInfo is then `dead` until respawnWindow runs a command in it again.
+   */
+  remainOnExit?: boolean
+}
+
+/** A window as listWindowActivity reports it. */
+export interface WindowActivity {
+  index: number
+  /** tmux's id for the window (`@3`), unique on the server and never reused while it runs. */
+  id: string
+  name: string
+  /** `#{window_activity}`, in Unix seconds. */
+  activity: number
 }
 
 export interface SendTextOptions {

@@ -1,6 +1,7 @@
 import {
   isArchived,
   type AppState,
+  type Item,
   type LiveStatus,
   type Target,
   type Task,
@@ -37,6 +38,8 @@ export interface SidebarProps {
   onCloneRepo: (themeId: string) => void
   onAddFolder: (themeId: string) => void
   onRemoveItem: (themeId: string, itemId: string) => void
+  /** Opens the repo's or folder's run command dialog. */
+  onEditRunCommand: (themeId: string, itemId: string) => void
   onAddTask: (themeId: string, repoId: string) => void
   onRenameTask: (themeId: string, repoId: string, taskId: string, currentName: string) => void
   onRemoveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
@@ -123,6 +126,19 @@ function ArchivedTasks(props: {
           </div>
         ))}
     </>
+  )
+}
+
+/** A repo's or folder's row button for its run command; the tooltip shows the command. */
+function RunCommandButton({ item, onClick }: { item: Item; onClick: () => void }): React.JSX.Element {
+  return (
+    <button
+      aria-label={`Run command for ${item.name}…`}
+      title={item.runCommand ? `Run command: ${item.runCommand}` : 'Set a run command…'}
+      onClick={onClick}
+    >
+      ▶
+    </button>
   )
 }
 
@@ -255,6 +271,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                           {dot(item.id)} 📁 {item.name}
                         </button>
                         <span className="row-actions">
+                          <RunCommandButton item={item} onClick={() => p.onEditRunCommand(theme.id, item.id)} />
                           <button
                             aria-label={`Remove ${item.name}`}
                             title="Remove folder"
@@ -278,6 +295,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             >
                               +
                             </button>
+                            <RunCommandButton item={item} onClick={() => p.onEditRunCommand(theme.id, item.id)} />
                             <button
                               aria-label={`Remove ${item.name}`}
                               title="Remove repository"
