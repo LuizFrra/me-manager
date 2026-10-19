@@ -1470,6 +1470,7 @@ body.resizing .side-panel {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  position: relative;
 }
 .viewer-empty {
   align-items: center;
@@ -1527,14 +1528,24 @@ body.resizing .side-panel {
   color: var(--text);
 }
 /* Lines selected in the code view or the diff: what they are, and Comment. */
+/* Floats over the bottom of the viewer: shown in the flow it would push the lines down between a click and a
+   Shift-click, so the second click would land on the wrong line. */
 .viewer-selection {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: fit-content;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 6px 3px 10px;
-  border-bottom: 1px solid var(--border);
-  background: #4fa3ff14;
-  flex: 0 0 auto;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px #0008;
   font-size: 12px;
 }
 .viewer-selection-label {
@@ -1552,6 +1563,10 @@ body.resizing .side-panel {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+/* Room to scroll the last lines out from under the floating selection bar. */
+.viewer.has-selection .viewer-body {
+  padding-bottom: 48px;
 }
 .viewer-message {
   color: var(--muted);

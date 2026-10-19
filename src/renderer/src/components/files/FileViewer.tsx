@@ -151,7 +151,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
 
   const label = current && selectedLinesLabel(current.lines)
   return (
-    <section className="viewer" aria-label="File viewer" ref={sectionRef}>
+    <section className={label ? 'viewer has-selection' : 'viewer'} aria-label="File viewer" ref={sectionRef}>
       <div className="viewer-header">
         {p.canGoBack && p.tab === 'files' && (
           <button className="viewer-btn" onClick={p.onBack} title="Back to the previous file">
@@ -207,6 +207,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
           {label && `${label} selected`}
         </span>
       )}
+      <div className="viewer-body">{body}</div>
       {label && (
         <div className="viewer-selection">
           <span className="viewer-selection-label">{label}</span>
@@ -224,7 +225,6 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
           </button>
         </div>
       )}
-      <div className="viewer-body">{body}</div>
     </section>
   )
 }
