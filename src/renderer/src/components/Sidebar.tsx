@@ -175,14 +175,14 @@ function ArchivedTasks(props: {
           title="Tasks whose worktree was removed; their branches are kept"
           onClick={props.onToggle}
         >
-          <Chevron open={props.open} /> Archived ({props.tasks.length})
+          <Chevron open={props.open} /> <span className="row-name">Archived ({props.tasks.length})</span>
         </button>
       </div>
       {props.open &&
         props.tasks.map((task) => (
           <div key={task.id} className={`row archived-row${props.selectedTaskId === task.id ? ' selected' : ''}`}>
             <button className="row-label" title={task.notes} onClick={(e) => props.onSelect(task.id, e)}>
-              {task.name}
+              <span className="row-name">{task.name}</span>
             </button>
             <span className="row-actions">
               <button

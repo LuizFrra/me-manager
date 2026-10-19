@@ -485,12 +485,25 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // them until they are opened. For this session only.
   const [unread, setUnread] = useState<ReadonlySet<string>>(new Set())
   const lastActivity = useRef<LiveStatus['activity']>({})
+  const statusSeq = useRef(0)
+  const statusApplied = useRef(0)
   // The window's title names the selection and counts the sessions waiting for the user (see windowTitle).
   useEffect(() => {
     document.title = windowTitle(state, status, selected)
   }, [state, status, selected])
   // Whether the sidebar is collapsed to its rail; remembered in the UI state.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  /** Collapses or expands the sidebar; focus inside it moves to the toggle, which the other layout also has. */
+  const toggleSidebar = (): void => {
+    const hadFocus = document.activeElement?.closest('.sidebar') != null
+    setSidebarCollapsed((c) => !c)
+    if (hadFocus)
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLElement>('.sidebar [aria-label="Show sidebar"], .sidebar [aria-label="Hide sidebar"]')
+          ?.focus(),
+      )
+  }
   const toggleArchived = useCallback(
     (repoId: string) =>
       setArchivedOpen((prev) => {
@@ -639,14 +652,23 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }, [gitTargets, refreshGit])
 
   const refresh = useCallback(() => {
-    // Polled every few seconds: only update (and re-render) when something actually changed.
+    // Polled every few seconds: only update (and re-render) when something actually changed. A reply older than
+    // one already applied is dropped, so activity changes are seen in order (see unread).
+    const seq = ++statusSeq.current
     api.getStatus().then(
       (next) => {
+        if (seq < statusApplied.current) return
+        statusApplied.current = seq
         const finished = finishedIds(lastActivity.current, next.activity)
         lastActivity.current = next.activity
         const shown = selectedRef.current ? targetKey(selectedRef.current) : null
         const marked = finished.filter((id) => id !== shown)
-        if (marked.length > 0) setUnread((prev) => new Set([...prev, ...marked]))
+        // Marks only targets that still exist and aren't archived; ones that left meanwhile are dropped.
+        const live = new Set(allTargets(stateRef.current).map((e) => targetKey(e.target)))
+        setUnread((prev) => {
+          const kept = [...prev, ...marked].filter((id) => live.has(id))
+          return kept.length === prev.size && kept.every((id) => prev.has(id)) ? prev : new Set(kept)
+        })
         setStatus(keepIfEqual(next))
       },
       () => {},
@@ -1289,11 +1311,6 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (repo?.kind === 'repo') openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name, template })
   }
 
-  /**
-   * Creates the task and opens it, unless another dialog or overlay was opened while it was being created (the
-   * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). Dismissing the
-   * dialog alone doesn't count: the task they asked for still opens.
-   */
   /** New task: back to the home screen, with the composer focused. */
   const [composerFocus, setComposerFocus] = useState(0)
   const goHome = (): void => {
@@ -1316,7 +1333,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           repo.tasks.map((t) => t.slug),
         )
       : undefined
-    openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name, name, prompt: text || undefined })
+    openDialog({
+      kind: 'newTask',
+      themeId,
+      repoId,
+      repoName: repo.name,
+      template: lastTemplates[repoId],
+      name,
+      prompt: text || undefined,
+    })
   }
 
   /** The composer's Start: a task named from the prompt, which becomes Claude's first message; then opens it. */
@@ -1327,16 +1352,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       prompt,
       repo.tasks.map((t) => t.slug),
     )
+    const epoch = modalEpoch.current
     const next = await update(() => api.createTask(themeId, repoId, name, { prompt }))
     if (!next) return false
     const created = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
     const task = created?.kind === 'repo' ? created.tasks.find((t) => t.name === name) : undefined
     // Opened unless the user went elsewhere meanwhile; the new task is in the sidebar either way.
-    if (task && selectedRef.current === null && !dialogRef.current)
-      void open({ themeId, itemId: repoId, taskId: task.id })
+    const movedOn = selectedRef.current !== null || modalEpoch.current !== epoch || overlayOpenRef.current
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
     return true
   }
 
+  /**
+   * Creates the task and opens it, unless another dialog or overlay was opened while it was being created (the
+   * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). Dismissing the
+   * dialog alone doesn't count: the task they asked for still opens.
+   */
   const createTask = async (
     dialogId: number,
     themeId: string,
@@ -1715,7 +1746,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       return
     }
     if (paletteOpen || helpOpen || usageOpen) return
-    if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target)) return
+    // The home composer has focus whenever home shows: the app's chords (none of them edits text) still work there.
+    const inComposer = e.target instanceof Element && e.target.closest('.composer') !== null
+    if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target) && !inComposer) return
     e.preventDefault()
     switch (shortcut.id) {
       case 'settings':
@@ -1723,7 +1756,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       case 'newTask':
         return goHome()
       case 'sidebar':
-        return setSidebarCollapsed((c) => !c)
+        return toggleSidebar()
       case 'openEditor':
         return openExternally('editor')
       case 'zoomIn':
@@ -1905,7 +1938,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (action.type === 'open') void open(action.target)
     else if (action.type === 'newTheme') newTheme()
     else if (action.type === 'newTaskHome') goHome()
-    else if (action.type === 'toggleSidebar') setSidebarCollapsed((c) => !c)
+    else if (action.type === 'toggleSidebar') toggleSidebar()
     else if (action.type === 'togglePanel') togglePanel()
     else if (action.type === 'searchFiles') searchInFiles()
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
@@ -1971,7 +2004,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       <Sidebar
         rail={sidebarCollapsed}
         unread={unread}
-        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+        onToggleSidebar={toggleSidebar}
         state={state}
         status={status}
         gitStatus={gitStatus}

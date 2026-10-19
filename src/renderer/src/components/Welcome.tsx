@@ -176,7 +176,7 @@ function Composer(p: {
         placeholder="What should Claude work on?"
         rows={3}
         value={prompt}
-        disabled={busy}
+        readOnly={busy}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
           if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
@@ -200,7 +200,7 @@ function Composer(p: {
             ))}
           </select>
         </span>
-        <span className="composer-name" aria-live="polite">
+        <span className="composer-name" aria-live={busy || tooLong ? 'polite' : 'off'}>
           {busy ? (
             'Creating the worktree…'
           ) : tooLong ? (
