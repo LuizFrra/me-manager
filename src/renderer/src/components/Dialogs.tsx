@@ -152,6 +152,163 @@ export function RemoveTaskDialog(props: {
   )
 }
 
+/**
+ * Runs `action` at most once at a time: `busy` is set meanwhile, and the ref also blocks a second click that lands
+ * before React re-renders with the buttons disabled.
+ */
+function useSingleRun(action: () => Promise<void>): { busy: boolean; run: () => Promise<void> } {
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const run = async (): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      await action()
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  return { busy, run }
+}
+
+/**
+ * Asked before archiving a task whose worktree has uncommitted or untracked files (or could not be checked):
+ * archiving removes the worktree, so they would be lost. Its commits are not listed: the kept branch has them.
+ * Cancel is focused, so Enter doesn't discard anything; Esc cancels.
+ */
+export function ArchiveTaskDialog(props: {
+  taskName: string
+  work: UnsavedWork
+  onConfirm: () => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const { busy, run } = useSingleRun(props.onConfirm)
+  const { uncommittedFiles, warning } = props.work
+  const n = uncommittedFiles.length
+  return (
+    <div className="overlay">
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Archive ${props.taskName}`}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || busy) return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
+        <h2>Archive “{props.taskName}”?</h2>
+        <p>
+          Archiving removes the task’s worktree and closes its session; its branch and commits are kept, and it can be
+          restored later. Commit or discard the changes first, or archive anyway and lose them.
+        </p>
+        {warning && (
+          <div className="dialog-warning" role="alert">
+            <strong>Could not check the worktree for changes.</strong>
+            <p>{warning}</p>
+          </div>
+        )}
+        {n > 0 && (
+          <>
+            <h3>{plural(n, 'uncommitted or untracked file', 'uncommitted or untracked files')}</h3>
+            <ul>
+              {uncommittedFiles.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          </>
+        )}
+        <div className="dialog-actions">
+          <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" className="danger" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Archiving…' : 'Archive anyway (discards changes)'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Confirms deleting an archived task: the task goes and its branch is deleted (`git branch -D`). Warns when the
+ * branch has commits that are neither on the task's base nor pushed, as they would be lost (they are listed).
+ * Cancel is focused; Esc cancels.
+ */
+export function DeleteArchivedTaskDialog(props: {
+  taskName: string
+  branch: string
+  baseRef: string
+  /** From checkTaskRemoval: `unpushedCommits` are the branch's commits that only it has. */
+  work: UnsavedWork
+  onConfirm: () => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const { busy, run } = useSingleRun(props.onConfirm)
+  const { unpushedCommits, warning } = props.work
+  const n = unpushedCommits.length
+  return (
+    <div className="overlay">
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Delete archived task ${props.taskName}`}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || busy) return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
+        <h2>Delete “{props.taskName}”?</h2>
+        <p>The archived task is removed from me-manager and its branch is deleted:</p>
+        <code className="confirm-remove-path">{props.branch}</code>
+        {warning && (
+          <div className="dialog-warning" role="alert">
+            <strong>Could not fully check the branch.</strong>
+            <p>{warning}</p>
+          </div>
+        )}
+        {n > 0 ? (
+          <>
+            <div className="dialog-warning" role="alert">
+              <strong>
+                The branch has {plural(n, 'commit')} that {n === 1 ? 'is' : 'are'} not on {props.baseRef} or pushed.
+              </strong>
+              <p>{n === 1 ? 'It is' : 'They are'} lost when the branch is deleted.</p>
+            </div>
+            <ul>
+              {unpushedCommits.map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          !warning && (
+            <p className="dialog-safe">
+              <span aria-hidden="true">✓</span> Every commit on it is on {props.baseRef} or pushed.
+            </p>
+          )
+        )}
+        <div className="dialog-actions">
+          <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" className="danger" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Deleting…' : 'Delete task and branch'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** What ConfirmRemoveDialog removes: a theme, or a repository or folder of a theme. */
 export type RemovalKind = 'theme' | 'repo' | 'folder'
 

@@ -1,4 +1,11 @@
-import type { AppState, LiveStatus, Target, TaskGitStatus } from '../../../shared/types'
+import {
+  isArchived,
+  type AppState,
+  type LiveStatus,
+  type Target,
+  type Task,
+  type TaskGitStatus,
+} from '../../../shared/types'
 import { gitBadges } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
@@ -33,6 +40,13 @@ export interface SidebarProps {
   onAddTask: (themeId: string, repoId: string) => void
   onRenameTask: (themeId: string, repoId: string, taskId: string, currentName: string) => void
   onRemoveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
+  onArchiveTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
+  /** Ids of repos whose "Archived" group is expanded; each starts collapsed. App owns it, to remember it. */
+  archivedOpen?: ReadonlySet<string>
+  onToggleArchived: (repoId: string) => void
+  onRestoreTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
+  /** Deletes an archived task and its branch (App confirms first). */
+  onDeleteArchivedTask: (themeId: string, repoId: string, taskId: string, taskName: string) => void
   onOpenSettings: () => void
   onOpenUsage: () => void
 }
@@ -56,6 +70,60 @@ function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string
 function themeStripe(color: unknown): React.CSSProperties | undefined {
   const css = themeColorCss(color)
   return css ? ({ '--theme-color': css } as React.CSSProperties) : undefined
+}
+
+/**
+ * A repo's archived tasks, under a "▶ Archived (N)" toggle; nothing when it has none. They have no session, so no
+ * status dot or git badges: a click selects one (the main area offers Restore), and its row has Restore and Delete.
+ */
+function ArchivedTasks(props: {
+  tasks: Task[]
+  open: boolean
+  selectedTaskId?: string
+  onToggle: () => void
+  onSelect: (taskId: string) => void
+  onRestore: (task: Task) => void
+  onDelete: (task: Task) => void
+}): React.JSX.Element | null {
+  if (props.tasks.length === 0) return null
+  return (
+    <>
+      <div className="row archived-group-row">
+        <button
+          className="row-label"
+          aria-expanded={props.open}
+          title="Tasks whose worktree was removed; their branches are kept"
+          onClick={props.onToggle}
+        >
+          {props.open ? '▼' : '▶'} Archived ({props.tasks.length})
+        </button>
+      </div>
+      {props.open &&
+        props.tasks.map((task) => (
+          <div key={task.id} className={`row archived-row${props.selectedTaskId === task.id ? ' selected' : ''}`}>
+            <button className="row-label" title={task.notes} onClick={() => props.onSelect(task.id)}>
+              {task.name}
+            </button>
+            <span className="row-actions">
+              <button
+                aria-label={`Restore task ${task.name}`}
+                title="Restore (recreate the worktree from the branch)"
+                onClick={() => props.onRestore(task)}
+              >
+                ↺
+              </button>
+              <button
+                aria-label={`Delete archived task ${task.name}`}
+                title="Delete the task and its branch…"
+                onClick={() => props.onDelete(task)}
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        ))}
+    </>
+  )
 }
 
 export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
@@ -84,6 +152,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   }
   const isSelected = (itemId: string, taskId?: string): boolean =>
     p.selected?.itemId === itemId && p.selected?.taskId === taskId
+  // A repo's "Archived" group: collapsed unless opened, and open (like every group) while filtering.
+  const archivedExpanded = (repoId: string): boolean => filter !== null || (p.archivedOpen?.has(repoId) ?? false)
 
   return (
     <nav className="sidebar" inert={p.inert}>
@@ -219,7 +289,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                         </div>
                         {expanded(item.id) &&
                           item.tasks
-                            .filter((task) => shown('tasks', task.id))
+                            .filter((task) => !isArchived(task) && shown('tasks', task.id))
                             .map((task) => (
                               <div
                                 key={task.id}
@@ -244,6 +314,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                     ✎
                                   </button>
                                   <button
+                                    aria-label={`Archive task ${task.name}`}
+                                    title="Archive task (removes the worktree, keeps the branch)"
+                                    onClick={() => p.onArchiveTask(theme.id, item.id, task.id, task.name)}
+                                  >
+                                    🗄
+                                  </button>
+                                  <button
                                     aria-label={`Remove task ${task.name}`}
                                     title="Remove task"
                                     onClick={() => p.onRemoveTask(theme.id, item.id, task.id, task.name)}
@@ -253,6 +330,19 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 </span>
                               </div>
                             ))}
+                        {expanded(item.id) && (
+                          <ArchivedTasks
+                            tasks={item.tasks.filter((task) => isArchived(task) && shown('tasks', task.id))}
+                            open={archivedExpanded(item.id)}
+                            selectedTaskId={p.selected?.itemId === item.id ? p.selected.taskId : undefined}
+                            onToggle={() => {
+                              if (!filter) p.onToggleArchived(item.id)
+                            }}
+                            onSelect={(taskId) => p.onSelect({ themeId: theme.id, itemId: item.id, taskId })}
+                            onRestore={(task) => p.onRestoreTask(theme.id, item.id, task.id, task.name)}
+                            onDelete={(task) => p.onDeleteArchivedTask(theme.id, item.id, task.id, task.name)}
+                          />
+                        )}
                       </div>
                     ),
                   )}
