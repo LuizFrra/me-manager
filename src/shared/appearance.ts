@@ -5,8 +5,8 @@ import type { Appearance, ResolvedAppearance } from './types'
  * nothing flashes before the first paint.
  */
 export const APPEARANCE_BACKGROUND: Readonly<Record<ResolvedAppearance, string>> = Object.freeze({
-  dark: '#1e1e1e',
-  light: '#ffffff',
+  dark: '#262624',
+  light: '#faf9f5',
 })
 
 /** What `appearance` draws in, `systemDark` being whether the OS prefers dark colours. */

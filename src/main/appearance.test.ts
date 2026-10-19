@@ -44,10 +44,10 @@ describe('followAppearance', () => {
     const theme = fakeTheme(true)
     const background = followAppearance({ theme, settings: fakeSettings('light'), getWindow: () => null })
     expect(theme.themeSource).toBe('light')
-    expect(background()).toBe('#ffffff')
+    expect(background()).toBe('#faf9f5')
     expect(
       followAppearance({ theme: fakeTheme(true), settings: fakeSettings('system'), getWindow: () => null })(),
-    ).toBe('#1e1e1e')
+    ).toBe('#262624')
   })
 
   it('follows a changed setting, and repaints the window background whenever the colours change', () => {
@@ -59,9 +59,9 @@ describe('followAppearance', () => {
     settings.change('system')
     expect(theme.themeSource).toBe('system')
     theme.emit() // Electron emits 'updated' once the colours changed
-    expect(painted).toEqual(['#ffffff'])
+    expect(painted).toEqual(['#faf9f5'])
     theme.systemDark = true
     theme.emit()
-    expect(painted).toEqual(['#ffffff', '#1e1e1e'])
+    expect(painted).toEqual(['#faf9f5', '#262624'])
   })
 })

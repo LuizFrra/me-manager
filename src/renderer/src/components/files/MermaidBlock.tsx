@@ -12,8 +12,40 @@ type Result = { code: string } & ({ status: 'ok'; svg: string } | { status: 'err
 
 const XLINK = 'http://www.w3.org/1999/xlink'
 
-/** Mermaid's built-in theme for each appearance. */
-const MERMAID_THEME: Record<ResolvedAppearance, 'dark' | 'default'> = { dark: 'dark', light: 'default' }
+/**
+ * Mermaid's "base" theme in Claude's palette for each appearance: ivory or charcoal nodes with a terracotta edge,
+ * on the page's background.
+ */
+const MERMAID_VARIABLES: Record<ResolvedAppearance, Record<string, string | boolean>> = {
+  light: {
+    darkMode: false,
+    background: '#faf9f5',
+    fontFamily: 'system-ui, sans-serif',
+    primaryColor: '#f6e9e2',
+    primaryBorderColor: '#c96442',
+    primaryTextColor: '#29261b',
+    secondaryColor: '#efece4',
+    tertiaryColor: '#f4f2ec',
+    lineColor: '#6b6860',
+    textColor: '#29261b',
+    noteBkgColor: '#fbf3dc',
+    noteBorderColor: '#c9a24a',
+  },
+  dark: {
+    darkMode: true,
+    background: '#262624',
+    fontFamily: 'system-ui, sans-serif',
+    primaryColor: '#3a2c26',
+    primaryBorderColor: '#d97757',
+    primaryTextColor: '#faf9f5',
+    secondaryColor: '#30302e',
+    tertiaryColor: '#2b2a27',
+    lineColor: '#9c9a92',
+    textColor: '#e8e6dc',
+    noteBkgColor: '#3d3424',
+    noteBorderColor: '#e8a04c',
+  },
+}
 
 let mermaidPromise: Promise<Mermaid> | null = null
 /** The theme mermaid (a global) was last initialized with. */
@@ -32,12 +64,18 @@ function loadMermaid(): Promise<Mermaid> {
   return mermaidPromise
 }
 
-/** Renders `code` in `theme`, (re)initializing mermaid first when it last had another theme. */
-async function renderDiagram(id: string, code: string, theme: 'dark' | 'default'): Promise<string> {
+/** Renders `code` in `appearance`'s colours, (re)initializing mermaid first when it last had other ones. */
+async function renderDiagram(id: string, code: string, appearance: ResolvedAppearance): Promise<string> {
   const mermaid = await loadMermaid()
-  if (initializedTheme !== theme) {
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme, suppressErrorRendering: true })
-    initializedTheme = theme
+  if (initializedTheme !== appearance) {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: 'base',
+      themeVariables: MERMAID_VARIABLES[appearance],
+      suppressErrorRendering: true,
+    })
+    initializedTheme = appearance
   }
   return (await mermaid.render(id, code)).svg
 }
@@ -65,13 +103,13 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.JSX.Element {
   const [result, setResult] = useState<Result | null>(null)
   // Only a new `code` counts as loading: on an appearance change the old diagram stays until the new one is drawn.
   const state = result?.code === code ? result : null
-  const theme = MERMAID_THEME[useResolvedAppearance()]
+  const appearance = useResolvedAppearance()
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let cancelled = false
     const id = `mermaid-${++nextId}`
-    renderDiagram(id, code, theme).then(
+    renderDiagram(id, code, appearance).then(
       (svg) => {
         if (!cancelled) setResult({ code, status: 'ok', svg })
       },
@@ -83,7 +121,7 @@ export function MermaidBlock({ code }: MermaidBlockProps): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [code, theme])
+  }, [code, appearance])
 
   useLayoutEffect(() => {
     const el = containerRef.current

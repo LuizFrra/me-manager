@@ -1,4 +1,19 @@
 import { useState } from 'react'
+import {
+  ArrowUp,
+  Code,
+  FolderOpen,
+  GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
+  Pencil,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Square,
+  SquareTerminal,
+  StickyNote,
+} from 'lucide-react'
 import type { BudgetStatus, DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
 import type { CopyEntry } from '../lib/copy'
@@ -8,6 +23,7 @@ import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
 import { DevUrlLinks } from './DevUrlLinks'
+import { ICON } from '../lib/icon'
 import { UsageBadge } from './UsageBadge'
 
 /** The header's git line: checked-out branch, standing against the base, uncommitted files and the last commit. */
@@ -16,7 +32,7 @@ function GitLine({ git, baseRef }: { git: TaskGitStatus; baseRef: string }): Rea
   return (
     <div className="task-git" aria-label="Git status">
       <span className="task-git-branch" title={`Checked-out branch: ${git.branch}`}>
-        <span aria-hidden="true">⎇</span> {git.branch}
+        <GitBranch {...ICON} size={12} /> {git.branch}
       </span>
       <span
         className={`task-git-base${git.baseMissing ? ' warn' : ''}`}
@@ -84,7 +100,7 @@ function GitActions(props: GitActionsProps): React.JSX.Element {
         disabled={busy}
         onClick={props.onCommit}
       >
-        {label('commit', 'Commit…')}
+        <GitCommitHorizontal {...ICON} /> {label('commit', 'Commit…')}
       </button>
       <button
         aria-label="Push branch"
@@ -92,7 +108,7 @@ function GitActions(props: GitActionsProps): React.JSX.Element {
         disabled={busy}
         onClick={props.onPush}
       >
-        {label('push', 'Push')}
+        <ArrowUp {...ICON} /> {label('push', 'Push')}
       </button>
       <button
         aria-label="Open pull request"
@@ -106,7 +122,7 @@ function GitActions(props: GitActionsProps): React.JSX.Element {
         disabled={busy}
         onClick={props.onOpenPr}
       >
-        {label('pr', 'PR')}
+        <GitPullRequest {...ICON} /> {label('pr', 'PR')}
       </button>
       <button
         aria-label="Update from base"
@@ -118,7 +134,7 @@ function GitActions(props: GitActionsProps): React.JSX.Element {
         disabled={busy}
         onClick={props.onUpdate}
       >
-        {label('update', 'Update')}
+        <RefreshCw {...ICON} /> {label('update', 'Update')}
       </button>
     </div>
   )
@@ -151,7 +167,7 @@ function RunControls(props: RunControlsProps): React.JSX.Element {
           title="Set a command (e.g. npm run dev) to run in a “run” tab"
           onClick={props.onEdit}
         >
-          Set command…
+          <Play {...ICON} /> Set command…
         </button>
       ) : (
         <>
@@ -167,25 +183,25 @@ function RunControls(props: RunControlsProps): React.JSX.Element {
           {/* The group's label already says Run: the button says what a click does now. */}
           {state === 'none' ? (
             <button aria-label={`Start ${command}`} title={`Run “${command}” in a “run” tab`} onClick={props.onRun}>
-              Start
+              <Play {...ICON} /> Start
             </button>
           ) : (
             <button aria-label="Show run tab" title="Show the “run” tab" onClick={props.onRun}>
-              Show
+              <SquareTerminal {...ICON} /> Show
             </button>
           )}
           {state !== 'none' && (
             <button aria-label="Restart run" title={`Stop and run “${command}” again`} onClick={props.onRestart}>
-              Restart
+              <RotateCcw {...ICON} /> Restart
             </button>
           )}
           {state === 'running' && (
             <button aria-label="Stop run" title="Stop it (Ctrl-C); its output stays in the tab" onClick={props.onStop}>
-              Stop
+              <Square {...ICON} /> Stop
             </button>
           )}
           <button aria-label="Edit run command…" title={`Edit the run command: ${command}`} onClick={props.onEdit}>
-            ✎
+            <Pencil {...ICON} />
           </button>
         </>
       )}
@@ -235,7 +251,7 @@ export function TaskHeader(props: {
       <div className="task-header-top">
         <div className="task-header-text">
           <div className="task-title">
-            {props.title}
+            <span className="task-title-text">{props.title}</span>
             {props.session && (
               <span
                 className={`session-state ${props.session}`}
@@ -290,14 +306,14 @@ export function TaskHeader(props: {
                 title={`Open in editor (${shortcutLabel('openEditor')})`}
                 onClick={props.onOpenInEditor}
               >
-                Editor
+                <Code {...ICON} /> Editor
               </button>
               <button
                 aria-label="Reveal in file manager"
                 title="Reveal in file manager"
                 onClick={props.onRevealInFileManager}
               >
-                File manager
+                <FolderOpen {...ICON} /> File manager
               </button>
             </div>
             {props.copies.length > 0 && (
@@ -319,7 +335,7 @@ export function TaskHeader(props: {
             )}
             {props.onEditNotes && (
               <button className="header-btn" title="Edit the task's notes" onClick={props.onEditNotes}>
-                <span aria-hidden="true">✎</span> Edit notes
+                <StickyNote {...ICON} /> Edit notes
               </button>
             )}
           </div>

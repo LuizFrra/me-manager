@@ -37,7 +37,7 @@ describe('TERMINAL_THEMES', () => {
     expect(TERMINAL_THEMES.light.background).toBe(APPEARANCE_BACKGROUND.light)
   })
 
-  it('gives the light palette all 16 ANSI colours, each readable on white (bright white aside)', () => {
+  it('gives the light palette all 16 ANSI colours, each readable on its background (bright white aside)', () => {
     const light = TERMINAL_THEMES.light
     for (const name of ANSI) {
       const colour = light[name]
@@ -48,5 +48,16 @@ describe('TERMINAL_THEMES', () => {
     expect(contrast(light.foreground!, light.background!)).toBeGreaterThanOrEqual(7)
     expect(light.cursor).toBeDefined()
     expect(light.selectionBackground).toBeDefined()
+  })
+
+  it('gives the dark palette all 16 ANSI colours, each readable on the dark background (black aside)', () => {
+    const dark = TERMINAL_THEMES.dark
+    for (const name of ANSI) {
+      const colour = dark[name]
+      expect(colour, name).toMatch(/^#[0-9a-f]{6}$/)
+      if (name !== 'black') expect(contrast(colour!, dark.background!), name).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(contrast(dark.foreground!, dark.background!)).toBeGreaterThanOrEqual(7)
+    expect(dark.cursor).toBeDefined()
   })
 })
