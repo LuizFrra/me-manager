@@ -785,6 +785,7 @@ export function NewTaskDialog(props: {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const templateId = useId()
+  const nameId = useId()
   const baseId = useId()
   const baseHintId = useId()
   const promptId = useId()
@@ -889,13 +890,16 @@ export function NewTaskDialog(props: {
             </select>
           </div>
         )}
-        <input
-          autoFocus
-          aria-label="Name"
-          placeholder="e.g. fix login bug"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+        <div className="dialog-field">
+          <label htmlFor={nameId}>Name</label>
+          <input
+            id={nameId}
+            autoFocus
+            placeholder="e.g. fix login bug"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
         <div className="dialog-field">
           <label htmlFor={baseId}>Base branch</label>
           <select
