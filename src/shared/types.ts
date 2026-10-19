@@ -13,6 +13,11 @@ export interface Task {
    * branch, base and notes are kept. Absent for an active task, and in state files from before archiving existed.
    */
   archivedAt?: string
+  /**
+   * The task's own limit on its estimated cost, all time, in USD (whole cents within BUDGET_LIMITS, see
+   * shared/budget.ts), in place of Settings.taskBudgetUsd. Absent when it has none, and in state files from before.
+   */
+  budgetUsd?: number
 }
 
 /** An archived task has no worktree and no session: nothing may poll, open or attach to it until it is restored. */
@@ -426,6 +431,11 @@ export interface MeManagerApi {
   renameTask(themeId: string, repoId: string, taskId: string, name: string): Promise<AppState>
   /** Up to MAX_TASK_NOTES characters; an empty string removes the notes. */
   setTaskNotes(themeId: string, repoId: string, taskId: string, notes: string): Promise<AppState>
+  /**
+   * Sets the task's own budget (Task.budgetUsd) in USD, rounded to cents; null removes it, so the default
+   * (Settings.taskBudgetUsd) applies again. Rejects an amount outside BUDGET_LIMITS.
+   */
+  setTaskBudget(themeId: string, repoId: string, taskId: string, budgetUsd: number | null): Promise<AppState>
   /**
    * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
    * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.

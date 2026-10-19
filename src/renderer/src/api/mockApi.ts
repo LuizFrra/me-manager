@@ -28,6 +28,7 @@ import { checkCloneName, checkCloneUrl } from '../../../shared/clone'
 import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { moveActiveTask, moveEntry } from '../../../shared/reorder'
+import { normalizeBudget } from '../../../shared/budget'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -271,6 +272,15 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (trimmed.length > MAX_TASK_NOTES) throw new Error(`Notes are limited to ${MAX_TASK_NOTES} characters`)
         if (trimmed) task.notes = trimmed
         else delete task.notes
+      }),
+    setTaskBudget: (themeId, repoId, taskId, budgetUsd) =>
+      edit(themeId, (t) => {
+        const repo = t.items.find((i) => i.id === repoId)
+        const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
+        if (!task) throw new Error(`Task not found: ${taskId}`)
+        const budget = normalizeBudget(budgetUsd)
+        if (budget === null) delete task.budgetUsd
+        else task.budgetUsd = budget
       }),
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: (themeId, repoId, taskId) =>

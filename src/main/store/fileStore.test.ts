@@ -114,6 +114,35 @@ describe('FileStore', () => {
     const repo = loaded.themes[0].items[0]
     expect(repo.kind === 'repo' && repo.tasks.map((t) => 'archivedAt' in t)).toEqual([false, false, false, false])
   })
+  it('round-trips task budgets and drops one that does not check out, so the task loads without it', async () => {
+    const tasks = [5, 2.5, 0, -1, '5', 4.567, 1e9].map((budgetUsd, i) => ({
+      id: `k${i}`,
+      name: `t${i}`,
+      slug: `t${i}`,
+      branch: `b/t${i}`,
+      worktreePath: `/wt/t${i}`,
+      baseRef: 'origin/main',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      budgetUsd,
+    }))
+    const raw = {
+      version: 1,
+      themes: [
+        {
+          id: 't1',
+          name: 'X',
+          slug: 'x',
+          items: [{ id: 'r1', kind: 'repo', name: 'a', slug: 'a', path: '/a', tasks }],
+        },
+      ],
+    }
+    await mkdir(join(dir, 'nested'), { recursive: true })
+    await writeFile(file, JSON.stringify(raw), 'utf8')
+    const repo = (await new FileStore(file).load()).themes[0].items[0]
+    const loaded = repo.kind === 'repo' ? repo.tasks : []
+    expect(loaded.map((t) => t.budgetUsd)).toEqual([5, 2.5, undefined, undefined, undefined, undefined, undefined])
+    expect(loaded.map((t) => 'budgetUsd' in t)).toEqual([true, true, false, false, false, false, false])
+  })
   it('round-trips run commands and drops one that does not check out, so the item loads without it', async () => {
     const raw = {
       version: 1,
