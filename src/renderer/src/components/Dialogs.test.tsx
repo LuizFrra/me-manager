@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BranchList, TaskTemplate } from '../../../shared/types'
 import {
   ArchiveTaskDialog,
   ChooseThemeDialog,
@@ -10,6 +11,7 @@ import {
   ConflictDialog,
   DeleteArchivedTaskDialog,
   NameDialog,
+  NewTaskDialog,
   NotesDialog,
   RemoveTaskDialog,
 } from './Dialogs'
@@ -240,5 +242,148 @@ describe('dialogs give focus back when they close', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(opener).toHaveFocus()
+  })
+})
+
+describe('NewTaskDialog templates', () => {
+  const LIST: BranchList = { default: 'origin/main', branches: ['origin/main', 'origin/develop', 'main'] }
+  const REVIEW: TaskTemplate = {
+    name: 'Review',
+    taskName: 'review-{n}',
+    base: 'origin/develop',
+    prompt: 'Review the diff',
+  }
+  const PROMPT_ONLY: TaskTemplate = { name: 'Explain', prompt: 'Explain this repo' }
+  const name = (): HTMLElement => screen.getByRole('textbox', { name: 'Name' })
+  const base = (): HTMLElement => screen.getByRole('combobox', { name: 'Base branch' })
+  const prompt = (): HTMLElement => screen.getByRole('textbox', { name: 'Initial prompt (optional)' })
+  const template = (): HTMLElement => screen.getByRole('combobox', { name: 'Template' })
+
+  const renderDialog = (props: Partial<React.ComponentProps<typeof NewTaskDialog>> = {}): ReturnType<typeof vi.fn> => {
+    const onSubmit = vi.fn(async () => {})
+    render(
+      <NewTaskDialog
+        repoName="my-api"
+        loadBranches={async () => LIST}
+        templates={[REVIEW, PROMPT_ONLY]}
+        taskNames={['review-1', 'Review-4']}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        {...props}
+      />,
+    )
+    return onSubmit
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('offers no Template choice when there are no templates', async () => {
+    renderDialog({ templates: [] })
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(screen.queryByRole('combobox', { name: 'Template' })).not.toBeInTheDocument()
+  })
+
+  it('starts on None, then prefills name, base and prompt from the chosen template, all still editable', async () => {
+    const user = userEvent.setup()
+    const onSubmit = renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(template()).toHaveValue('')
+    expect(screen.getAllByRole('option', { name: /None|Review|Explain/ }).map((o) => o.textContent)).toEqual([
+      'None',
+      'Review',
+      'Explain',
+    ])
+    await user.selectOptions(template(), 'Review')
+    // {n} follows the highest number in use, archived tasks included.
+    expect(name()).toHaveValue('review-5')
+    expect(base()).toHaveValue('origin/develop')
+    expect(prompt()).toHaveValue('Review the diff')
+
+    await user.type(name(), '-auth')
+    await user.selectOptions(base(), 'main')
+    await user.type(prompt(), ' for security')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onSubmit).toHaveBeenCalledWith(
+      'review-5-auth',
+      { baseRef: 'main', prompt: 'Review the diff for security' },
+      'Review',
+    )
+  })
+
+  it("keeps what was typed when a template doesn't set that field, and clears what a template filled in", async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    await user.type(name(), 'mine')
+    await user.selectOptions(template(), 'Explain')
+    expect(name()).toHaveValue('mine')
+    expect(prompt()).toHaveValue('Explain this repo')
+    await user.selectOptions(template(), 'Review')
+    expect(name()).toHaveValue('review-5')
+    expect(prompt()).toHaveValue('Review the diff')
+    await user.selectOptions(template(), '')
+    expect(name()).toHaveValue('')
+    expect(prompt()).toHaveValue('')
+    expect(base()).toHaveValue('origin/main')
+  })
+
+  it("keeps the user's edits to a prefilled field when switching to a template without it", async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    await user.selectOptions(template(), 'Review')
+    await user.type(prompt(), ' carefully')
+    await user.selectOptions(template(), 'Explain')
+    expect(prompt()).toHaveValue('Explain this repo') // Explain has its own prompt
+    await user.selectOptions(template(), 'Review')
+    await user.clear(name())
+    await user.type(name(), 'audit')
+    await user.selectOptions(template(), '')
+    expect(name()).toHaveValue('audit')
+  })
+
+  it("falls back to the default branch, and says so, when the repo lacks the template's base", async () => {
+    const user = userEvent.setup()
+    const onSubmit = renderDialog({ templates: [{ name: 'Release', base: 'release/3.0' }] })
+    await waitFor(() => expect(base()).toBeEnabled())
+    await user.selectOptions(template(), 'Release')
+    expect(base()).toHaveValue('origin/main')
+    const note = "The template's base release/3.0 isn't in my-api: starting from origin/main, the default."
+    expect(screen.getByRole('status')).toHaveTextContent(note)
+    expect(base()).toHaveAccessibleDescription(note)
+    await user.type(name(), 'ship')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onSubmit).toHaveBeenCalledWith('ship', { baseRef: 'origin/main' }, 'Release')
+    // Choosing a base by hand answers the note.
+    await user.selectOptions(base(), 'main')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('opens on the given template, applying its base once the branches arrive', async () => {
+    let resolve: (list: BranchList) => void = () => {}
+    renderDialog({ initialTemplate: 'Review', loadBranches: () => new Promise((r) => (resolve = r)) })
+    expect(template()).toHaveValue('Review')
+    expect(name()).toHaveValue('review-5')
+    expect(prompt()).toHaveValue('Review the diff')
+    expect(base()).toBeDisabled()
+    resolve(LIST)
+    await waitFor(() => expect(base()).toHaveValue('origin/develop'))
+  })
+
+  it('opens on None when the given template no longer exists', async () => {
+    renderDialog({ initialTemplate: 'Gone' })
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(template()).toHaveValue('')
+    expect(name()).toHaveValue('')
+  })
+
+  it("puts today's date in the name", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 18, 9, 0))
+    renderDialog({ initialTemplate: 'Daily', templates: [{ name: 'Daily', taskName: 'triage-{date}' }] })
+    expect(name()).toHaveValue('triage-20261018')
+    await waitFor(() => expect(base()).toBeEnabled())
   })
 })

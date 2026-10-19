@@ -563,6 +563,13 @@ button:disabled {
 .dialog-field-error {
   color: #f47067;
 }
+.dialog-field-warning {
+  color: var(--waiting);
+}
+.dialog-field select.template-select {
+  font-family: inherit;
+  font-size: inherit;
+}
 .dialog-actions-hint {
   margin-right: auto;
   align-self: center;
@@ -609,7 +616,8 @@ button:disabled {
   align-items: center;
   gap: 6px;
 }
-.settings-input input {
+.settings-input input,
+.settings-input textarea {
   flex: 1;
   min-width: 0;
   padding: 6px 8px;
@@ -624,14 +632,53 @@ button:disabled {
   font-family: Menlo, 'DejaVu Sans Mono', 'Ubuntu Mono', monospace;
   font-size: 12px;
 }
-.settings-input input::placeholder {
+.settings-input input::placeholder,
+.settings-input textarea::placeholder {
   color: var(--muted);
 }
-.settings-input input:focus {
+.settings-input input:focus,
+.settings-input textarea:focus {
   border-color: var(--accent);
 }
-.settings-input input[aria-invalid='true'] {
+.settings-input input[aria-invalid='true'],
+.settings-input textarea[aria-invalid='true'] {
   border-color: var(--danger);
+}
+.settings-input textarea {
+  line-height: 1.5;
+  resize: vertical;
+}
+.template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.template-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.template-actions button,
+.template-add button {
+  border-color: var(--border);
+}
+.template-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .settings-suffix {
   color: var(--muted);

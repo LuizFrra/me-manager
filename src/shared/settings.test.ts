@@ -16,6 +16,7 @@ describe('normalizeSettings', () => {
       updateStrategy: 'rebase',
       cloneDirectory: '',
       showStatusBar: true,
+      taskTemplates: [],
     })
   })
 
@@ -31,6 +32,7 @@ describe('normalizeSettings', () => {
       updateStrategy: 'merge',
       cloneDirectory: ' /home/me/code ',
       showStatusBar: false,
+      taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }],
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -45,6 +47,7 @@ describe('normalizeSettings', () => {
       updateStrategy: 'merge',
       cloneDirectory: '/home/me/code',
       showStatusBar: false,
+      taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }],
     })
     expect(Object.keys(s).sort()).toEqual([
       'claudeArgs',
@@ -55,9 +58,23 @@ describe('normalizeSettings', () => {
       'remoteControl',
       'showStatusBar',
       'skipPermissions',
+      'taskTemplates',
       'terminalFontSize',
       'updateStrategy',
     ])
+  })
+
+  it('keeps the valid task templates, and none in settings from before templates', () => {
+    expect(normalizeSettings({ pollIntervalMs: 5000 }).taskTemplates).toEqual([])
+    expect(
+      normalizeSettings({
+        taskTemplates: [{ name: ' Fix ', base: 'origin/main' }, { name: 'fix' }, { name: 'Bad', taskName: '{x}' }, 7],
+      }).taskTemplates,
+    ).toEqual([{ name: 'Fix', base: 'origin/main' }])
+    // Not a list: the current templates stay, as for any wrongly typed value.
+    const current: Settings = { ...DEFAULT_SETTINGS, taskTemplates: [{ name: 'Review' }] }
+    expect(normalizeSettings({ taskTemplates: 'Review' }, current).taskTemplates).toEqual([{ name: 'Review' }])
+    expect(normalizeSettings({ taskTemplates: [] }, current).taskTemplates).toEqual([])
   })
 
   it('keeps only an absolute clone directory', () => {
@@ -120,6 +137,11 @@ describe('normalizeSettings', () => {
     const s = normalizeSettings({ claudeArgs: args })
     expect(s.claudeArgs).not.toBe(args)
     expect(normalizeSettings({}).claudeArgs).not.toBe(DEFAULT_SETTINGS.claudeArgs)
+    const current: Settings = { ...DEFAULT_SETTINGS, taskTemplates: [{ name: 'Review' }] }
+    const kept = normalizeSettings({}, current).taskTemplates
+    expect(kept).toEqual(current.taskTemplates)
+    expect(kept).not.toBe(current.taskTemplates)
+    expect(kept[0]).not.toBe(current.taskTemplates[0])
   })
 })
 

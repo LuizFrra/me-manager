@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
-import { parseForm, toForm, type SettingsForm } from './settingsForm'
+import { parseForm, toForm, type SettingsForm, type TemplateForm } from './settingsForm'
 
 const form = (over: Partial<SettingsForm> = {}): SettingsForm => ({ ...toForm(DEFAULT_SETTINGS), ...over })
 
@@ -17,8 +17,52 @@ describe('settings form', () => {
         skipPermissions: true,
         updateStrategy: 'rebase',
         showStatusBar: true,
+        taskTemplates: [],
       },
     )
+  })
+
+  it('shows each task template with every field as text, keyed for the list', () => {
+    const { taskTemplates } = toForm({
+      ...DEFAULT_SETTINGS,
+      taskTemplates: [
+        { name: 'Review', taskName: 'review-{n}', base: 'origin/develop' },
+        { name: 'Fix', prompt: 'Fix it' },
+      ],
+    })
+    expect(taskTemplates).toEqual([
+      { key: expect.any(String), name: 'Review', taskName: 'review-{n}', base: 'origin/develop', prompt: '' },
+      { key: expect.any(String), name: 'Fix', taskName: '', base: '', prompt: 'Fix it' },
+    ])
+    expect(taskTemplates[0].key).not.toBe(taskTemplates[1].key)
+  })
+
+  it('parses the task templates back in order, trimmed, and reports each invalid field by template', () => {
+    const template = (over: Partial<TemplateForm>): TemplateForm => ({
+      key: 'k',
+      name: '',
+      taskName: '',
+      base: '',
+      prompt: '',
+      ...over,
+    })
+    expect(
+      parseForm(form({ taskTemplates: [template({ name: ' Fix ', base: ' main ' }), template({ name: 'Review' })] }))
+        .settings?.taskTemplates,
+    ).toEqual([{ name: 'Fix', base: 'main' }, { name: 'Review' }])
+    const result = parseForm(
+      form({
+        pollSeconds: '0',
+        taskTemplates: [template({ name: 'Fix' }), template({ name: 'fix', taskName: 'fix-{when}' })],
+      }),
+    )
+    expect(result.errors).toEqual({
+      pollSeconds: expect.any(String),
+      taskTemplates: [
+        {},
+        { name: 'Another template has this name.', taskName: 'Unknown placeholder {when}: use {date} or {n}.' },
+      ],
+    })
   })
 
   it('parses the fields back, splitting args like a shell', () => {
@@ -47,6 +91,7 @@ describe('settings form', () => {
         skipPermissions: false,
         updateStrategy: 'merge',
         showStatusBar: false,
+        taskTemplates: [],
       },
     })
     // toEqual skips the undefined cloneDirectory: the dialog never edits it.
