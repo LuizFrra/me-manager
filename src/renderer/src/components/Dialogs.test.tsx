@@ -6,6 +6,7 @@ import type { BranchList, TaskTemplate } from '../../../shared/types'
 import {
   ArchiveTaskDialog,
   BudgetDialog,
+  BulkConfirmDialog,
   ChooseThemeDialog,
   CommitDialog,
   ConfirmRemoveDialog,
@@ -476,5 +477,69 @@ describe('NewTaskDialog templates', () => {
     renderDialog({ initialTemplate: 'Daily', templates: [{ name: 'Daily', taskName: 'triage-{date}' }] })
     expect(name()).toHaveValue('triage-20261018')
     await waitFor(() => expect(base()).toBeEnabled())
+  })
+})
+
+describe('BulkConfirmDialog', () => {
+  const bulkTask = (
+    name: string,
+    uncommittedFiles: string[] = [],
+  ): Parameters<typeof BulkConfirmDialog>[0]['tasks'][0] => ({
+    id: name,
+    name,
+    repoName: 'api',
+    branch: `b/${name}`,
+    work: { uncommittedFiles, unpushedCommits: [] },
+  })
+
+  it('lists at most 5 of a task’s files, counting the rest', () => {
+    const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((f) => `src/${f}.ts`)
+    render(
+      <BulkConfirmDialog
+        action="remove"
+        tasks={[bulkTask('fix', files), bulkTask('docs')]}
+        strategy="rebase"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('7 uncommitted files')).toBeInTheDocument()
+    expect(screen.getByText('src/e.ts')).toBeInTheDocument()
+    expect(screen.queryByText('src/f.ts')).not.toBeInTheDocument()
+    expect(screen.getByText('and 2 more')).toBeInTheDocument()
+  })
+
+  it('turns Archive off when every task would be skipped, and Esc cancels', async () => {
+    const onCancel = vi.fn()
+    const onConfirm = vi.fn()
+    render(
+      <BulkConfirmDialog
+        action="archive"
+        tasks={[bulkTask('fix', ['a.ts']), bulkTask('docs', ['b.ts'])]}
+        strategy="rebase"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Archive 0 tasks' })).toBeDisabled()
+    expect(screen.getAllByText(/Skipped: it has uncommitted or untracked files/)).toHaveLength(2)
+    await userEvent.setup().keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalled()
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('says how Update from base rebases, and focuses its confirm button', () => {
+    render(
+      <BulkConfirmDialog
+        action="update"
+        tasks={[bulkTask('fix'), bulkTask('docs')]}
+        strategy="rebase"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/git rebase/)).toBeInTheDocument()
+    expect(screen.getByText('b/docs')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update 2 tasks' })).toHaveFocus()
   })
 })
