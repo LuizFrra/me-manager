@@ -1,12 +1,13 @@
 import { render } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { TERMINAL_THEMES } from '../lib/terminalTheme'
 import { TerminalView } from './TerminalView'
 
 type KeyHandler = (e: KeyboardEvent) => boolean
 const handlers: KeyHandler[] = []
 const noop = (): void => undefined
 interface FakeTerm {
-  options: { fontSize?: number }
+  options: { fontSize?: number; theme?: unknown; minimumContrastRatio?: number }
   cols: number
   rows: number
 }
@@ -17,8 +18,8 @@ vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     cols = 80
     rows = 24
-    options: { fontSize?: number }
-    constructor(options: { fontSize?: number }) {
+    options: FakeTerm['options']
+    constructor(options: FakeTerm['options']) {
       this.options = { ...options }
       terms.push(this)
     }
@@ -137,5 +138,36 @@ describe('TerminalView font size', () => {
     api.ptyResize.mockClear()
     rerender(<TerminalView api={api} sessionKey="s" fontSize={17} />)
     expect(api.ptyResize).not.toHaveBeenCalled()
+  })
+})
+
+describe('TerminalView appearance', () => {
+  it('starts in the given appearance and switches palettes live, on the same terminal', () => {
+    const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+    const { rerender } = render(<TerminalView api={api} sessionKey="s" fontSize={13} appearance="light" />)
+    const term = terms.at(-1)!
+    const created = terms.length
+    expect(term.options.theme).toEqual(TERMINAL_THEMES.light)
+    expect(term.options.minimumContrastRatio).toBe(4.5)
+
+    rerender(<TerminalView api={api} sessionKey="s" fontSize={13} appearance="dark" />)
+    expect(terms.length).toBe(created)
+    expect(term.options.theme).toEqual(TERMINAL_THEMES.dark)
+    expect(term.options.minimumContrastRatio).toBe(1)
+
+    rerender(<TerminalView api={api} sessionKey="s" fontSize={13} appearance="light" />)
+    expect(terms.length).toBe(created)
+    expect(term.options.theme).toEqual(TERMINAL_THEMES.light)
+  })
+
+  it('is dark by default', () => {
+    render(
+      <TerminalView
+        api={{ ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }}
+        sessionKey="s"
+        fontSize={13}
+      />,
+    )
+    expect(terms.at(-1)!.options.theme).toEqual(TERMINAL_THEMES.dark)
   })
 })

@@ -1,6 +1,6 @@
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
-import { describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
 import { budgetStatus } from '../../shared/budget'
@@ -17,10 +17,11 @@ import type {
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { fuzzyFilter } from './lib/fuzzy'
+import { mockColorScheme } from './test/matchMedia'
 
 vi.mock('./components/TerminalView', () => ({
-  TerminalView: ({ fontSize, focusSeq }: { fontSize: number; focusSeq?: number }) => (
-    <div data-testid="terminal" data-font-size={fontSize} data-focus-seq={focusSeq} />
+  TerminalView: ({ fontSize, focusSeq, appearance }: { fontSize: number; focusSeq?: number; appearance: string }) => (
+    <div data-testid="terminal" data-font-size={fontSize} data-focus-seq={focusSeq} data-appearance={appearance} />
   ),
 }))
 // The real matcher, spied on: the palette must not re-run it on App renders that change none of its inputs.
@@ -1331,6 +1332,7 @@ describe('App settings', () => {
       taskTemplates: [],
       dailyBudgetUsd: null,
       taskBudgetUsd: null,
+      appearance: 'system',
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()
@@ -1512,6 +1514,40 @@ describe('App open in editor / file manager', () => {
     await user.type(within(dialog).getByLabelText('Editor command'), 'vim')
     expect(within(dialog).getByText(/vim runs in a terminal/)).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+})
+
+describe('App appearance', () => {
+  const dialog = (): HTMLElement => screen.getByRole('dialog', { name: 'Settings' })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    delete document.documentElement.dataset.appearance
+  })
+
+  it('draws the page and the terminal in the saved appearance, and switches both when it is saved', async () => {
+    mockColorScheme(true)
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.updateSettings({ appearance: 'light' })
+    render(<App api={api} />)
+    await waitFor(() => expect(document.documentElement.dataset.appearance).toBe('light'))
+    await createRepoAndTask(user)
+    expect(screen.getByTestId('terminal')).toHaveAttribute('data-appearance', 'light')
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await user.click(within(dialog()).getByRole('radio', { name: 'Dark' }))
+    await user.click(within(dialog()).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(document.documentElement.dataset.appearance).toBe('dark'))
+    expect(screen.getByTestId('terminal')).toHaveAttribute('data-appearance', 'dark')
+    expect((await api.getSettings()).appearance).toBe('dark')
+  })
+
+  it('follows the OS in system mode, before and after the settings arrive', async () => {
+    const scheme = mockColorScheme(false)
+    render(<App api={repoApi()} />)
+    expect(document.documentElement.dataset.appearance).toBe('light')
+    act(() => scheme.setDark(true))
+    expect(document.documentElement.dataset.appearance).toBe('dark')
   })
 })
 

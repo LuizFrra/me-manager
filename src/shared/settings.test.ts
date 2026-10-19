@@ -19,6 +19,7 @@ describe('normalizeSettings', () => {
       taskTemplates: [],
       dailyBudgetUsd: null,
       taskBudgetUsd: null,
+      appearance: 'system',
     })
   })
 
@@ -37,6 +38,7 @@ describe('normalizeSettings', () => {
       taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }],
       dailyBudgetUsd: 20,
       taskBudgetUsd: 5.5,
+      appearance: 'light',
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -54,8 +56,10 @@ describe('normalizeSettings', () => {
       taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }],
       dailyBudgetUsd: 20,
       taskBudgetUsd: 5.5,
+      appearance: 'light',
     })
     expect(Object.keys(s).sort()).toEqual([
+      'appearance',
       'claudeArgs',
       'cloneDirectory',
       'dailyBudgetUsd',
@@ -125,6 +129,20 @@ describe('normalizeSettings', () => {
     }
     const merging: Settings = { ...DEFAULT_SETTINGS, updateStrategy: 'merge' }
     expect(normalizeSettings({ updateStrategy: 'bogus' }, merging).updateStrategy).toBe('merge')
+  })
+
+  it('accepts only known appearances, and loads an older file without one as "system"', () => {
+    for (const appearance of ['system', 'dark', 'light'] as const) {
+      expect(normalizeSettings({ appearance }).appearance).toBe(appearance)
+    }
+    for (const appearance of ['auto', 'Light', '', 1, null]) {
+      expect(normalizeSettings({ appearance }).appearance).toBe('system')
+    }
+    const light: Settings = { ...DEFAULT_SETTINGS, appearance: 'light' }
+    expect(normalizeSettings({ appearance: 'sepia' }, light).appearance).toBe('light')
+    // A settings.json from before the setting existed: everything else unchanged.
+    const old = { ...DEFAULT_SETTINGS, terminalFontSize: 16, appearance: undefined }
+    expect(normalizeSettings(old)).toEqual({ ...DEFAULT_SETTINGS, terminalFontSize: 16 })
   })
 
   it('clamps and rounds numbers', () => {

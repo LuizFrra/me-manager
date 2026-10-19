@@ -1,6 +1,13 @@
 import { BUDGET_LIMITS } from './budget'
 import { normalizeTaskTemplates } from './templates'
-import { UPDATE_STRATEGIES, type EffectiveClaudeFlags, type Settings, type UpdateStrategy } from './types'
+import {
+  APPEARANCES,
+  UPDATE_STRATEGIES,
+  type Appearance,
+  type EffectiveClaudeFlags,
+  type Settings,
+  type UpdateStrategy,
+} from './types'
 
 export const POLL_INTERVAL_LIMITS = { min: 1000, max: 30_000 } as const
 export const FONT_SIZE_LIMITS = { min: 8, max: 32 } as const
@@ -19,6 +26,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   taskTemplates: [],
   dailyBudgetUsd: null,
   taskBudgetUsd: null,
+  appearance: 'system',
 })
 
 type ClaudeFlagSettings = Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'>
@@ -99,5 +107,6 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
     taskTemplates: normalizeTaskTemplates(Array.isArray(r.taskTemplates) ? r.taskTemplates : base.taskTemplates),
     dailyBudgetUsd: budget(r.dailyBudgetUsd, base.dailyBudgetUsd),
     taskBudgetUsd: budget(r.taskBudgetUsd, base.taskBudgetUsd),
+    appearance: APPEARANCES.includes(r.appearance as Appearance) ? (r.appearance as Appearance) : base.appearance,
   }
 }

@@ -76,6 +76,7 @@ import { runLabel, runState, type RunState } from './lib/run'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
+import { AppearanceContext, useDocumentAppearance } from './lib/appearance'
 import { UsageView } from './components/UsageView'
 import { StatusBar } from './components/StatusBar'
 import { ThemeStyleDialog } from './components/ThemeStyleDialog'
@@ -460,6 +461,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const gitBusyRef = useRef<Record<string, GitActionKind>>({})
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  // 'system' until main answers, which already matches: prefers-color-scheme follows main's nativeTheme.themeSource.
+  const appearance = useDocumentAppearance(settings.appearance)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   // Repos whose "Archived" group is expanded; each starts collapsed.
   const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
@@ -1853,7 +1856,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       ? budgetStatus(usage.summary.all.cost, effectiveTaskBudget(selectedTask, settings))
       : null
 
-  return (
+  // Everything below can read the resolved appearance (the terminal and Mermaid need it; CSS uses the root attribute).
+  const content = (
     <div className="app">
       <Sidebar
         state={state}
@@ -1977,6 +1981,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                   fontSize={settings.terminalFontSize}
                   modalOpen={modalOpen}
                   focusSeq={terminalFocus}
+                  appearance={appearance}
                 />
                 {sessionEnded && (
                   <div className="session-ended">
@@ -2258,4 +2263,5 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       </div>
     </div>
   )
+  return <AppearanceContext value={appearance}>{content}</AppearanceContext>
 }

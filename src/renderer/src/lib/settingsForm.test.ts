@@ -20,6 +20,7 @@ describe('settings form', () => {
         taskTemplates: [],
         dailyBudget: '',
         taskBudget: '',
+        appearance: 'system',
       },
     )
     expect(toForm({ ...DEFAULT_SETTINGS, dailyBudgetUsd: 20, taskBudgetUsd: 2.5 })).toMatchObject({
@@ -84,6 +85,7 @@ describe('settings form', () => {
           skipPermissions: false,
           updateStrategy: 'merge',
           showStatusBar: false,
+          appearance: 'dark',
         }),
       ),
     ).toEqual({
@@ -100,6 +102,7 @@ describe('settings form', () => {
         taskTemplates: [],
         dailyBudgetUsd: null,
         taskBudgetUsd: null,
+        appearance: 'dark',
       },
     })
     // toEqual skips the undefined cloneDirectory: the dialog never edits it.

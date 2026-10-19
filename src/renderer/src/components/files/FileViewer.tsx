@@ -1,4 +1,3 @@
-import 'highlight.js/styles/github-dark.css'
 import { useCallback, useRef, useState } from 'react'
 import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../../shared/types'
 import type { PanelState, PanelTab } from '../../lib/panelState'
