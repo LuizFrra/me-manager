@@ -4004,20 +4004,36 @@ button.status-seg:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 180px;
-  padding: 4px;
-  background: var(--panel);
+  padding: 5px;
+  background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--popover-shadow);
 }
 .tab-menu button {
-  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
   text-align: left;
+  border-radius: var(--radius);
+}
+.tab-menu button svg {
+  color: var(--muted);
 }
 .tab-menu button:focus-visible,
 .tab-menu button:focus {
   outline: none;
-  background: var(--selected);
+  background: var(--row-selected);
+}
+.header-menu {
+  min-width: 220px;
+}
+.header-more {
+  padding: 4px 6px;
+}
+.header-more[aria-expanded='true'] {
+  background: var(--row-selected);
 }
 
 /* A selected archived task: no terminal, just what it was and how to bring it back. */

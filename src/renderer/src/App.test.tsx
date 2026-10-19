@@ -86,6 +86,20 @@ function perTaskTabs(getApi: () => MeManagerApi, hold: Hold): (target: Target) =
   }
 }
 
+/** Runs `name` from the header's "More actions" menu. */
+async function headerAction(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
+  await user.click(within(screen.getByRole('banner')).getByRole('button', { name: 'More actions' }))
+  await user.click(await screen.findByRole('menuitem', { name }))
+}
+
+/** The labels in the header's "More actions" menu, which is closed again afterwards. */
+async function headerActions(user: ReturnType<typeof userEvent.setup>): Promise<string[]> {
+  await user.click(within(screen.getByRole('banner')).getByRole('button', { name: 'More actions' }))
+  const labels = screen.getAllByRole('menuitem').map((m) => m.textContent ?? '')
+  await user.keyboard('{Escape}')
+  return labels
+}
+
 const repoApi = (extra: Partial<MeManagerApi> = {}): MeManagerApi =>
   createMockApi({ pickDirectory: async () => '/home/me/code/my-api', ...extra })
 
@@ -1037,7 +1051,7 @@ describe('App task notes', () => {
     const setTaskNotes = vi.spyOn(api, 'setTaskNotes')
     render(<App api={api} />)
     await createRepoAndTask(user)
-    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await headerAction(user, 'Edit notes')
     expect(screen.getByRole('dialog', { name: 'Notes for fix login bug' })).toBeInTheDocument()
     expect(notesBox()).toHaveValue('')
     expect(notesBox()).toHaveAttribute('maxlength', '2000')
@@ -1063,19 +1077,19 @@ describe('App task notes', () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
     await createRepoAndTask(user)
-    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await headerAction(user, 'Edit notes')
     await user.type(notesBox(), 'first')
     await user.click(screen.getByRole('button', { name: 'Save' }))
     expect(await within(header()).findByRole('button', { name: 'first' })).toBeInTheDocument()
 
-    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await headerAction(user, 'Edit notes')
     expect(notesBox()).toHaveValue('first')
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled() // unchanged
     await user.type(notesBox(), ' draft')
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(within(header()).getByRole('button', { name: 'first' })).toBeInTheDocument()
 
-    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await headerAction(user, 'Edit notes')
     await user.clear(notesBox())
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(within(header()).queryByRole('button', { name: 'first' })).not.toBeInTheDocument())
@@ -1087,7 +1101,7 @@ describe('App task notes', () => {
     render(<App api={repoApi()} />)
     await createRepoAndTask(user)
     const html = '<img src=x onerror="alert(1)"><b>bold</b>'
-    await user.click(within(header()).getByRole('button', { name: 'Edit notes' }))
+    await headerAction(user, 'Edit notes')
     fireEvent.change(notesBox(), { target: { value: html } })
     await user.click(screen.getByRole('button', { name: 'Save' }))
     const notes = await within(header()).findByRole('button', { name: html })
@@ -1101,7 +1115,7 @@ describe('App task notes', () => {
     await createTheme(user, 'Client X')
     await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
     await user.click(await screen.findByRole('button', { name: /^\S notes$/ }))
-    expect(within(header()).queryByRole('button', { name: 'Edit notes' })).not.toBeInTheDocument()
+    expect(await headerActions(user)).not.toContain('Edit notes')
   })
 })
 
@@ -1112,23 +1126,20 @@ describe('App copy actions', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     return writeText
   }
-  const header = (): HTMLElement => screen.getByRole('banner')
 
   it("copies the task's branch, worktree path and attach command, and confirms", async () => {
     const user = userEvent.setup()
     const writeText = mockClipboard()
     render(<App api={repoApi({ getTmuxSocket: async () => 'test-sock' })} />)
     await createRepoAndTask(user)
-    const copy = within(header()).getByRole('group', { name: 'Copy' })
-
-    await user.click(within(copy).getByRole('button', { name: 'Copy branch name' }))
+    await headerAction(user, 'Copy branch name')
     expect(writeText).toHaveBeenLastCalledWith('claude/client-x/fix-login-bug')
     expect(await screen.findByRole('status')).toHaveTextContent('Copied branch name')
 
-    await user.click(within(copy).getByRole('button', { name: 'Copy worktree path' }))
+    await headerAction(user, 'Copy worktree path')
     expect(writeText).toHaveBeenLastCalledWith('/home/demo/.me-manager/worktrees/client-x/my-api/fix-login-bug')
 
-    await user.click(await within(copy).findByRole('button', { name: 'Copy attach command' }))
+    await headerAction(user, 'Copy attach command')
     expect(writeText).toHaveBeenLastCalledWith('tmux -L test-sock attach -t mmt_client-x_my-api_fix-login-bug')
     expect(await screen.findByRole('status')).toHaveTextContent('Copied attach command')
     expect(screen.getAllByRole('status')).toHaveLength(1) // confirmations replace each other
@@ -1142,10 +1153,10 @@ describe('App copy actions', () => {
     await createTheme(user, 'Client X')
     await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
     await user.click(await screen.findByRole('button', { name: /^\S notes$/ }))
-    expect(within(header()).queryByRole('button', { name: 'Copy branch name' })).not.toBeInTheDocument()
-    await user.click(within(header()).getByRole('button', { name: 'Copy folder path' }))
+    expect(await headerActions(user)).not.toContain('Copy branch name')
+    await headerAction(user, 'Copy folder path')
     expect(writeText).toHaveBeenLastCalledWith('/home/me/notes')
-    await user.click(within(header()).getByRole('button', { name: 'Copy attach command' }))
+    await headerAction(user, 'Copy attach command')
     expect(writeText).toHaveBeenLastCalledWith('tmux -L me-manager attach -t mmf_client-x_notes')
     expect(await screen.findByRole('status')).toHaveTextContent('Copied attach command')
   })
@@ -1174,7 +1185,7 @@ describe('App copy actions', () => {
     mockClipboard(vi.fn<WriteText>(async () => Promise.reject(new Error('denied'))))
     render(<App api={repoApi()} />)
     await createRepoAndTask(user)
-    await user.click(within(header()).getByRole('button', { name: 'Copy branch name' }))
+    await headerAction(user, 'Copy branch name')
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not copy the branch name to the clipboard')
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
@@ -1458,7 +1469,7 @@ describe('App open in editor / file manager', () => {
     await user.click(screen.getByRole('button', { name: 'Open in editor' }))
     expect(openInEditor).toHaveBeenCalledWith(target)
     expect(await screen.findByText('Opening in the editor…')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Reveal in file manager' }))
+    await headerAction(user, 'Reveal in file manager')
     expect(openInFileManager).toHaveBeenCalledWith(target)
     expect(await screen.findByText('Opening the file manager…')).toBeInTheDocument()
   })
@@ -2435,7 +2446,7 @@ describe('App git actions', () => {
     await createTheme(user, 'Client X')
     await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
     await user.click(await screen.findByRole('button', { name: /^\S notes$/ }))
-    await screen.findByRole('group', { name: 'Open' })
+    await screen.findByRole('button', { name: 'Open in editor' })
     expect(screen.queryByRole('group', { name: 'Git' })).not.toBeInTheDocument()
   })
 })

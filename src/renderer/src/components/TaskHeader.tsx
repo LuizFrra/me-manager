@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   ArrowUp,
   Code,
+  Copy,
+  Ellipsis,
   FolderOpen,
   GitBranch,
   GitCommitHorizontal,
@@ -23,6 +25,7 @@ import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
 import { DevUrlLinks } from './DevUrlLinks'
+import { PopupMenu, type MenuItem } from './PopupMenu'
 import { ICON } from '../lib/icon'
 import { UsageBadge } from './UsageBadge'
 
@@ -209,6 +212,42 @@ function RunControls(props: RunControlsProps): React.JSX.Element {
   )
 }
 
+/** "⋯": the header's less frequent actions (file manager, copies, notes) in a menu. */
+function MoreActions({ items }: { items: MenuItem[] }): React.JSX.Element {
+  const [at, setAt] = useState<{ x: number; y: number; trigger: HTMLElement } | null>(null)
+  const close = useCallback(() => setAt(null), [])
+  return (
+    <>
+      <button
+        className="header-btn header-more"
+        aria-label="More actions"
+        title="More actions"
+        aria-haspopup="menu"
+        aria-expanded={at !== null}
+        onClick={(e) => {
+          if (at) return setAt(null)
+          const rect = e.currentTarget.getBoundingClientRect()
+          setAt({ x: rect.right - 220, y: rect.bottom + 4, trigger: e.currentTarget })
+        }}
+      >
+        <Ellipsis {...ICON} size={16} />
+      </button>
+      {at && (
+        <PopupMenu
+          label="More actions"
+          className="tab-menu header-menu"
+          x={at.x}
+          y={at.y}
+          trigger={at.trigger}
+          items={items}
+          onClose={close}
+          triggerToggles
+        />
+      )}
+    </>
+  )
+}
+
 /**
  * The selected task's or folder's header: title, path line, and the task's notes, collapsed to one line until
  * clicked. Notes are plain text (a React text node), never HTML.
@@ -297,47 +336,31 @@ export function TaskHeader(props: {
             {props.usage && props.onOpenUsage && (
               <UsageBadge usage={props.usage} budget={props.budget} onOpen={props.onOpenUsage} />
             )}
-            <div className="copy-group" role="group" aria-label="Open">
-              <span className="copy-group-label" aria-hidden="true">
-                Open
-              </span>
-              <button
-                aria-label="Open in editor"
-                title={`Open in editor (${shortcutLabel('openEditor')})`}
-                onClick={props.onOpenInEditor}
-              >
-                <Code {...ICON} /> Editor
-              </button>
-              <button
-                aria-label="Reveal in file manager"
-                title="Reveal in file manager"
-                onClick={props.onRevealInFileManager}
-              >
-                <FolderOpen {...ICON} /> File manager
-              </button>
-            </div>
-            {props.copies.length > 0 && (
-              <div className="copy-group" role="group" aria-label="Copy">
-                <span className="copy-group-label" aria-hidden="true">
-                  Copy
-                </span>
-                {props.copies.map((entry) => (
-                  <button
-                    key={entry.kind}
-                    aria-label={entry.label}
-                    title={`${entry.label}: ${entry.text}`}
-                    onClick={() => props.onCopy(entry)}
-                  >
-                    {entry.short}
-                  </button>
-                ))}
-              </div>
-            )}
-            {props.onEditNotes && (
-              <button className="header-btn" title="Edit the task's notes" onClick={props.onEditNotes}>
-                <StickyNote {...ICON} /> Edit notes
-              </button>
-            )}
+            <button
+              className="header-btn"
+              aria-label="Open in editor"
+              title={`Open in editor (${shortcutLabel('openEditor')})`}
+              onClick={props.onOpenInEditor}
+            >
+              <Code {...ICON} /> Editor
+            </button>
+            <MoreActions
+              items={[
+                {
+                  label: 'Reveal in file manager',
+                  icon: <FolderOpen {...ICON} />,
+                  run: props.onRevealInFileManager,
+                },
+                ...props.copies.map((entry) => ({
+                  label: entry.label,
+                  icon: <Copy {...ICON} />,
+                  run: () => props.onCopy(entry),
+                })),
+                ...(props.onEditNotes
+                  ? [{ label: 'Edit notes', icon: <StickyNote {...ICON} />, run: props.onEditNotes }]
+                  : []),
+              ]}
+            />
           </div>
           {(props.run || props.gitActions) && (
             <div className="task-header-actions-row">
