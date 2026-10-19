@@ -456,15 +456,28 @@ button:disabled {
 }
 .dot {
   display: inline-block;
-  min-width: 0.9em;
+  flex: none;
+  width: 14px;
+  font-size: 9px;
+  line-height: 14px;
   text-align: center;
+}
+.dot.running.busy,
+.dot.missing {
+  font-size: 13px;
 }
 .dot.running {
   color: var(--ok);
 }
 .dot.running.busy {
   color: var(--accent);
-  animation: dot-pulse 1.2s ease-in-out infinite;
+  animation: spark-spin 2.4s linear infinite;
+}
+/* The busy mark (✻) turns, as Claude Code's does while it works. */
+@keyframes spark-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .dot.running.waiting {
   color: var(--waiting);
@@ -919,16 +932,15 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  border-top: 1px solid var(--divider);
 }
 .dialog .settings-section h3 {
   margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 560;
+  color: var(--text-strong);
 }
 .settings-row {
   display: grid;
@@ -1251,8 +1263,8 @@ button:disabled {
 
 .toasts {
   position: fixed;
-  bottom: 12px;
-  right: 12px;
+  bottom: 40px; /* above the status bar */
+  right: 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1264,13 +1276,14 @@ button:disabled {
   align-items: flex-start;
   background: var(--danger-surface);
   border: 1px solid var(--danger);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  padding: 9px 12px;
+  box-shadow: var(--popover-shadow);
 }
 .toast-info {
   align-items: center;
   align-self: flex-end;
-  background: var(--panel);
+  background: var(--raised);
   border-color: var(--border);
   box-shadow: var(--popover-shadow);
 }
@@ -2864,7 +2877,9 @@ kbd {
   background: var(--accent-bg-subtle);
 }
 .session-state.busy .session-state-dot {
-  animation: dot-pulse 1.2s ease-in-out infinite;
+  display: inline-block;
+  font-size: 11px;
+  animation: spark-spin 2.4s linear infinite;
 }
 .session-state.waiting {
   color: var(--waiting);
@@ -3196,12 +3211,11 @@ kbd {
   font-style: italic;
 }
 .usage-section-title {
-  margin: 20px 0 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin: 20px 0 6px;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 560;
+  color: var(--text-strong);
 }
 .usage-model {
   font-family: var(--mono);
@@ -3877,6 +3891,31 @@ button.status-seg:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+.home-waiting-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.home-waiting-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 8px;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--waiting) 10%, var(--raised));
+  border-color: color-mix(in srgb, var(--waiting) 40%, transparent);
+  border-radius: 999px;
+}
+.home-waiting-item:hover {
+  background: color-mix(in srgb, var(--waiting) 18%, var(--raised));
+}
+.home-recent-when {
+  flex: none;
+  min-width: 64px;
+  color: var(--faint);
   font-size: 12px;
   text-align: right;
 }

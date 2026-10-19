@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
-import { homeTips, recentTasks } from './onboarding'
+import { homeTips, recentTasks, timeAgo } from './onboarding'
 
 const at = (name: string, createdAt: string): ReturnType<typeof task> => ({ ...task(name), createdAt })
 
@@ -44,5 +44,20 @@ describe('homeTips', () => {
     expect(mac.join(' ')).toContain('⌘⇧E')
     expect(mac.join(' ')).toContain('⌘1…9')
     expect(mac.join(' ')).not.toContain('Ctrl')
+  })
+})
+
+describe('timeAgo', () => {
+  const now = new Date('2026-10-19T12:00:00Z')
+  it.each([
+    ['2026-10-19T11:59:40Z', 'just now'],
+    ['2026-10-19T11:55:00Z', '5 min ago'],
+    ['2026-10-19T09:00:00Z', '3 h ago'],
+    ['2026-10-18T10:00:00Z', 'yesterday'],
+    ['2026-10-15T12:00:00Z', '4 days ago'],
+    ['2026-09-01T12:00:00Z', 'Sep 1'],
+    ['nonsense', ''],
+  ])('%s is "%s"', (iso, text) => {
+    expect(timeAgo(iso, now)).toBe(text)
   })
 })

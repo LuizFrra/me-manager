@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, FolderDown, FolderGit2, GitBranch, Layers, Plus, Search } from 'lucide-react'
 import { MAX_TASK_PROMPT, type AppState, type LiveStatus, type Target } from '../../../shared/types'
+import { targetKey } from '../../../shared/naming'
+import { waitingTargets } from '../lib/attention'
 import { defaultRepo, greeting, repoChoices, taskNameFromPrompt } from '../lib/composer'
-import { homeTips, recentTasks, TIP_ROTATE_MS } from '../lib/onboarding'
+import { homeTips, recentTasks, timeAgo, TIP_ROTATE_MS } from '../lib/onboarding'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
 import { ICON } from '../lib/icon'
@@ -237,18 +239,40 @@ export function Home(
   },
 ): React.JSX.Element {
   const recent = recentTasks(p.state)
+  const waiting = waitingTargets(p.state, p.status)
+  const now = new Date()
   const hasRepos = repoChoices(p.state).length > 0
   return (
     <section className="home" aria-label="Home">
       <div className="home-inner">
         <h1 className="home-greeting">
           <Spark size={30} />
-          {greeting(new Date())}
+          {greeting(now)}
         </h1>
         {hasRepos ? (
           <Composer state={p.state} focus={p.composerFocus} onStart={p.onStartTask} />
         ) : (
           <p className="home-title">Add a repository to start tasks, or select a folder in the sidebar.</p>
+        )}
+        {waiting.length > 0 && (
+          <div className="home-section home-waiting">
+            <h2>Waiting for you</h2>
+            <div className="home-waiting-list">
+              {waiting.map(({ target, label }) => (
+                <button
+                  key={targetKey(target)}
+                  className="home-waiting-item"
+                  aria-label={`Open ${label}, waiting for you`}
+                  onClick={() => p.onOpen(target)}
+                >
+                  <span className="dot running waiting" aria-hidden="true">
+                    ●
+                  </span>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {recent.length > 0 && (
           <div className="home-section">
@@ -273,6 +297,7 @@ export function Home(
                         {theme.icon && <span aria-hidden="true">{theme.icon} </span>}
                         {theme.name} › {repoName}
                       </span>
+                      <span className="home-recent-when">{timeAgo(task.createdAt, now)}</span>
                     </button>
                   </li>
                 )

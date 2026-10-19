@@ -67,6 +67,7 @@ import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, typ
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
 import { repoChoices, taskNameFromPrompt } from './lib/composer'
+import { windowTitle } from './lib/attention'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
@@ -471,6 +472,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   // Repos whose "Archived" group is expanded; each starts collapsed.
   const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+  // The window's title names the selection and counts the sessions waiting for the user (see windowTitle).
+  useEffect(() => {
+    document.title = windowTitle(state, status, selected)
+  }, [state, status, selected])
   // Whether the sidebar is collapsed to its rail; remembered in the UI state.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const toggleArchived = useCallback(

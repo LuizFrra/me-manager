@@ -131,7 +131,8 @@ describe('Sidebar status dot', () => {
     expect(dotOf('ship')).toHaveClass('running', 'idle')
     expect(dotOf('ship')).toHaveAttribute('title', 'Claude is idle')
     expect(dotOf('shell').className).toBe('dot running')
-    for (const name of ['fix', 'docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
+    expect(dotOf('fix')).toHaveTextContent('✻') // Claude Code's working mark
+    for (const name of ['docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
   })
 
   it('keeps ○ for no session and ⚠ for a missing path', () => {

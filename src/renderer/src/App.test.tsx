@@ -3385,6 +3385,23 @@ describe('App welcome and home screens', () => {
     expect(await screen.findByRole('button', { name: 'Remove theme Work' })).toBeInTheDocument()
   })
 
+  it('lists what waits for the user on the home screen and counts it in the window title', async () => {
+    const api = repoApi()
+    let s = await api.createTheme('Work')
+    s = await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    s = await api.createTask(s.themes[0].id, s.themes[0].items[0].id, 'fix')
+    const repo = s.themes[0].items[0]
+    const fix = repo.kind === 'repo' ? repo.tasks[0] : undefined
+    api.getStatus = async () => ({ running: [fix!.id], missing: [], activity: { [fix!.id]: 'waiting' } })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const user = userEvent.setup()
+    render(<App api={api} />)
+    const h = within(await screen.findByRole('region', { name: 'Home' }))
+    await user.click(await h.findByRole('button', { name: 'Open Work › my-api › fix, waiting for you' }))
+    expect(openTarget).toHaveBeenCalledWith({ themeId: s.themes[0].id, itemId: repo.id, taskId: fix!.id })
+    await waitFor(() => expect(document.title).toBe('(1) fix — me-manager'))
+  })
+
   it('offers no composer without a repository', async () => {
     const api = createMockApi()
     await api.createTheme('Work')
