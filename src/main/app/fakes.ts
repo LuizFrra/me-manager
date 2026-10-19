@@ -257,6 +257,21 @@ export class FakeTmux implements TmuxApi {
     this.captureCalls.push(`${session}:${windowName}`)
     return this.panes.get(session) ?? null
   }
+  /** Scrollback text by `<session>:<index>`, for captureHistory ('' when unset); cut like the real one. */
+  histories = new Map<string, string>()
+  historyCalls: string[] = []
+  async captureHistory(
+    session: string,
+    index: number,
+    maxBytes: number,
+  ): Promise<{ text: string; truncated: boolean }> {
+    this.historyCalls.push(`${session}:${index}`)
+    if (!this.sessions.get(session)?.windows[index]) throw new Error(`No tab ${index} in ${session}`)
+    const text = this.histories.get(`${session}:${index}`) ?? ''
+    if (Buffer.byteLength(text) <= maxBytes) return { text, truncated: false }
+    const tail = Buffer.from(text).subarray(-maxBytes).toString('utf8')
+    return { text: tail.slice(tail.indexOf('\n') + 1), truncated: true }
+  }
 }
 
 export class FakePty implements PtyApi {

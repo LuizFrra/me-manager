@@ -22,6 +22,7 @@ import { GH_INSTALL_HINT } from '../../shared/git'
 import {
   MAX_COMMIT_MESSAGE,
   MAX_TASK_PROMPT,
+  MAX_TRANSCRIPT_BYTES,
   type AppState,
   type Target,
   type Task,
@@ -625,6 +626,68 @@ describe('Orchestrator: sessions and tabs', () => {
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
     expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {} })
+  })
+})
+
+describe('Orchestrator: transcripts', () => {
+  async function withTabs(): Promise<Ctx & { target: Target; folder: Target }> {
+    const ctx = makeDeps()
+    ctx.git.roots.set('/code/my-api', '/code/my-api')
+    // 9:05 local time, for the file name.
+    const orch = new Orchestrator(ctx.deps, { now: () => new Date(2026, 9, 18, 9, 5, 30).getTime() })
+    await orch.init()
+    const themeId = (await orch.createTheme('Client X')).themes[0].id
+    const repoId = (await orch.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    const target = { themeId, itemId: repoId, taskId: task.id }
+    await orch.newTab(target) // index 1, "shell"
+    const folderId = (await orch.addFolder(themeId, '/docs/notes')).themes[0].items[1].id
+    const folder = { themeId, itemId: folderId }
+    await orch.openTarget(folder)
+    return { ...ctx, orch, themeId, repoId, target, folder }
+  }
+
+  it("copies a tab's scrollback by its index, with its line count", async () => {
+    const { orch, tmux, target } = await withTabs()
+    tmux.histories.set('mmt_client-x_my-api_fix:1', 'one\ntwo\nthree\n')
+    await expect(orch.copyTranscript(target, 1)).resolves.toEqual({
+      text: 'one\ntwo\nthree\n',
+      lines: 3,
+      truncated: false,
+    })
+    await expect(orch.copyTranscript(target, 0)).resolves.toEqual({ text: '', lines: 0, truncated: false })
+    expect(tmux.historyCalls).toEqual(['mmt_client-x_my-api_fix:1', 'mmt_client-x_my-api_fix:0'])
+  })
+
+  it('caps the transcript at MAX_TRANSCRIPT_BYTES and says so', async () => {
+    const { orch, tmux, target } = await withTabs()
+    const line = `${'x'.repeat(1023)}\n`
+    tmux.histories.set('mmt_client-x_my-api_fix:0', line.repeat(MAX_TRANSCRIPT_BYTES / 1024 + 10))
+    const transcript = await orch.copyTranscript(target, 0)
+    expect(transcript.truncated).toBe(true)
+    expect(transcript.lines).toBeLessThanOrEqual(MAX_TRANSCRIPT_BYTES / 1024)
+    expect(transcript.text.length).toBe(transcript.lines * 1024)
+  })
+
+  it('names the file after the theme, the task or folder, the tab and the time', async () => {
+    const { orch, tmux, target, folder } = await withTabs()
+    tmux.histories.set('mmt_client-x_my-api_fix:1', 'hi\n')
+    await expect(orch.captureTranscript(target, 1)).resolves.toEqual({
+      transcript: { text: 'hi\n', lines: 1, truncated: false },
+      fileName: 'client-x-fix-shell-20261018-0905.txt',
+    })
+    expect((await orch.captureTranscript(folder, 0)).fileName).toBe('client-x-notes-claude-20261018-0905.txt')
+  })
+
+  it("refuses a tab that is not one of the session's windows, before capturing anything", async () => {
+    const { orch, tmux, target, folder } = await withTabs()
+    for (const index of [2, -1, 1.5, Number.NaN, '1' as unknown as number, null as unknown as number]) {
+      await expect(orch.copyTranscript(target, index)).rejects.toThrow(/tab/i)
+    }
+    tmux.sessions.delete('mmf_client-x_notes') // not running
+    await expect(orch.copyTranscript(folder, 0)).rejects.toThrow(/tab/i)
+    await expect(orch.copyTranscript({ ...target, taskId: 'nope' }, 0)).rejects.toThrow()
+    expect(tmux.historyCalls).toEqual([])
   })
 })
 
