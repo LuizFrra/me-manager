@@ -25,15 +25,22 @@ const custom: Settings = {
   cloneDirectory: '/home/me/code',
   showStatusBar: false,
   taskTemplates: [{ name: 'Review', taskName: 'review-{n}', base: 'origin/develop', prompt: 'Review the diff' }],
+  dailyBudgetUsd: 20,
+  taskBudgetUsd: 2.5,
 }
 
 describe('SettingsStore', () => {
-  it('loads a settings file from before task templates unchanged, with no templates', async () => {
-    const { taskTemplates, ...old } = custom
-    expect(taskTemplates).toHaveLength(1)
+  it('loads a settings file from before task templates and budgets unchanged, with none of them', async () => {
+    const { taskTemplates, dailyBudgetUsd, taskBudgetUsd, ...old } = custom
+    expect([taskTemplates, dailyBudgetUsd, taskBudgetUsd]).toEqual([expect.any(Array), 20, 2.5])
     await new SettingsStore(file).save(DEFAULT_SETTINGS) // creates the folder
     await writeFile(file, JSON.stringify(old), 'utf8')
-    await expect(new SettingsStore(file).load()).resolves.toEqual({ ...old, taskTemplates: [] })
+    await expect(new SettingsStore(file).load()).resolves.toEqual({
+      ...old,
+      taskTemplates: [],
+      dailyBudgetUsd: null,
+      taskBudgetUsd: null,
+    })
   })
 
   it('gives the defaults when the file does not exist', async () => {

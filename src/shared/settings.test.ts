@@ -17,6 +17,8 @@ describe('normalizeSettings', () => {
       cloneDirectory: '',
       showStatusBar: true,
       taskTemplates: [],
+      dailyBudgetUsd: null,
+      taskBudgetUsd: null,
     })
   })
 
@@ -33,6 +35,8 @@ describe('normalizeSettings', () => {
       cloneDirectory: ' /home/me/code ',
       showStatusBar: false,
       taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }],
+      dailyBudgetUsd: 20,
+      taskBudgetUsd: 5.5,
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -48,16 +52,20 @@ describe('normalizeSettings', () => {
       cloneDirectory: '/home/me/code',
       showStatusBar: false,
       taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }],
+      dailyBudgetUsd: 20,
+      taskBudgetUsd: 5.5,
     })
     expect(Object.keys(s).sort()).toEqual([
       'claudeArgs',
       'cloneDirectory',
+      'dailyBudgetUsd',
       'editorCommand',
       'notifications',
       'pollIntervalMs',
       'remoteControl',
       'showStatusBar',
       'skipPermissions',
+      'taskBudgetUsd',
       'taskTemplates',
       'terminalFontSize',
       'updateStrategy',
@@ -75,6 +83,30 @@ describe('normalizeSettings', () => {
     const current: Settings = { ...DEFAULT_SETTINGS, taskTemplates: [{ name: 'Review' }] }
     expect(normalizeSettings({ taskTemplates: 'Review' }, current).taskTemplates).toEqual([{ name: 'Review' }])
     expect(normalizeSettings({ taskTemplates: [] }, current).taskTemplates).toEqual([])
+  })
+
+  it('keeps budgets in cents within the limits, and none in settings from before budgets', () => {
+    expect(normalizeSettings({ pollIntervalMs: 5000 })).toMatchObject({ dailyBudgetUsd: null, taskBudgetUsd: null })
+    expect(normalizeSettings({ dailyBudgetUsd: 12.345, taskBudgetUsd: 0.01 })).toMatchObject({
+      dailyBudgetUsd: 12.35,
+      taskBudgetUsd: 0.01,
+    })
+    expect(normalizeSettings({ dailyBudgetUsd: 1e9, taskBudgetUsd: 0.001 })).toMatchObject({
+      dailyBudgetUsd: 100_000,
+      taskBudgetUsd: 0.01,
+    })
+    // null removes a budget; anything else keeps the current one, as for any wrongly typed value.
+    const current: Settings = { ...DEFAULT_SETTINGS, dailyBudgetUsd: 10, taskBudgetUsd: 2 }
+    expect(normalizeSettings({ ...current, dailyBudgetUsd: null }, current)).toMatchObject({
+      dailyBudgetUsd: null,
+      taskBudgetUsd: 2,
+    })
+    for (const bad of [0, -5, '5', Number.NaN, Number.POSITIVE_INFINITY, {}, true]) {
+      expect(normalizeSettings({ dailyBudgetUsd: bad, taskBudgetUsd: bad }, current)).toMatchObject({
+        dailyBudgetUsd: 10,
+        taskBudgetUsd: 2,
+      })
+    }
   })
 
   it('keeps only an absolute clone directory', () => {

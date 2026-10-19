@@ -1,3 +1,4 @@
+import { budgetFromText, budgetText } from '../../../shared/budget'
 import { FONT_SIZE_LIMITS, POLL_INTERVAL_LIMITS } from '../../../shared/settings'
 import { commandBasename, isTerminalEditor } from '../../../shared/editor'
 import { joinShellWords, splitShellWords } from '../../../shared/shell'
@@ -21,7 +22,7 @@ export const toTemplateForm = (t: TaskTemplate): TemplateForm => ({
   prompt: t.prompt ?? '',
 })
 
-/** The Settings dialog's fields, as typed. The poll interval is edited in seconds. */
+/** The Settings dialog's fields, as typed. The poll interval is edited in seconds, budgets in dollars ('' for none). */
 export interface SettingsForm {
   claudeArgs: string
   editorCommand: string
@@ -33,6 +34,8 @@ export interface SettingsForm {
   updateStrategy: UpdateStrategy
   showStatusBar: boolean
   taskTemplates: TemplateForm[]
+  dailyBudget: string
+  taskBudget: string
 }
 
 /** What the Settings dialog edits: everything but what the app remembers by itself (the last clone folder). */
@@ -57,6 +60,8 @@ export function toForm(s: Settings): SettingsForm {
     updateStrategy: s.updateStrategy,
     showStatusBar: s.showStatusBar,
     taskTemplates: s.taskTemplates.map(toTemplateForm),
+    dailyBudget: budgetText(s.dailyBudgetUsd),
+    taskBudget: budgetText(s.taskBudgetUsd),
   }
 }
 
@@ -87,6 +92,13 @@ export function parseForm(
   const fontSize = numberIn(form.terminalFontSize, FONT_SIZE_LIMITS)
   if (fontSize === null || !Number.isInteger(fontSize))
     errors.terminalFontSize = `Enter a whole number from ${FONT_SIZE_LIMITS.min} to ${FONT_SIZE_LIMITS.max}.`
+  const budget = (field: 'dailyBudget' | 'taskBudget'): number | null => {
+    const parsed = budgetFromText(form[field])
+    if ('error' in parsed) errors[field] = parsed.error
+    return 'value' in parsed ? parsed.value : null
+  }
+  const dailyBudgetUsd = budget('dailyBudget')
+  const taskBudgetUsd = budget('taskBudget')
   const templateErrors = templateListErrors(form.taskTemplates)
   if (templateErrors.some((e) => Object.keys(e).length > 0)) errors.taskTemplates = templateErrors
   if (Object.keys(errors).length > 0) return { errors }
@@ -102,6 +114,8 @@ export function parseForm(
       updateStrategy: form.updateStrategy,
       showStatusBar: form.showStatusBar,
       taskTemplates: form.taskTemplates.map(toTaskTemplate),
+      dailyBudgetUsd,
+      taskBudgetUsd,
     },
   }
 }

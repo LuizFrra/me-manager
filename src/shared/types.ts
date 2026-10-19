@@ -240,7 +240,10 @@ export interface Settings {
   remoteControl: boolean
   /** Start every Claude session with `--dangerously-skip-permissions`: Claude runs commands without asking. */
   skipPermissions: boolean
-  /** Desktop notifications when Claude finishes or waits for input in a task or folder the user isn't looking at. */
+  /**
+   * Desktop notifications when Claude finishes or waits for input in a task or folder the user isn't looking at,
+   * and when a task or the day reaches 80% or 100% of its budget.
+   */
   notifications: boolean
   /** How "Update from base" brings the base's new commits into a task branch. */
   updateStrategy: UpdateStrategy
@@ -250,6 +253,13 @@ export interface Settings {
   showStatusBar: boolean
   /** Presets for new tasks, in the order the New task dialog lists them; at most MAX_TASK_TEMPLATES. */
   taskTemplates: TaskTemplate[]
+  /**
+   * A limit on the estimated cost of all usage today (every task and folder, since local midnight), in USD; null
+   * for none. Whole cents within BUDGET_LIMITS (see shared/budget.ts).
+   */
+  dailyBudgetUsd: number | null
+  /** The default limit on each task's estimated cost, all time, in USD (Task.budgetUsd overrides it); null for none. */
+  taskBudgetUsd: number | null
 }
 
 /**
