@@ -1,5 +1,19 @@
+import type { UnsavedWork } from '../../../shared/types'
 import { plural } from './gitStatus'
 import { cleanError } from './toasts'
+
+/** What the bulk bar and the palette offer for the selected tasks. */
+export type BulkAction = 'push' | 'update' | 'archive' | 'remove'
+
+/**
+ * Why the bulk Archive leaves a task out: archiving would lose its uncommitted or untracked files, or could not
+ * check for them. Archiving it on its own can discard them; a batch never does. Undefined when it can go.
+ */
+export function archiveSkipReason(work: UnsavedWork | undefined): string | undefined {
+  if (work?.warning) return 'it could not be checked for changes'
+  if (work && work.uncommittedFiles.length > 0) return 'it has uncommitted or untracked files'
+  return undefined
+}
 
 /** How one item of a batch went: its value, or what it threw. */
 export type Settled<R> = { ok: true; value: R } | { ok: false; error: unknown }

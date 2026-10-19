@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bulkSummary, runLimited } from './bulk'
+import { archiveSkipReason, bulkSummary, runLimited } from './bulk'
 
 describe('runLimited', () => {
   it('runs every item, at most `limit` at once, and settles each in input order', async () => {
@@ -75,5 +75,21 @@ describe('bulkSummary', () => {
     expect(bulkSummary('Updated', [{ name: 'b', kind: 'conflict' }]).message).toBe(
       'Updated 0 of 1 task; conflicts in b (undone: run Update from base on it to resolve)',
     )
+  })
+})
+
+describe('archiveSkipReason', () => {
+  it('leaves out a task with uncommitted files, or one that could not be checked', () => {
+    expect(archiveSkipReason({ uncommittedFiles: ['a'], unpushedCommits: [] })).toBe(
+      'it has uncommitted or untracked files',
+    )
+    expect(archiveSkipReason({ uncommittedFiles: [], unpushedCommits: [], warning: 'gone' })).toBe(
+      'it could not be checked for changes',
+    )
+  })
+
+  it('keeps a clean one, unpushed commits and all: its branch keeps them', () => {
+    expect(archiveSkipReason({ uncommittedFiles: [], unpushedCommits: ['abc wip'] })).toBeUndefined()
+    expect(archiveSkipReason(undefined)).toBeUndefined()
   })
 })
