@@ -27,6 +27,7 @@ import { emptyUiState, normalizeUiState } from '../../../shared/uiState'
 import { checkCloneName, checkCloneUrl } from '../../../shared/clone'
 import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
+import { moveActiveTask, moveEntry } from '../../../shared/reorder'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -178,6 +179,13 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       state = { ...state, themes }
       return state
     },
+    // Clamped like main, which also saves nothing when nothing moves.
+    moveTheme: async (themeId, toIndex) => {
+      const from = state.themes.findIndex((t) => t.id === themeId)
+      if (from === -1) throw new Error(`Theme not found: ${themeId}`)
+      state = { ...state, themes: [...moveEntry(state.themes, from, toIndex)] }
+      return state
+    },
     pickDirectory: async () => `/home/demo/project-${++counter}`,
     addRepo: (themeId, path) =>
       edit(themeId, (t) => {
@@ -220,6 +228,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (t.items.some((i) => i.slug === item.slug))
           throw new Error(`An item named "${item.name}" already exists in this theme`)
         t.items.splice(index ?? t.items.length, 0, clone(item))
+      }),
+    moveItem: (themeId, itemId, toIndex) =>
+      edit(themeId, (t) => {
+        const from = t.items.findIndex((i) => i.id === itemId)
+        if (from === -1) throw new Error(`Item not found: ${itemId}`)
+        t.items = [...moveEntry(t.items, from, toIndex)]
       }),
     listBranches: async () => ({ default: 'origin/main', branches: [...DEMO_BRANCHES] }),
     createTask: (themeId, repoId, name, options = {}) =>
@@ -276,6 +290,13 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         const task = taskIn(t, repoId, taskId)
         if (task.archivedAt === undefined) throw new Error(`"${task.name}" is not archived`)
         delete task.archivedAt
+      }),
+    moveTask: (themeId, repoId, taskId, toIndex) =>
+      edit(themeId, (t) => {
+        const task = taskIn(t, repoId, taskId)
+        if (task.archivedAt) throw new Error(`"${task.name}" is archived: restore it first`)
+        const repo = t.items.find((i) => i.id === repoId)
+        if (repo?.kind === 'repo') repo.tasks = [...moveActiveTask(repo.tasks, taskId, toIndex)]
       }),
     openTarget: async () => clone(tabs),
     detachTerminal: async () => {},
