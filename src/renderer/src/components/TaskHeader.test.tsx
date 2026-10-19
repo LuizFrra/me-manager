@@ -29,6 +29,42 @@ describe('TaskHeader session badges', () => {
   })
 })
 
+describe('TaskHeader actions', () => {
+  it('opens the editor directly, and the rest from the More actions menu', async () => {
+    const user = userEvent.setup()
+    const props = {
+      ...base,
+      copies: [{ kind: 'branch' as const, label: 'Copy branch name', what: 'branch name', text: 'b' }],
+      onCopy: vi.fn(),
+      onOpenInEditor: vi.fn(),
+      onRevealInFileManager: vi.fn(),
+      onEditNotes: vi.fn(),
+    }
+    render(<TaskHeader {...props} />)
+    await user.click(screen.getByRole('button', { name: 'Open in editor' }))
+    expect(props.onOpenInEditor).toHaveBeenCalledTimes(1)
+
+    const more = screen.getByRole('button', { name: 'More actions' })
+    await user.click(more)
+    expect(more).toHaveAttribute('aria-expanded', 'true')
+    const menu = screen.getByRole('menu', { name: 'More actions' })
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((m) => m.textContent),
+    ).toEqual(['Reveal in file manager', 'Copy branch name', 'Edit notes'])
+    expect(within(menu).getByRole('menuitem', { name: 'Reveal in file manager' })).toHaveFocus()
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(props.onCopy).toHaveBeenCalledWith(props.copies[0])
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(more).toHaveFocus()
+
+    await user.click(more)
+    await user.click(more) // the button toggles its menu
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+})
+
 describe('TaskHeader git line', () => {
   const git = {
     ahead: 3,
