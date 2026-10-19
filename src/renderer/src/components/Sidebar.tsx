@@ -71,6 +71,8 @@ export interface SidebarProps {
   rail?: boolean
   /** Hides or shows the sidebar. Without it, no toggle. */
   onToggleSidebar?: () => void
+  /** Targets (by targetKey) whose Claude finished while they weren't shown: marked until opened. */
+  unread?: ReadonlySet<string>
   onRenameTheme: (themeId: string, currentName: string) => void
   /** Opens "Customize theme…" (colour and icon). */
   onCustomizeTheme: (themeId: string) => void
@@ -201,6 +203,15 @@ function ArchivedTasks(props: {
           </div>
         ))}
     </>
+  )
+}
+
+/** A target whose Claude finished while it wasn't shown, as an unread chat is marked. */
+function UnreadMark(): React.JSX.Element {
+  return (
+    <span className="unread-mark" title="Claude finished here since you last looked">
+      <span className="sr-only">, new</span>
+    </span>
   )
 }
 
@@ -590,6 +601,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                         >
                           {dot(item.id)} <Folder {...ICON} className="item-icon" />{' '}
                           <span className="row-name">{item.name}</span>
+                          {p.unread?.has(item.id) && <UnreadMark />}
                         </button>
                         <span className="row-actions">
                           <RunCommandButton item={item} onClick={() => p.onEditRunCommand(theme.id, item.id)} />
@@ -656,6 +668,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                   onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
                                 >
                                   {dot(task.id)} <span className="row-name">{task.name}</span>
+                                  {p.unread?.has(task.id) && <UnreadMark />}
                                 </button>
                                 <OverBudget status={p.budgets?.[task.id]} />
                                 {p.gitStatus?.[task.id] && (

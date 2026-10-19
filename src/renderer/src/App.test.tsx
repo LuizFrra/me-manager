@@ -7,6 +7,7 @@ import { budgetStatus } from '../../shared/budget'
 import type {
   BudgetAlert,
   BudgetReport,
+  LiveStatus,
   MeManagerApi,
   TabInfo,
   Target,
@@ -3411,6 +3412,36 @@ describe('App welcome and home screens', () => {
     await user.click(await h.findByRole('button', { name: 'Open Work › my-api › fix, waiting for you' }))
     expect(openTarget).toHaveBeenCalledWith({ themeId: s.themes[0].id, itemId: repo.id, taskId: fix!.id })
     await waitFor(() => expect(document.title).toBe('(1) fix — me-manager'))
+  })
+
+  it('marks a task whose Claude finished while another was shown, until it is opened', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = repoApi()
+      let s = await api.createTheme('Work')
+      s = await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+      s = await api.createTask(s.themes[0].id, s.themes[0].items[0].id, 'fix')
+      s = await api.createTask(s.themes[0].id, s.themes[0].items[0].id, 'docs')
+      const repo = s.themes[0].items[0]
+      const [fix, docs] = repo.kind === 'repo' ? repo.tasks : []
+      let activity: LiveStatus['activity'] = { [fix.id]: 'busy', [docs.id]: 'busy' }
+      api.getStatus = async () => ({ running: [fix.id, docs.id], missing: [], activity })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      render(<App api={api} />)
+      await user.click(await screen.findByRole('button', { name: /^\S docs$/ }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_500)
+      })
+      activity = { [fix.id]: 'idle', [docs.id]: 'idle' } // both finish; docs is the one shown
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_500)
+      })
+      await user.click(await screen.findByRole('button', { name: /^\S fix, new$/ }))
+      expect(screen.getByRole('button', { name: /^\S docs$/ })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: /^\S fix$/ })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('offers no composer without a repository', async () => {

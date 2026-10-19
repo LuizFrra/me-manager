@@ -383,6 +383,19 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Claude finished here since the user last looked (see UnreadMark). */
+.unread-mark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.row-label:has(.unread-mark) .row-name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
 .row-label .item-icon {
   color: var(--muted);
 }

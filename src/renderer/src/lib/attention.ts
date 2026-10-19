@@ -17,3 +17,11 @@ export function windowTitle(state: AppState, status: LiveStatus, selected: Targe
   const name = entry?.label.split(' › ').at(-1)
   return `${waiting > 0 ? `(${waiting}) ` : ''}${name ? `${name} — ` : ''}me-manager`
 }
+
+/**
+ * Ids whose Claude stopped working between two status polls: busy before, idle or waiting now. The sidebar marks
+ * them until they are opened, like unread chats.
+ */
+export function finishedIds(prev: LiveStatus['activity'], next: LiveStatus['activity']): string[] {
+  return Object.keys(prev).filter((id) => prev[id] === 'busy' && (next[id] === 'idle' || next[id] === 'waiting'))
+}

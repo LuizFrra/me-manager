@@ -72,6 +72,16 @@ describe('Sidebar header and tree', () => {
     expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument()
   })
 
+  it('marks tasks and folders whose Claude finished unseen, keeping their names', () => {
+    renderSidebar({ unread: new Set(['fix', 'notes']) })
+    expect(screen.getByRole('button', { name: '○ fix, new' }).querySelector('.unread-mark')).toHaveAttribute(
+      'title',
+      'Claude finished here since you last looked',
+    )
+    expect(screen.getByRole('button', { name: '○ notes, new' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '○ docs' })).toBeInTheDocument()
+  })
+
   it('says whether each theme and repository is expanded', () => {
     renderSidebar({ collapsed: new Set(['api']) })
     expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('aria-expanded', 'true')
