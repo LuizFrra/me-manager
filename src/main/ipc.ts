@@ -1,4 +1,6 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app as electronApp, BrowserWindow, dialog, ipcMain, shell, type SaveDialogOptions } from 'electron'
+import { writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import {
   INVOKE_METHODS,
   invokeChannel,
@@ -8,15 +10,47 @@ import {
   PTY_WRITE,
   type InvokeMethod,
 } from '../shared/ipc'
+import type { Target } from '../shared/types'
 import type { AppService, PtyApi } from './contracts'
 import { TMUX_SOCKET } from './paths'
 import { checkPrereqs } from './prereqs'
+import { saveTranscript, type TranscriptSaveDeps } from './transcript'
 import { isHttpUrl } from './urls'
 
 type Handler = (...args: unknown[]) => unknown
 
+/** Electron's save dialog for a transcript, on the window when there is one; asks before replacing a file. */
+async function askTranscriptPath(win: BrowserWindow | null, defaultPath: string): Promise<string | null> {
+  const options: SaveDialogOptions = {
+    title: 'Save transcript',
+    defaultPath,
+    filters: [
+      { name: 'Text files', extensions: ['txt'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+    properties: ['createDirectory', 'showOverwriteConfirmation'],
+  }
+  const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+  return result.canceled || !result.filePath ? null : result.filePath
+}
+
+/** The Downloads folder, or the home folder when the platform has none. */
+function downloadsDir(): string {
+  try {
+    return electronApp.getPath('downloads')
+  } catch {
+    return homedir()
+  }
+}
+
 export function registerIpc(opts: { app: AppService; pty: PtyApi; getWindow: () => BrowserWindow | null }): void {
   const { app, pty, getWindow } = opts
+  const transcripts: TranscriptSaveDeps = {
+    capture: (target, index) => app.captureTranscript(target, index),
+    askSavePath: (defaultPath) => askTranscriptPath(getWindow(), defaultPath),
+    writeFile: (path, text) => writeFile(path, text, 'utf8'),
+    downloadsDir,
+  }
 
   const special: Partial<Record<InvokeMethod, Handler>> = {
     checkPrereqs: () => checkPrereqs(),
@@ -27,6 +61,7 @@ export function registerIpc(opts: { app: AppService; pty: PtyApi; getWindow: () 
       const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
       return result.canceled ? null : (result.filePaths[0] ?? null)
     },
+    saveTranscript: (target, index) => saveTranscript(transcripts, target as Target, index as number),
     openExternal: async (url) => {
       if (!isHttpUrl(String(url))) throw new Error('Only http(s) links can be opened')
       await shell.openExternal(new URL(String(url)).toString())

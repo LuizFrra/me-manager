@@ -11,6 +11,7 @@ import {
   type Task,
   type TaskGitStatus,
   type Theme,
+  type Transcript,
   type UiState,
 } from '../../../shared/types'
 import { branchName, slugify, targetKey } from '../../../shared/naming'
@@ -78,6 +79,14 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     const task = item?.kind === 'repo' ? item.tasks.find((t) => t.id === target.taskId) : undefined
     if (!task) throw new Error('Git actions are only available for repository tasks')
     return task
+  }
+
+  /** The demo transcript of one of the tabs; rejects an index that isn't one, like main. */
+  const transcriptOf = (index: number): { tab: TabInfo; transcript: Transcript } => {
+    const tab = tabs.find((t) => t.index === index)
+    if (!tab) throw new Error('That tab is no longer open')
+    const text = ['$ npm test', '', ' Test Files  74 passed (74)', '      Tests  1021 passed (1021)', ''].join('\n')
+    return { tab, transcript: { text, lines: 4, truncated: false } }
   }
 
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
@@ -229,6 +238,11 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     selectTab: async () => tabs,
     closeTab: async () => tabs,
     restartClaude: async () => tabs,
+    copyTranscript: async (_target, index) => transcriptOf(index).transcript,
+    saveTranscript: async (_target, index) => {
+      const { tab, transcript } = transcriptOf(index)
+      return { path: `/home/demo/Downloads/transcript-${tab.name}.txt`, lines: transcript.lines, truncated: false }
+    },
     listFiles: async () => ({ paths: [...DEMO_PATHS], truncated: false }),
     readFile: async (_target, path) => {
       const text = DEMO_FILES[path]
