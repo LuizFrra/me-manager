@@ -43,3 +43,18 @@ export function homeTips(mac?: boolean): string[] {
 
 /** How often the home screen's tip changes. */
 export const TIP_ROTATE_MS = 8_000
+
+/** How long ago `iso` was, coarsely: "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", or the date. */
+export function timeAgo(iso: string, now: Date): string {
+  const then = Date.parse(iso)
+  if (!Number.isFinite(then)) return ''
+  const minutes = Math.floor((now.getTime() - then) / 60_000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} h ago`
+  const days = Math.floor(hours / 24)
+  if (days === 1) return 'yesterday'
+  if (days < 7) return `${days} days ago`
+  return new Date(then).toLocaleDateString('en', { month: 'short', day: 'numeric' })
+}

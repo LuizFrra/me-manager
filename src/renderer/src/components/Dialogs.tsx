@@ -935,6 +935,9 @@ export function NewTaskDialog(props: {
   taskNames?: string[]
   /** The template chosen when the dialog opens, by name; None when no template has that name. */
   initialTemplate?: string
+  /** The name and prompt it opens with (the home composer's), kept as typed when a template is chosen. */
+  initialName?: string
+  initialPrompt?: string
   /** `template`: the name of the template chosen when creating, if any. */
   onSubmit: (name: string, options: NewTaskOptions, template?: string) => Promise<void>
   onCancel: () => void
@@ -952,8 +955,8 @@ export function NewTaskDialog(props: {
   const prefill = useRef<Prefill>({ ...initial.prefill })
   // The chosen template's base, for when the branches arrive.
   const wantedBase = useRef(initial.template?.base)
-  const [name, setName] = useState(initial.prefill.name)
-  const [prompt, setPrompt] = useState(initial.prefill.prompt)
+  const [name, setName] = useState(props.initialName ?? initial.prefill.name)
+  const [prompt, setPrompt] = useState(props.initialPrompt ?? initial.prefill.prompt)
   const [branches, setBranches] = useState<BranchLoad>({ kind: 'loading' })
   const [baseRef, setBaseRef] = useState('')
   // A template's base that the repo doesn't have (the default was selected instead).
@@ -990,19 +993,30 @@ export function NewTaskDialog(props: {
     }
   }, [loadBranches, selectBase])
 
-  /** Fills in what `template` sets; clears what the last one set and the user left alone (None: no template). */
+  /**
+   * Fills in what `template` sets; clears what the last one set and the user left alone (None: no template). The
+   * name and prompt the dialog opened with (the composer's) are the user's text: a template never replaces them.
+   */
   const chooseTemplate = (template: TaskTemplate | undefined): void => {
     const last = prefill.current
-    const nextName = template?.taskName
-      ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
-      : name === last.name
-        ? ''
-        : name
-    const nextPrompt = template?.prompt ?? (prompt === last.prompt ? '' : prompt)
+    const keepName = name !== '' && name === props.initialName
+    const keepPrompt = prompt !== '' && prompt === props.initialPrompt
+    const nextName = keepName
+      ? name
+      : template?.taskName
+        ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
+        : name === last.name
+          ? ''
+          : name
+    const nextPrompt = keepPrompt ? prompt : (template?.prompt ?? (prompt === last.prompt ? '' : prompt))
     setTemplateName(template?.name ?? '')
     setName(nextName)
     setPrompt(nextPrompt)
-    prefill.current = { name: template?.taskName ? nextName : '', prompt: template?.prompt ?? '', baseRef: '' }
+    prefill.current = {
+      name: template?.taskName && !keepName ? nextName : '',
+      prompt: keepPrompt ? '' : (template?.prompt ?? ''),
+      baseRef: '',
+    }
     wantedBase.current = template?.base
     if (branches.kind !== 'ready') return
     if (template?.base || baseRef === last.baseRef) selectBase(branches.list)

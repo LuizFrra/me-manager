@@ -1,13 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useState } from 'react'
 import { RUN_WINDOW } from '../../../shared/runCommand'
 import type { TabInfo } from '../../../shared/types'
 import { PANEL_SHORTCUT_LABEL, shortcutLabel } from '../lib/shortcuts'
-
-interface MenuItem {
-  label: string
-  run: () => void
-}
+import { PopupMenu, type MenuItem } from './PopupMenu'
 
 /** Where a tab's menu opened, and the tab button that gets the focus back when it closes. */
 interface OpenMenu {
@@ -15,81 +10,6 @@ interface OpenMenu {
   x: number
   y: number
   trigger: HTMLElement
-}
-
-/** Keeps a menu this far from the window's right edge. */
-const MENU_WIDTH = 200
-
-/**
- * A tab's context menu: focus starts on the first item; ↑/↓ (wrapping), Home and End move it, Enter or a click
- * runs an item, and Esc, Tab, a click elsewhere or leaving the window close it.
- */
-function TabMenu({
-  menu,
-  items,
-  onClose,
-}: {
-  menu: OpenMenu
-  items: MenuItem[]
-  onClose: () => void
-}): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
-    const onDown = (e: MouseEvent): void => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', onDown, true)
-    window.addEventListener('blur', onClose)
-    return () => {
-      document.removeEventListener('mousedown', onDown, true)
-      window.removeEventListener('blur', onClose)
-    }
-  }, [onClose])
-
-  const onKeyDown = (e: React.KeyboardEvent): void => {
-    const buttons = [...(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
-    const at = buttons.indexOf(document.activeElement as HTMLElement)
-    const focus = (i: number): void => buttons[(i + buttons.length) % buttons.length]?.focus()
-    if (e.key === 'ArrowDown') focus(at + 1)
-    else if (e.key === 'ArrowUp') focus(at - 1)
-    else if (e.key === 'Home') focus(0)
-    else if (e.key === 'End') focus(buttons.length - 1)
-    else if (e.key === 'Escape' || e.key === 'Tab') {
-      menu.trigger.focus()
-      onClose()
-    } else return
-    e.preventDefault()
-    e.stopPropagation()
-  }
-
-  // On the body: inside the tab list it would be clipped by the bar, and a tab list holds only tabs.
-  return createPortal(
-    <div
-      ref={ref}
-      className="tab-menu"
-      role="menu"
-      aria-label={`Tab ${menu.tab.name}`}
-      style={{ left: Math.max(0, Math.min(menu.x, window.innerWidth - MENU_WIDTH)), top: menu.y }}
-      onKeyDown={onKeyDown}
-    >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          role="menuitem"
-          tabIndex={-1}
-          onClick={() => {
-            menu.trigger.focus()
-            onClose()
-            item.run()
-          }}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>,
-    document.body,
-  )
 }
 
 export function TabBar(props: {
@@ -159,7 +79,16 @@ export function TabBar(props: {
           </button>
         </div>
       ))}
-      {shownMenu && <TabMenu menu={shownMenu} items={menuItems(menuTab ?? shownMenu.tab)} onClose={closeMenu} />}
+      {shownMenu && (
+        <PopupMenu
+          label={`Tab ${shownMenu.tab.name}`}
+          x={shownMenu.x}
+          y={shownMenu.y}
+          trigger={shownMenu.trigger}
+          items={menuItems(menuTab ?? shownMenu.tab)}
+          onClose={closeMenu}
+        />
+      )}
       <button
         className="tab-new"
         aria-label="New shell tab"

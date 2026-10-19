@@ -1,5 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { ChevronRight, FileText, Folder, GitBranch, type LucideIcon } from 'lucide-react'
 import { fuzzyFilter } from '../lib/fuzzy'
+import { ICON } from '../lib/icon'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 
 export type PaletteKind = 'task' | 'folder' | 'action' | 'file'
@@ -33,7 +35,19 @@ export interface PaletteFiles {
 export const MAX_PALETTE_RESULTS = 50
 
 const KIND_LABEL: Record<PaletteKind, string> = { task: 'Task', folder: 'Folder', action: 'Action', file: 'File' }
-const KIND_ICON: Record<PaletteKind, string> = { task: '⎇', folder: '📁', action: '›', file: '📄' }
+const KIND_ICON: Record<PaletteKind, LucideIcon> = {
+  task: GitBranch,
+  folder: Folder,
+  action: ChevronRight,
+  file: FileText,
+}
+
+/** The kind's line icon, or the theme's emoji when it has one. */
+function KindIcon({ kind, emoji }: { kind: PaletteKind; emoji?: string }): React.JSX.Element {
+  if (emoji) return <>{emoji}</>
+  const Icon = KIND_ICON[kind]
+  return <Icon {...ICON} />
+}
 
 /** The label with its matched characters wrapped in <mark>. */
 function Highlighted({ text, positions }: { text: string; positions: number[] }): React.JSX.Element {
@@ -168,7 +182,7 @@ export function CommandPalette<C extends PaletteCommand>(props: {
                 className={`palette-icon palette-icon-${item.kind}${item.icon ? ' palette-icon-theme' : ''}`}
                 aria-hidden="true"
               >
-                {item.icon ?? KIND_ICON[item.kind]}
+                <KindIcon kind={item.kind} emoji={item.icon} />
               </span>
               <span className="palette-label">
                 <Highlighted text={item.label} positions={positions} />

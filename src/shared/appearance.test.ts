@@ -10,6 +10,6 @@ describe('resolveAppearance', () => {
   })
 
   it('has a page background for each resolved appearance', () => {
-    expect(APPEARANCE_BACKGROUND).toEqual({ dark: '#1e1e1e', light: '#ffffff' })
+    expect(APPEARANCE_BACKGROUND).toEqual({ dark: '#262624', light: '#faf9f5' })
   })
 })
