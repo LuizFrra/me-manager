@@ -14,6 +14,11 @@ export interface TerminalViewProps {
   sessionKey: string
   /** Applied live: the terminal refits and the pty is resized to the new rows and columns. */
   fontSize: number
+  /**
+   * A dialog or overlay is open: no key reaches the terminal (App also makes it inert, but a key event already on
+   * its way, or focus that never left, must not type into Claude behind the modal).
+   */
+  modalOpen?: boolean
 }
 
 // OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
@@ -22,8 +27,13 @@ const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboar
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
 const RESIZE_SETTLE_MS = 100
 
-export function TerminalView({ api, sessionKey, fontSize }: TerminalViewProps): React.JSX.Element {
+export function TerminalView({ api, sessionKey, fontSize, modalOpen = false }: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
+  // Read by the key handler, which is attached once with the terminal.
+  const modalOpenRef = useRef(modalOpen)
+  useEffect(() => {
+    modalOpenRef.current = modalOpen
+  }, [modalOpen])
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   // The size to create the terminal with; later changes are applied by the effect below, without recreating it.
@@ -47,6 +57,7 @@ export function TerminalView({ api, sessionKey, fontSize }: TerminalViewProps): 
     // Linux has no app menu (it would steal Ctrl+C), so handle Ctrl+Shift+C/V here.
     // On macOS the Edit menu handles Cmd+C/V.
     term.attachCustomKeyEventHandler((e) => {
+      if (modalOpenRef.current) return false
       // App shortcuts (palette, panel, …) are handled by App's window listener: never send them to tmux.
       if (matchShortcut(e)) return false
       if (isMac || e.type !== 'keydown' || !(e.ctrlKey && e.shiftKey)) return true

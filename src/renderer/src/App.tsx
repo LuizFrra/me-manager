@@ -52,6 +52,8 @@ import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from
 import { allTargets, visibleTargets } from './lib/targets'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
+import { placeBack, placeOf } from './lib/placeBack'
+import { effectiveSessionFlags } from './lib/sessionFlags'
 import { sessionState } from './lib/sessionState'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
@@ -73,7 +75,7 @@ interface NameAsk {
   note?: string
 }
 
-type Dialog =
+type DialogBody =
   | ({ kind: 'name'; onSubmit: (name: string) => Promise<void> } & NameAsk)
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
@@ -93,6 +95,12 @@ type Dialog =
       contents?: string
       onConfirm: () => Promise<void>
     }
+
+/**
+ * A dialog as shown: `id` tells this one apart from a later dialog of the same kind, so an action that finishes in
+ * the background closes (or follows up on) only the dialog it was started from, never one opened since.
+ */
+type Dialog = DialogBody & { id: number }
 
 type AppAction =
   | { type: 'open'; target: Target }
@@ -136,9 +144,63 @@ export const USAGE_POLL_MS = 10_000
 
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
 
+/** What "copy …" offers for `target`: its branch, path, attach command. */
+function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | null): CopyEntry[] {
+  const found = target && resolveTarget(state, target)
+  return found ? copyEntries(found, tmuxSocket) : []
+}
+
+/** The palette's entries: every task and folder, then the actions that apply to the selection. */
+function buildPaletteCommands(
+  state: AppState,
+  selected: Target | null,
+  ghAvailable: boolean,
+  tmuxSocket: string | null,
+): AppCommand[] {
+  const commands: AppCommand[] = allTargets(state).map((entry) => ({
+    id: `target:${targetKey(entry.target)}`,
+    kind: entry.kind,
+    label: entry.label,
+    icon: entry.icon,
+    action: { type: 'open', target: entry.target },
+  }))
+  const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
+    commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
+  }
+  action('New theme', 'newTheme')
+  if (selected) {
+    action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
+    action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
+    action('New shell tab', 'newTab', shortcutLabel('newTab'))
+    action('Restart Claude', 'restartClaude')
+    action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
+    action('Reveal in file manager', 'fileManager')
+    action('Toggle status bar', 'toggleStatusBar')
+    action('Customize theme…', 'customizeTheme')
+  }
+  if (selected?.taskId) {
+    action('Rename current task', 'renameTask')
+    action('Git: Commit all…', 'commit')
+    action('Git: Push branch', 'push')
+    action(ghAvailable ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
+    action('Git: Update from base', 'update')
+  }
+  for (const { kind, label } of copiesOf(state, selected, tmuxSocket))
+    commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
+  action('Show usage', 'usage', shortcutLabel('usage'))
+  action('Open settings', 'settings', shortcutLabel('settings'))
+  action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
+  return commands
+}
+
 export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [prereqs, setPrereqs] = useState<PrereqResult | null>(null)
   const [state, setState] = useState<AppState>(EMPTY)
+  // Mirrors `state`, for an "Undo" that runs later and must see the themes as they are by then.
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
   // Whether the first getState has answered: until then "no themes" may just mean "not loaded yet".
   const [stateLoaded, setStateLoaded] = useState(false)
   const [status, setStatus] = useState<LiveStatus>({ running: [], missing: [], activity: {} })
@@ -148,9 +210,21 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [sessionEnded, setSessionEnded] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
+  // Mirrors `dialog` synchronously, for actions that finish after an await.
+  const dialogRef = useRef<Dialog | null>(null)
+  // Counts every dialog or overlay opened; a dialog's id is the count when it opened. While it equals a dialog's
+  // id, nothing else has been opened since that dialog.
+  const modalEpoch = useRef(0)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
+  // Whether the palette, help or usage overlay is open, for actions that finish after an await.
+  const overlayOpen = paletteOpen || helpOpen || usageOpen
+  const overlayOpenRef = useRef(false)
+  useEffect(() => {
+    overlayOpenRef.current = overlayOpen
+    if (overlayOpen) modalEpoch.current++
+  }, [overlayOpen])
   // The selected target's usage, tagged with its targetKey so another target's numbers never show.
   const [usage, setUsage] = useState<{ key: string; summary: UsageSummary } | null>(null)
   // gh is assumed missing until main says otherwise; the PR button then explains how to install it.
@@ -186,6 +260,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     selectedRef.current = target
     setSelected(target)
     setPanel((target && panelsRef.current.get(targetKey(target))) || DEFAULT_PANEL)
+  }
+
+  /** Shows a dialog in place of the current one; returns its id. */
+  const openDialog = (body: DialogBody): number => {
+    const id = ++modalEpoch.current
+    const next: Dialog = { ...body, id }
+    dialogRef.current = next
+    setDialog(next)
+    return id
+  }
+  /** Closes dialog `id` if it is still the one shown; true if it was. */
+  const closeDialog = (id: number): boolean => {
+    if (dialogRef.current?.id !== id) return false
+    dialogRef.current = null
+    setDialog(null)
+    return true
   }
 
   const updatePanel = useCallback((patch: Partial<PanelEntry>) => {
@@ -454,17 +544,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
   }
 
-  const askName = (ask: NameAsk, submit: (name: string) => Promise<AppState>): void =>
-    setDialog({
+  const askName = (ask: NameAsk, submit: (name: string) => Promise<AppState>): void => {
+    const id = openDialog({
       kind: 'name',
       ...ask,
       onSubmit: async (name) => {
         const next = await attempt(() => submit(name))
         if (!next) return
         setState(next)
-        setDialog(null)
+        closeDialog(id)
       },
     })
+  }
 
   const newTheme = (): void =>
     askName({ title: 'New theme', placeholder: 'e.g. Client X' }, (name) => api.createTheme(name))
@@ -486,7 +577,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       ...(theme.color ? { color: theme.color } : {}),
       ...(theme.icon ? { icon: theme.icon } : {}),
     }
-    setDialog({ kind: 'themeStyle', themeId, themeName: theme.name, style })
+    openDialog({ kind: 'themeStyle', themeId, themeName: theme.name, style })
   }
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
@@ -502,15 +593,21 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const cloneRepo = (themeId: string): void => {
     const theme = state.themes.find((t) => t.id === themeId)
-    if (theme) setDialog({ kind: 'clone', themeId, themeName: theme.name })
+    if (theme) openDialog({ kind: 'clone', themeId, themeName: theme.name })
   }
 
   /** Rejects (to the dialog, which shows why) when the clone fails. */
-  const doClone = async (themeId: string, url: string, parentDir: string, name: string): Promise<void> => {
+  const doClone = async (
+    dialogId: number,
+    themeId: string,
+    url: string,
+    parentDir: string,
+    name: string,
+  ): Promise<void> => {
     const next = await api.cloneRepo(themeId, url, parentDir, name)
     setState(next)
     setSettings((s) => ({ ...s, cloneDirectory: parentDir })) // main saved it too: the default next time
-    setDialog(null)
+    closeDialog(dialogId)
     setCollapsed((prev) => {
       if (!prev.has(themeId)) return prev
       const open = new Set(prev)
@@ -528,19 +625,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const withTheme = (title: string, then: (theme: { id: string; name: string }) => void): void => {
     const { themes } = state
     if (themes.length === 1) return then(themes[0])
+    // Dismissed before it answered: nothing follows, so it can't replace a dialog opened since.
     if (themes.length > 1) {
-      setDialog({
+      const id = openDialog({
         kind: 'chooseTheme',
         title,
         onChoose: (themeId) => {
-          setDialog(null)
+          if (!closeDialog(id)) return
           const theme = themes.find((t) => t.id === themeId)
           if (theme) then(theme)
         },
       })
       return
     }
-    setDialog({
+    const id = openDialog({
       kind: 'name',
       title: 'New theme',
       placeholder: 'e.g. Client X',
@@ -550,7 +648,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         const next = await attempt(() => api.createTheme(name))
         if (!next) return
         setState(next)
-        setDialog(null)
+        if (!closeDialog(id)) return
         const theme = next.themes.find((t) => t.name === name) ?? next.themes.at(-1)
         if (theme) then(theme)
       },
@@ -558,19 +656,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }
   const startAddRepo = (): void => withTheme('Add a repository', (theme) => void addPath(theme.id, api.addRepo))
   const startClone = (): void =>
-    withTheme('Clone a repository', (theme) => setDialog({ kind: 'clone', themeId: theme.id, themeName: theme.name }))
+    withTheme('Clone a repository', (theme) => openDialog({ kind: 'clone', themeId: theme.id, themeName: theme.name }))
 
   const removeTask = async (themeId: string, repoId: string, taskId: string, taskName: string): Promise<void> => {
     const work = await attempt(() => api.checkTaskRemoval(themeId, repoId, taskId))
     if (!work) return
+    let dialogId: number | undefined
     const doRemove = async (deleteBranch: boolean): Promise<void> => {
       const next = await update(() => api.removeTask(themeId, repoId, taskId, deleteBranch))
       if (!next) return
-      setDialog(null)
+      if (dialogId !== undefined) closeDialog(dialogId)
       clearSelectionIf((t) => t.taskId === taskId)
       refresh()
     }
-    if (hasUnsavedWork(work)) setDialog({ kind: 'removeTask', taskName, work, onConfirm: doRemove })
+    if (hasUnsavedWork(work)) dialogId = openDialog({ kind: 'removeTask', taskName, work, onConfirm: doRemove })
     else await doRemove(true)
   }
 
@@ -579,18 +678,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
    * dialog, then offered back for ACTION_MS by an "Undo" toast that restores it as it was, in the same place.
    */
   const confirmRemoval = (
-    ask: Omit<Extract<Dialog, { kind: 'confirmRemove' }>, 'kind' | 'onConfirm'>,
+    ask: Omit<Extract<DialogBody, { kind: 'confirmRemove' }>, 'kind' | 'onConfirm'>,
     remove: () => Promise<AppState>,
     restore: () => Promise<AppState>,
     clear: (t: Target) => boolean,
   ): void => {
     const label = `${ask.what === 'repo' ? 'repository' : ask.what} “${ask.name}”`
-    setDialog({
+    const id = openDialog({
       kind: 'confirmRemove',
       ...ask,
       onConfirm: async () => {
         if (!(await update(remove))) return
-        setDialog(null)
+        closeDialog(id)
         clearSelectionIf(clear)
         refresh()
         showInfo(`Removed ${label}`, {
@@ -617,10 +716,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       repos ? plural(repos, 'repository', 'repositories') : '',
       folders ? plural(folders, 'folder') : '',
     ].filter(Boolean)
+    // Put back next to its neighbours as they are at undo time (other removals may have been undone meanwhile).
+    const place = placeOf(
+      state.themes.map((t) => t.id),
+      index,
+    )
     confirmRemoval(
       { what: 'theme', name: theme.name, contents: contents.join(' and ') || undefined },
       () => api.removeTheme(themeId),
-      () => api.restoreTheme(theme, index),
+      () =>
+        api.restoreTheme(
+          theme,
+          placeBack(
+            stateRef.current.themes.map((t) => t.id),
+            place,
+          ),
+        ),
       (t) => t.themeId === themeId,
     )
   }
@@ -631,28 +742,56 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const item = theme?.items[index]
     if (!theme || !item) return
     if (item.kind === 'repo' && item.tasks.length > 0) return showError(`Remove the tasks in "${item.name}" first`)
+    const place = placeOf(
+      theme.items.map((i) => i.id),
+      index,
+    )
     confirmRemoval(
       { what: item.kind, name: item.name, themeName: theme.name, path: item.path },
       () => api.removeItem(themeId, itemId),
-      () => api.restoreItem(themeId, item, index),
+      () => {
+        const now = stateRef.current.themes.find((t) => t.id === themeId)
+        return api.restoreItem(
+          themeId,
+          item,
+          now
+            ? placeBack(
+                now.items.map((i) => i.id),
+                place,
+              )
+            : index,
+        )
+      },
       (t) => t.itemId === itemId,
     )
   }
 
-  const openSettings = (): void => setDialog({ kind: 'settings' })
+  const openSettings = (): void => void openDialog({ kind: 'settings' })
 
   const newTask = (themeId: string, repoId: string): void => {
     const repo = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
-    if (repo?.kind === 'repo') setDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name })
+    if (repo?.kind === 'repo') openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name })
   }
 
-  const createTask = async (themeId: string, repoId: string, name: string, options: NewTaskOptions): Promise<void> => {
+  /**
+   * Creates the task and opens it, unless another dialog or overlay was opened while it was being created (the
+   * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). Dismissing the
+   * dialog alone doesn't count: the task they asked for still opens.
+   */
+  const createTask = async (
+    dialogId: number,
+    themeId: string,
+    repoId: string,
+    name: string,
+    options: NewTaskOptions,
+  ): Promise<void> => {
     const next = await update(() => api.createTask(themeId, repoId, name, options))
     if (!next) return
-    setDialog(null)
+    const movedOn = modalEpoch.current !== dialogId
+    closeDialog(dialogId)
     const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
     const task = repo?.kind === 'repo' ? repo.tasks.find((t) => t.name === name) : undefined
-    if (task) void open({ themeId, itemId: repoId, taskId: task.id })
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
   }
 
   // Terminal zoom applies at once and is saved debounced; a size still waiting is saved if the App unmounts.
@@ -723,13 +862,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const commitAll = (): void => {
     const found = taskOfSelection()
-    if (found) setDialog({ kind: 'commit', target: found.target, taskName: found.task.name, branch: found.task.branch })
+    if (found)
+      openDialog({ kind: 'commit', target: found.target, taskName: found.task.name, branch: found.task.branch })
   }
 
-  const doCommit = async (target: Target, message: string): Promise<void> => {
+  const doCommit = async (dialogId: number, target: Target, message: string): Promise<void> => {
     const result = await gitAction(target, 'commit', () => api.commitAll(target, message))
     if (!result) return
-    setDialog(null)
+    closeDialog(dialogId)
     showInfo(`Committed ${plural(result.files, 'file')}`)
   }
 
@@ -760,16 +900,23 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (result.kind === 'updated') {
       const verb = result.strategy === 'rebase' ? `Rebased onto ${result.baseRef}` : `Merged ${result.baseRef}`
       showInfo(`${verb} (${plural(result.commits, 'new commit')})`)
-    } else setDialog({ kind: 'conflicts', target, branch: task.branch, result })
+    } else if (dialogRef.current || overlayOpenRef.current) {
+      // Something was opened while it ran: say so rather than replace it. Running it again shows the dialog.
+      showError(
+        `Updating ${task.branch} stopped on conflicts in ${plural(result.files.length, 'file')} and was undone; ` +
+          'run "Update from base" again to have Claude resolve them',
+      )
+    } else openDialog({ kind: 'conflicts', target, branch: task.branch, result })
   }
 
   const askClaudeToResolve = async (
+    dialogId: number,
     target: Target,
     result: Extract<UpdateResult, { kind: 'conflict' }>,
   ): Promise<void> => {
     const tabs = await attempt(() => api.askClaudeToResolve(target, result.strategy, result.files))
     if (!tabs) return
-    setDialog(null)
+    closeDialog(dialogId)
     if (sameTarget(selectedRef.current, target)) setTabs(tabs)
     showInfo('Asked Claude to resolve the conflicts')
   }
@@ -844,42 +991,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [api, selected],
   )
 
-  const paletteCommands = (): AppCommand[] => {
-    const commands: AppCommand[] = allTargets(state).map((entry) => ({
-      id: `target:${targetKey(entry.target)}`,
-      kind: entry.kind,
-      label: entry.label,
-      icon: entry.icon,
-      action: { type: 'open', target: entry.target },
-    }))
-    const action = (label: string, type: Exclude<AppAction['type'], 'open' | 'copy'>, shortcut?: string): void => {
-      commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
-    }
-    action('New theme', 'newTheme')
-    if (selected) {
-      action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
-      action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
-      action('New shell tab', 'newTab', shortcutLabel('newTab'))
-      action('Restart Claude', 'restartClaude')
-      action('Open in editor', 'openEditor', shortcutLabel('openEditor'))
-      action('Reveal in file manager', 'fileManager')
-      action('Toggle status bar', 'toggleStatusBar')
-      action('Customize theme…', 'customizeTheme')
-    }
-    if (selected?.taskId) {
-      action('Rename current task', 'renameTask')
-      action('Git: Commit all…', 'commit')
-      action('Git: Push branch', 'push')
-      action(gitTools.gh ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
-      action('Git: Update from base', 'update')
-    }
-    for (const { kind, label } of copiesFor(selected))
-      commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
-    action('Show usage', 'usage', shortcutLabel('usage'))
-    action('Open settings', 'settings', shortcutLabel('settings'))
-    action('Show keyboard shortcuts', 'help', shortcutLabel('help'))
-    return commands
-  }
+  // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
+  // to 50k files) whenever its commands change.
+  const paletteCommands = useMemo(
+    () => (paletteOpen ? buildPaletteCommands(state, selected, gitTools.gh, tmuxSocket) : []),
+    [paletteOpen, state, selected, gitTools.gh, tmuxSocket],
+  )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
   const toggleStatusBar = (): void => {
@@ -894,11 +1011,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     )
   }
 
-  const saveSettings = async (next: Partial<Settings>): Promise<void> => {
+  const saveSettings = async (dialogId: number, next: Partial<Settings>): Promise<void> => {
     const saved = await attempt(() => api.updateSettings(next))
     if (!saved) return
     setSettings(saved)
-    setDialog(null)
+    closeDialog(dialogId)
     showInfo('Settings saved')
   }
 
@@ -906,20 +1023,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const task = resolveTarget(state, target)?.task
     if (!task || !target.taskId) return
     const { themeId, itemId, taskId } = target
-    setDialog({
+    const id = openDialog({
       kind: 'notes',
       taskName: task.name,
       notes: task.notes ?? '',
       onSave: async (notes) => {
-        if (await update(() => api.setTaskNotes(themeId, itemId, taskId, notes))) setDialog(null)
+        if (await update(() => api.setTaskNotes(themeId, itemId, taskId, notes))) closeDialog(id)
       },
     })
   }
 
-  const copiesFor = (target: Target | null): CopyEntry[] => {
-    const found = target && resolveTarget(state, target)
-    return found ? copyEntries(found, tmuxSocket) : []
-  }
+  const copiesFor = (target: Target | null): CopyEntry[] => copiesOf(state, target, tmuxSocket)
 
   const copy = async (entry: CopyEntry): Promise<void> => {
     try {
@@ -969,12 +1083,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   if (prereqs && !prereqs.ok) return <PrereqScreen result={prereqs} onRetry={checkPrereqs} />
 
+  // While a dialog or overlay is up, everything behind it is inert: Tab and Shift+Tab can't leave the modal for the
+  // sidebar or the terminal (whose textarea would send keys, Escape included, to Claude), and clicks don't land
+  // there either. The terminal also drops keys itself meanwhile.
+  const modalOpen = dialog !== null || overlayOpen
+
   const header = selected ? describeTarget(state, selected) : null
   const selectedTask = selected ? resolveTarget(state, selected)?.task : undefined
   const item = selected
     ? state.themes.find((t) => t.id === selected.themeId)?.items.find((i) => i.id === selected.itemId)
     : undefined
   const isRepo = item?.kind === 'repo' && selected?.taskId !== undefined
+  const sessionFlags = effectiveSessionFlags(settings)
 
   return (
     <div className="app">
@@ -1002,8 +1122,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
         onOpenSettings={openSettings}
         onOpenUsage={() => setUsageOpen(true)}
+        inert={modalOpen}
       />
-      <main className="main">
+      <main className="main" inert={modalOpen}>
         {selected && header ? (
           <>
             <TaskHeader
@@ -1016,7 +1137,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
               onRevealInFileManager={() => openExternally('fileManager')}
-              sessionFlags={settings}
+              sessionFlags={sessionFlags}
               usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
               onOpenUsage={() => setUsageOpen(true)}
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
@@ -1049,7 +1170,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             />
             <div className="workspace">
               <div className="terminal-area">
-                <TerminalView api={api} sessionKey={targetKey(selected)} fontSize={settings.terminalFontSize} />
+                <TerminalView
+                  api={api}
+                  sessionKey={targetKey(selected)}
+                  fontSize={settings.terminalFontSize}
+                  modalOpen={modalOpen}
+                />
                 {sessionEnded && (
                   <div className="session-ended">
                     <p>Session ended.</p>
@@ -1100,7 +1226,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 session={sessionState(status, targetKey(selected))}
                 tabs={tabs.length}
                 todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
-                skipPermissions={settings.skipPermissions}
+                skipPermissions={sessionFlags.skipPermissions}
                 onCopyBranch={copyBranch}
                 onOpenChanges={() => updatePanel({ open: true, tab: 'changes' })}
                 onOpenUsage={() => setUsageOpen(true)}
@@ -1134,15 +1260,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           submitLabel={dialog.submitLabel}
           note={dialog.note}
           onSubmit={dialog.onSubmit}
-          onCancel={() => setDialog(null)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'newTask' && (
         <NewTaskDialog
           repoName={dialog.repoName}
           loadBranches={() => api.listBranches(dialog.themeId, dialog.repoId)}
-          onSubmit={(name, options) => createTask(dialog.themeId, dialog.repoId, name, options)}
-          onCancel={() => setDialog(null)}
+          onSubmit={(name, options) => createTask(dialog.id, dialog.themeId, dialog.repoId, name, options)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'removeTask' && (
@@ -1150,7 +1276,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           taskName={dialog.taskName}
           work={dialog.work}
           onConfirm={dialog.onConfirm}
-          onCancel={() => setDialog(null)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'clone' && (
@@ -1158,8 +1284,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           themeName={dialog.themeName}
           initialParent={settings.cloneDirectory}
           pickDirectory={() => api.pickDirectory()}
-          onClone={(url, parentDir, name) => doClone(dialog.themeId, url, parentDir, name)}
-          onCancel={() => setDialog(null)}
+          onClone={(url, parentDir, name) => doClone(dialog.id, dialog.themeId, url, parentDir, name)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'chooseTheme' && (
@@ -1167,7 +1293,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           title={dialog.title}
           themes={state.themes}
           onChoose={dialog.onChoose}
-          onCancel={() => setDialog(null)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'themeStyle' && (
@@ -1175,9 +1301,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           themeName={dialog.themeName}
           initial={dialog.style}
           onSave={async (style) => {
-            if (await update(() => api.customizeTheme(dialog.themeId, style))) setDialog(null)
+            if (await update(() => api.customizeTheme(dialog.themeId, style))) closeDialog(dialog.id)
           }}
-          onCancel={() => setDialog(null)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'confirmRemove' && (
@@ -1188,7 +1314,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           path={dialog.path}
           contents={dialog.contents}
           onConfirm={dialog.onConfirm}
-          onCancel={() => setDialog(null)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'notes' && (
@@ -1196,7 +1322,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           taskName={dialog.taskName}
           initial={dialog.notes}
           onSave={dialog.onSave}
-          onCancel={() => setDialog(null)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'commit' && (
@@ -1204,8 +1330,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           taskName={dialog.taskName}
           branch={dialog.branch}
           loadChanges={() => api.listChanges(dialog.target, 'uncommitted')}
-          onCommit={(message) => doCommit(dialog.target, message)}
-          onCancel={() => setDialog(null)}
+          onCommit={(message) => doCommit(dialog.id, dialog.target, message)}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'conflicts' && (
@@ -1214,16 +1340,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           baseRef={dialog.result.baseRef}
           strategy={dialog.result.strategy}
           files={dialog.result.files}
-          onAskClaude={() => askClaudeToResolve(dialog.target, dialog.result)}
-          onClose={() => setDialog(null)}
+          onAskClaude={() => askClaudeToResolve(dialog.id, dialog.target, dialog.result)}
+          onClose={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'settings' && (
-        <SettingsDialog settings={settings} onSave={saveSettings} onCancel={() => setDialog(null)} />
+        <SettingsDialog
+          settings={settings}
+          onSave={(next) => saveSettings(dialog.id, next)}
+          onCancel={() => closeDialog(dialog.id)}
+        />
       )}
       {paletteOpen && (
         <CommandPalette
-          commands={paletteCommands()}
+          commands={paletteCommands}
           onRun={runCommand}
           loadFiles={loadPaletteFiles}
           onOpenFile={openFileInPanel}

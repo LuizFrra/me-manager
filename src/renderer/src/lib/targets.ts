@@ -5,7 +5,7 @@ import type { SidebarFilter } from './sidebarFilter'
 export { allTargets, type TargetEntry }
 
 /**
- * The tasks and folders the sidebar shows, in order: what Mod+1..9 counts. Without a filter, entries inside a
+ * The tasks and folders the sidebar shows, in order: what Alt+1..9 (Cmd+1..9 on macOS) counts. Without a filter, entries inside a
  * collapsed theme or repo are hidden; with one, only matches show and every group is expanded.
  */
 export function visibleTargets(

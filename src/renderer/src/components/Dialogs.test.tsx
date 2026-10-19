@@ -1,7 +1,16 @@
+import { useState } from 'react'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { ConfirmRemoveDialog, RemoveTaskDialog } from './Dialogs'
+import {
+  ChooseThemeDialog,
+  CommitDialog,
+  ConfirmRemoveDialog,
+  ConflictDialog,
+  NameDialog,
+  NotesDialog,
+  RemoveTaskDialog,
+} from './Dialogs'
 
 const work = { uncommittedFiles: ['src/login.ts'], unpushedCommits: [] }
 
@@ -75,5 +84,74 @@ describe('ConfirmRemoveDialog', () => {
     )
     const dialog = screen.getByRole('alertdialog', { name: 'Remove repository my-api' })
     expect(dialog).toHaveAccessibleDescription(/The repository is removed from Client X\..*not touched\./)
+  })
+})
+
+describe('dialogs give focus back when they close', () => {
+  /** A button that opens the dialog; the dialog gets a `close` callback. */
+  function Opener({ dialog }: { dialog: (close: () => void) => React.ReactNode }): React.JSX.Element {
+    const [open, setOpen] = useState(false)
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>Open</button>
+        {open && dialog(() => setOpen(false))}
+      </>
+    )
+  }
+  const noChanges = async (): Promise<{ files: [] }> => ({ files: [] })
+
+  it.each([
+    [
+      'Name',
+      (close: () => void) => <NameDialog title="New theme" placeholder="" onSubmit={async () => {}} onCancel={close} />,
+    ],
+    ['Notes', (close: () => void) => <NotesDialog taskName="t" initial="" onSave={async () => {}} onCancel={close} />],
+    [
+      'Commit',
+      (close: () => void) => (
+        <CommitDialog
+          taskName="t"
+          branch="b"
+          loadChanges={noChanges as never}
+          onCommit={async () => {}}
+          onCancel={close}
+        />
+      ),
+    ],
+    [
+      'Confirm',
+      (close: () => void) => (
+        <ConfirmRemoveDialog kind="theme" name="Client X" onConfirm={async () => {}} onCancel={close} />
+      ),
+    ],
+    [
+      'Conflicts',
+      (close: () => void) => (
+        <ConflictDialog
+          branch="b"
+          baseRef="main"
+          strategy="rebase"
+          files={['a.ts']}
+          onAskClaude={async () => {}}
+          onClose={close}
+        />
+      ),
+    ],
+    [
+      'ChooseTheme',
+      (close: () => void) => (
+        <ChooseThemeDialog title="Pick" themes={[{ id: '1', name: 'One' }]} onChoose={close} onCancel={close} />
+      ),
+    ],
+  ])('%s: Esc closes it and focus returns to what had it before', async (_name, dialog) => {
+    const user = userEvent.setup()
+    render(<Opener dialog={dialog} />)
+    const opener = screen.getByRole('button', { name: 'Open' })
+    await user.click(opener)
+    expect(opener).not.toHaveFocus() // the dialog took it
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
   })
 })
