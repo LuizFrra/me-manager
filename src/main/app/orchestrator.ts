@@ -48,6 +48,7 @@ import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
 import { branchName, sessionName, targetKey } from '../../shared/naming'
 import { shellQuote } from '../../shared/shell'
+import { RUN_WINDOW } from '../../shared/runCommand'
 import { mapLimit } from '../concurrency'
 import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries } from '../contracts'
 import { baseBranchName } from '../git/gh'
@@ -89,6 +90,18 @@ export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
 const CLAUDE_WINDOW = 'claude'
 /** How long createTask waits for `git fetch` before branching from the last fetched refs. */
 export const FETCH_TIMEOUT_MS = 20_000
+
+/**
+ * The shell command of a `run` tab: the item's run command line, as typed, after a `$ <command>` line that shows
+ * what runs (a restart then shows where each run starts). Only the command itself is shell: in the header it is
+ * one shell-quoted word. tmux runs this with the user's shell (`default-shell -c`, which is $SHELL) in the
+ * worktree or folder, and keeps the tab open with its output once the command exits (remain-on-exit, set for that
+ * tab only: see TmuxApi.newWindow), rather than `…; exec $SHELL`, so that a stopped command reads as stopped
+ * (`#{pane_dead}`) and Restart can run it again in place (`respawn-window -k`).
+ */
+export const runWindowCommand = (command: string): string => `printf '$ %s\\n' ${shellQuote(command)}; ${command}`
+/** How long Restart waits after Ctrl-C, so a dev server can shut down (and free its port) before it runs again. */
+export const RUN_RESTART_GRACE_MS = 500
 
 /**
  * A worktree's git status is read at most this often, however fast the UI polls: each read runs a few git
@@ -179,12 +192,16 @@ function assertNotArchived(task: Task): void {
 
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
+/** Run, Restart and Stop on one session go one at a time, so two clicks never open two run tabs. */
+const runQueue = (session: string): string => `run:${session}`
 
 export interface OrchestratorOptions {
   /** Overrides FETCH_TIMEOUT_MS (for tests). */
   fetchTimeoutMs?: number
   /** The clock, in ms (for tests). */
   now?: () => number
+  /** Overrides RUN_RESTART_GRACE_MS (for tests). */
+  runGraceMs?: number
 }
 
 interface GitStatusEntry {
@@ -203,6 +220,7 @@ export class Orchestrator implements AppService {
    */
   private readonly queues = new Map<string, Promise<void>>()
   private readonly fetchTimeoutMs: number
+  private readonly runGraceMs: number
   /** Bumped by every openTarget call, so only the latest one attaches the terminal. */
   private openSeq = 0
   private readonly now: () => number
@@ -222,6 +240,7 @@ export class Orchestrator implements AppService {
   ) {
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS
     this.now = options.now ?? Date.now
+    this.runGraceMs = options.runGraceMs ?? RUN_RESTART_GRACE_MS
   }
 
   async init(): Promise<void> {
@@ -526,6 +545,11 @@ export class Orchestrator implements AppService {
     })
   }
 
+  /** The command comes from the renderer: setRunCommand checks it. It applies from the next Run or Restart. */
+  async setRunCommand(themeId: string, itemId: string, command: string): Promise<AppState> {
+    return this.exclusive(async () => this.commit(m.setRunCommand(this.state, themeId, itemId, command)))
+  }
+
   /** The item comes from the renderer: restoreItem checks it. */
   async restoreItem(themeId: string, item: Item, index?: number): Promise<AppState> {
     return this.exclusive(async () => this.commit(m.restoreItem(this.state, themeId, item, index)))
@@ -757,6 +781,84 @@ export class Orchestrator implements AppService {
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
     else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
     return this.deps.tmux.listWindows(session)
+  }
+
+  // The run command, in a `run` tab of the target's session (see runWindowCommand). Each runs on the session's run
+  // queue, against the state as it is when its turn comes.
+
+  /** The target's session and folder (refusing an archived task, like resolve) and its item. */
+  private runTarget(target: Target): { session: string; cwd: string; item: Item } {
+    const { session, cwd } = this.resolve(target)
+    return { session, cwd, item: m.getItem(this.state, target.themeId, target.itemId) }
+  }
+
+  /** Runs `op` on the target's run queue with its item's run command; refuses without one, or without a session. */
+  private withRunCommand(
+    target: Target,
+    op: (run: { session: string; cwd: string; command: string; tabs: TabInfo[] }) => Promise<void>,
+  ): Promise<TabInfo[]> {
+    return this.exclusive(
+      async () => {
+        const { session, cwd, item } = this.runTarget(target)
+        if (!item.runCommand) throw new Error(`Set a run command for “${item.name}” first`)
+        if (!(await this.deps.tmux.hasSession(session))) {
+          throw new Error(`Open the ${target.taskId ? 'task' : 'folder'} first: its session is not running`)
+        }
+        await op({ session, cwd, command: item.runCommand, tabs: await this.deps.tmux.listWindows(session) })
+        return this.deps.tmux.listWindows(session)
+      },
+      runQueue(this.resolve(target).session),
+    )
+  }
+
+  private newRunWindow(session: string, cwd: string, command: string): Promise<void> {
+    return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true })
+  }
+
+  /** Shows the run tab when there is one, running or stopped (Restart runs it again); otherwise opens one. */
+  async startRun(target: Target): Promise<TabInfo[]> {
+    return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
+      const run = tabs.find((t) => t.name === RUN_WINDOW)
+      if (run) await this.deps.tmux.selectWindow(session, run.index)
+      else await this.newRunWindow(session, cwd, command)
+    })
+  }
+
+  /**
+   * Runs the item's current command again in the run tab, and shows it: a running one gets Ctrl-C and
+   * runGraceMs to shut down first, and is killed if it is still running then (`respawn-window -k`). Opens a run
+   * tab when there is none.
+   */
+  async restartRun(target: Target): Promise<TabInfo[]> {
+    return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
+      const { tmux } = this.deps
+      let run = tabs.find((t) => t.name === RUN_WINDOW)
+      if (run && !run.dead) {
+        await tmux.sendInterrupt(session, RUN_WINDOW)
+        if (this.runGraceMs > 0) await new Promise((r) => setTimeout(r, this.runGraceMs))
+        // A run tab without remain-on-exit (made outside the app) closes when its command exits.
+        run = (await tmux.listWindows(session)).find((t) => t.name === RUN_WINDOW)
+      }
+      if (!run) return this.newRunWindow(session, cwd, command)
+      await tmux.respawnWindow(session, RUN_WINDOW, cwd, runWindowCommand(command))
+      await tmux.selectWindow(session, run.index)
+    })
+  }
+
+  /**
+   * Ctrl-C in the run tab, which stays open with the output (its process may ignore it: closing the tab kills it).
+   * Nothing to do for a stopped or missing one. Needs no run command: it may have been removed meanwhile.
+   */
+  async stopRun(target: Target): Promise<TabInfo[]> {
+    const { session } = this.resolve(target)
+    return this.exclusive(async () => {
+      this.runTarget(target) // still there, and not archived meanwhile
+      const run = (await this.deps.tmux.listWindows(session).catch(() => [] as TabInfo[])).find(
+        (t) => t.name === RUN_WINDOW,
+      )
+      if (run && !run.dead) await this.deps.tmux.sendInterrupt(session, RUN_WINDOW)
+      return this.deps.tmux.listWindows(session).catch(() => [])
+    }, runQueue(session))
   }
 
   // Transcripts. Read-only, so these skip the mutation queue.

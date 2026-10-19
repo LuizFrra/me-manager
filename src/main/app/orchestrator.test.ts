@@ -18,6 +18,8 @@ import {
   normalizeTaskOptions,
   promptArgument,
   resolvePrompt,
+  RUN_RESTART_GRACE_MS,
+  runWindowCommand,
 } from './orchestrator'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import {
@@ -1908,6 +1910,180 @@ describe('Orchestrator: sendToClaude', () => {
     // An escape could end the bracketed paste early and turn the next newline into Enter.
     expect(claudeMessage('x\u001b[201~\ny\u0000\u0007\u007f')).toBe('x?[201~\ny???')
     expect(claudeMessage('x'.repeat(MAX_CLAUDE_MESSAGE))).toHaveLength(MAX_CLAUDE_MESSAGE)
+  })
+})
+
+describe('Orchestrator: run command', () => {
+  const SESSION = 'mmt_client-x_my-api_fix'
+  async function withTask(): Promise<Ctx & { target: Target; worktree: string }> {
+    const ctx = await setup()
+    const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
+    // No wait between Ctrl-C and the restart, unless a test asks for it.
+    const orch = new Orchestrator(ctx.deps, { runGraceMs: 0 })
+    await orch.init()
+    await orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    ctx.tmux.calls = []
+    const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
+    return { ...ctx, orch, target, worktree: task.worktreePath }
+  }
+  const runWindow = (ctx: Ctx): { name: string; command?: string; dead?: true } | undefined =>
+    ctx.tmux.sessions.get(SESSION)?.windows.find((w) => w.name === 'run')
+
+  it('saves a repo or folder run command, trimmed, and removes it when empty', async () => {
+    const ctx = await setup()
+    const s = await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, '  pnpm dev  ')
+    expect(s.themes[0].items[0].runCommand).toBe('pnpm dev')
+    expect(ctx.store.saved.at(-1)?.themes[0].items[0].runCommand).toBe('pnpm dev')
+    const folderId = (await ctx.orch.addFolder(ctx.themeId, '/docs/site')).themes[0].items[1].id
+    expect((await ctx.orch.setRunCommand(ctx.themeId, folderId, 'hugo server')).themes[0].items[1].runCommand).toBe(
+      'hugo server',
+    )
+    expect((await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, '')).themes[0].items[0]).not.toHaveProperty(
+      'runCommand',
+    )
+    await expect(ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev\nrm -rf /')).rejects.toThrow(
+      'The run command must be one line of text',
+    )
+  })
+
+  it("starts the repo's command in a run tab of the task's session, in its worktree, kept open when it exits", async () => {
+    const ctx = await withTask()
+    const tabs = await ctx.orch.startRun(ctx.target)
+    expect(ctx.tmux.calls).toEqual([
+      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+    ])
+    expect(tabs).toEqual([
+      { index: 0, name: 'claude', active: false },
+      { index: 1, name: 'run', active: true },
+    ])
+  })
+
+  it('focuses the run tab when there is one, running or not, instead of starting a second', async () => {
+    const ctx = await withTask()
+    await ctx.orch.startRun(ctx.target)
+    await ctx.orch.selectTab(ctx.target, 0)
+    let tabs = await ctx.orch.startRun(ctx.target)
+    expect(tabs.map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['run', true],
+    ])
+    await ctx.orch.stopRun(ctx.target) // now dead: Run still only shows it (Restart runs it again)
+    await ctx.orch.selectTab(ctx.target, 0)
+    tabs = await ctx.orch.startRun(ctx.target)
+    expect(tabs.find((t) => t.active)).toEqual({ index: 1, name: 'run', active: true, dead: true })
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newWindow') || c.startsWith('respawn'))).toHaveLength(1)
+  })
+
+  it('starts one run tab when Run is clicked twice at once', async () => {
+    const ctx = await withTask()
+    await Promise.all([ctx.orch.startRun(ctx.target), ctx.orch.startRun(ctx.target)])
+    expect(ctx.tmux.sessions.get(SESSION)?.windows.map((w) => w.name)).toEqual(['claude', 'run'])
+  })
+
+  it('runs a folder command in the folder', async () => {
+    const ctx = await withTask()
+    const folderId = (await ctx.orch.addFolder(ctx.themeId, '/docs/site')).themes[0].items[1].id
+    await ctx.orch.setRunCommand(ctx.themeId, folderId, 'hugo server')
+    const folder = { themeId: ctx.themeId, itemId: folderId }
+    await ctx.orch.openTarget(folder)
+    await ctx.orch.startRun(folder)
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow mmf_client-x_site run [remain-on-exit] in /docs/site: ${runWindowCommand('hugo server')}`,
+    )
+  })
+
+  it('refuses without a run command or a running session, starting nothing', async () => {
+    const ctx = await withTask()
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, '')
+    await expect(ctx.orch.startRun(ctx.target)).rejects.toThrow('Set a run command for “my-api” first')
+    await expect(ctx.orch.restartRun(ctx.target)).rejects.toThrow('Set a run command for “my-api” first')
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    ctx.tmux.sessions.clear()
+    await expect(ctx.orch.startRun(ctx.target)).rejects.toThrow('Open the task first: its session is not running')
+    expect(ctx.tmux.calls).toEqual([])
+  })
+
+  it('restarts a running command: Ctrl-C, a short wait, then the current command in the same tab', async () => {
+    const ctx = await withTask()
+    await ctx.orch.startRun(ctx.target)
+    ctx.tmux.interruptEffect.set(`${SESSION}:run`, 'ignore') // still running after Ctrl-C: respawn -k kills it
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev -- --port 4000') // edited meanwhile
+    await ctx.orch.selectTab(ctx.target, 0)
+    ctx.tmux.calls = []
+    const tabs = await ctx.orch.restartRun(ctx.target)
+    expect(ctx.tmux.calls).toEqual([
+      `sendInterrupt ${SESSION} run`,
+      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev -- --port 4000')}`,
+    ])
+    expect(tabs.find((t) => t.active)).toEqual({ index: 1, name: 'run', active: true })
+  })
+
+  it('waits RUN_RESTART_GRACE_MS between Ctrl-C and the restart by default', async () => {
+    const ctx = await withTask()
+    await ctx.orch.startRun(ctx.target)
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    vi.useFakeTimers()
+    try {
+      const restart = orch.restartRun(ctx.target)
+      await vi.advanceTimersByTimeAsync(RUN_RESTART_GRACE_MS - 1)
+      expect(ctx.tmux.calls.filter((c) => c.startsWith('respawn'))).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await restart
+      expect(ctx.tmux.calls.filter((c) => c.startsWith('respawn'))).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(RUN_RESTART_GRACE_MS).toBe(500)
+  })
+
+  it('restarts a stopped command without Ctrl-C, and starts one when there is no run tab', async () => {
+    const ctx = await withTask()
+    await ctx.orch.startRun(ctx.target)
+    await ctx.orch.stopRun(ctx.target)
+    expect(runWindow(ctx)?.dead).toBe(true)
+    ctx.tmux.calls = []
+    await ctx.orch.restartRun(ctx.target)
+    expect(ctx.tmux.calls).toEqual([
+      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+    ])
+    expect(runWindow(ctx)?.dead).toBeUndefined()
+    await ctx.orch.closeTab(ctx.target, 1)
+    ctx.tmux.calls = []
+    await ctx.orch.restartRun(ctx.target)
+    expect(ctx.tmux.calls).toEqual([
+      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+    ])
+  })
+
+  it('stops a running command with Ctrl-C, keeping its tab, and leaves a stopped or missing one alone', async () => {
+    const ctx = await withTask()
+    expect(await ctx.orch.stopRun(ctx.target)).toEqual([{ index: 0, name: 'claude', active: true }])
+    await ctx.orch.startRun(ctx.target)
+    const tabs = await ctx.orch.stopRun(ctx.target)
+    expect(tabs.find((t) => t.name === 'run')).toEqual({ index: 1, name: 'run', active: true, dead: true })
+    await ctx.orch.stopRun(ctx.target)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('sendInterrupt'))).toHaveLength(1)
+    // Stopping needs no run command: it may have been removed while the tab ran.
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, '')
+    await ctx.orch.restartRun(ctx.target).catch(() => {})
+    await expect(ctx.orch.stopRun(ctx.target)).resolves.toHaveLength(2)
+  })
+
+  it('never touches an archived task', async () => {
+    const ctx = await withTask()
+    await ctx.orch.archiveTask(ctx.themeId, ctx.repoId, ctx.target.taskId!)
+    ctx.tmux.calls = []
+    for (const call of [ctx.orch.startRun, ctx.orch.restartRun, ctx.orch.stopRun])
+      await expect(call.call(ctx.orch, ctx.target)).rejects.toThrow('"fix" is archived: restore it first')
+    expect(ctx.tmux.calls).toEqual([])
+  })
+
+  it('runs the command with the shell after printing it, quoted, so only the command itself is shell', () => {
+    const run = (command: string): string => execFileSync('sh', ['-c', runWindowCommand(command)], { encoding: 'utf8' })
+    expect(run('echo $((1 + 1))')).toBe('$ echo $((1 + 1))\n2\n')
+    expect(run(`printf '%s\\n' "it's" ok`)).toBe(`$ printf '%s\\n' "it's" ok\nit's\nok\n`)
+    expect(run('echo `echo hi` $(echo there) %s')).toBe('$ echo `echo hi` $(echo there) %s\nhi there %s\n')
   })
 })
 
