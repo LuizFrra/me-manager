@@ -396,6 +396,7 @@ button:disabled {
 .overlay {
   position: fixed;
   inset: 0;
+  z-index: 10; /* above the splitters and the floating selection bar */
   background: #0008;
   display: flex;
   align-items: center;
@@ -426,7 +427,8 @@ button:disabled {
   overflow-y: auto;
   font-family: monospace;
 }
-.dialog input[aria-label='Name'] {
+.dialog input[aria-label='Name'],
+.dialog-field input:not([type]) {
   padding: 6px 8px;
   background: var(--bg);
   color: var(--text);
@@ -544,7 +546,8 @@ button:disabled {
 }
 .dialog-field select:focus,
 .dialog-field textarea:focus,
-.dialog input[aria-label='Name']:focus {
+.dialog input[aria-label='Name']:focus,
+.dialog-field input:not([type]):focus {
   border-color: var(--accent);
   outline: none;
 }
