@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
-import { parseWindowActivity, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
+import { parseWindowActivity, tidyCapture, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
 
 const hasTmux = await run('tmux', ['-V']).then(
   () => true,
@@ -194,6 +194,45 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmt_copy_x_y')
   })
 
+  it("captures a tab's whole scrollback as plain text, wrapped lines joined", async () => {
+    await svc.newSession('mmt_hist_x_y', cwd, 'claude', 'sh')
+    // More lines than the screen has rows, one far wider than the default 80 columns, and colours.
+    const script = [
+      "i=1; while [ $i -le 400 ]; do printf 'line %03d\\n' $i; i=$((i+1)); done",
+      "printf '%0250d\\n' 7",
+      "printf 'tail   \\n\\033[1;31mred\\033[0m done\\n'",
+      'exec cat',
+    ].join('; ')
+    await svc.newWindow('mmt_hist_x_y', cwd, 'shell', script)
+    await svc.newWindow('mmt_hist_x_y', cwd, '9', 'sh') // a window *named* 9, at index 2
+    let text = ''
+    for (let i = 0; i < 50 && !text.includes('red done'); i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      text = (await svc.captureHistory('mmt_hist_x_y', 1, 1024 * 1024)).text
+    }
+    const lines = text.split('\n')
+    expect(lines.pop()).toBe('') // ends with one newline: trailing blank lines are trimmed
+    const numbered = lines.filter((l) => l.startsWith('line '))
+    expect(numbered).toEqual(Array.from({ length: 400 }, (_, i) => `line ${String(i + 1).padStart(3, '0')}`))
+    expect(lines).toContain(`${'0'.repeat(249)}7`) // one line, not four 80-column rows
+    expect(lines.slice(-2)).toEqual(['tail', 'red done']) // trailing spaces trimmed, no colour codes
+    expect(text).not.toMatch(/\x1b/) // eslint-disable-line no-control-regex
+    await expect(svc.captureHistory('mmt_hist_x_y', 1, 1024 * 1024)).resolves.toMatchObject({ truncated: false })
+
+    // Over the cap: the most recent whole lines.
+    const cut = await svc.captureHistory('mmt_hist_x_y', 1, 600)
+    expect(cut.truncated).toBe(true)
+    expect(Buffer.byteLength(cut.text)).toBeLessThanOrEqual(600)
+    expect(cut.text.endsWith('tail\nred done\n')).toBe(true)
+    expect(cut.text.split('\n')[0]).toMatch(/^line \d{3}$/)
+
+    // Exact targets only: no prefix-matched session, no window index 9 even though a window is named 9.
+    await expect(svc.captureHistory('mmt_hist_x', 1, 1024)).rejects.toThrow()
+    await expect(svc.captureHistory('mmt_hist_x_y', 9, 1024)).rejects.toThrow(/No tab 9/)
+    await expect(svc.captureHistory('mmt_hist_x_y', 2, 1024)).resolves.toMatchObject({ truncated: false })
+    await svc.killSession('mmt_hist_x_y')
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)
@@ -227,6 +266,15 @@ describe('TmuxService timeouts', () => {
     } finally {
       process.env.PATH = savedPath
     }
+  })
+})
+
+describe('tidyCapture', () => {
+  it('trims trailing spaces and trailing blank lines, and ends with one newline', () => {
+    expect(tidyCapture('a  \n b\t\n\n  \n\n')).toBe('a\n b\n')
+    expect(tidyCapture('\n\nfirst\n\nlast')).toBe('\n\nfirst\n\nlast\n') // leading and inner blanks stay
+    expect(tidyCapture('  \n\n')).toBe('')
+    expect(tidyCapture('')).toBe('')
   })
 })
 

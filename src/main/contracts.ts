@@ -102,6 +102,12 @@ export interface TmuxApi {
   /** The visible text of a window's active pane (`capture-pane -p`), or null when there is no such window. */
   capturePane(session: string, windowName: string): Promise<string | null>
   /**
+   * Window `index`'s active pane as plain text: its whole scrollback and screen (`capture-pane -p -J -S - -E -`),
+   * wrapped lines joined, no escape sequences, trailing spaces and blank lines trimmed (see tidyCapture). Over
+   * `maxBytes`, only its most recent whole lines, with `truncated` set. Rejects when there is no such window.
+   */
+  captureHistory(session: string, index: number, maxBytes: number): Promise<{ text: string; truncated: boolean }>
+  /**
    * Pastes `text` literally into a window's active pane (through a tmux paste buffer, so any length works), then
    * presses Enter.
    */
