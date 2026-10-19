@@ -1922,6 +1922,7 @@ describe('App usage', () => {
       const toast = await screen.findByText(
         "Today's budget is used up: $10.00 of $10.00 daily budget (all tasks and folders)",
       )
+      expect(toast.closest('.toast')).toHaveClass('toast-warning') // ⚠, not the ✓ of a confirmation
       await user.click(within(toast.closest('.toast') as HTMLElement).getByRole('button', { name: 'Usage' }))
       expect(usageDialog()).toBeInTheDocument()
     })

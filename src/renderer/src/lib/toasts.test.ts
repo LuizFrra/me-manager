@@ -31,6 +31,14 @@ describe('useToasts', () => {
     expect(result.current.toasts.map((t) => t.kind)).toEqual(['error'])
   })
 
+  it('marks a warning toast, and only that one', () => {
+    const { result } = renderHook(() => useToasts())
+    act(() => result.current.showInfo('Copied branch name'))
+    expect(result.current.toasts[0].warning).toBeUndefined()
+    act(() => result.current.showInfo('Budget reached', { warning: true }))
+    expect(result.current.toasts.map((t) => [t.message, t.warning])).toEqual([['Budget reached', true]])
+  })
+
   it('keeps an info toast with an action for ACTION_MS, and a plain one never replaces it', () => {
     vi.useFakeTimers()
     const run = vi.fn()

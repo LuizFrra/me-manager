@@ -13,10 +13,13 @@ export interface Toast {
   message: string
   /** Info toasts only: a button, shown for ACTION_MS instead of INFO_MS. */
   action?: ToastAction
+  /** Info toasts only: something to look at (a budget reached), marked ⚠ instead of ✓. */
+  warning?: true
 }
 
 export interface InfoOptions {
   action?: ToastAction
+  warning?: boolean
 }
 
 const ERROR_MS = 8000
@@ -51,7 +54,13 @@ export function useToasts(): {
   const showInfo = useCallback(
     (message: string, options: InfoOptions = {}) => {
       const id = ++nextId.current
-      const toast: Toast = { id, kind: 'info', message, ...(options.action ? { action: options.action } : {}) }
+      const toast: Toast = {
+        id,
+        kind: 'info',
+        message,
+        ...(options.action ? { action: options.action } : {}),
+        ...(options.warning ? { warning: true as const } : {}),
+      }
       setToasts((ts) => [...ts.filter((t) => t.kind !== 'info' || t.action), toast])
       setTimeout(() => dismiss(id), options.action ? ACTION_MS : INFO_MS)
     },

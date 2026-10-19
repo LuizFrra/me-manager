@@ -759,7 +759,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   // A budget reached 80% or 100% while the window is focused (main sends a desktop notification too).
   const onBudgetAlert = useLatestCallback((alert: BudgetAlert): void => {
-    showInfo(`${alert.title}: ${alert.body}`, { action: { label: 'Usage', run: () => setUsageOpen(true) } })
+    showInfo(`${alert.title}: ${alert.body}`, {
+      action: { label: 'Usage', run: () => setUsageOpen(true) },
+      warning: true,
+    })
     void refreshUsage()
   })
   useEffect(() => api.onBudgetAlert(onBudgetAlert), [api, onBudgetAlert])
