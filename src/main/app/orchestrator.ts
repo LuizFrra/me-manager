@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join } from 'node:path'
 import { checkCloneName, checkCloneUrl } from '../../shared/clone'
-import { isArchived, MAX_COMMIT_MESSAGE, MAX_TASK_PROMPT, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
+import {
+  isArchived,
+  MAX_CLAUDE_MESSAGE,
+  MAX_COMMIT_MESSAGE,
+  MAX_TASK_PROMPT,
+  MAX_TRANSCRIPT_BYTES,
+} from '../../shared/types'
 import type {
   AppState,
   BranchList,
@@ -138,6 +144,23 @@ export function resolvePrompt(strategy: UpdateStrategy, baseRef: string, files: 
   const more = names.length > MAX_RESOLVE_FILES ? ` and ${names.length - MAX_RESOLVE_FILES} more` : ''
   const action = strategy === 'rebase' ? `rebase this branch onto ${baseRef}` : `merge ${baseRef} into this branch`
   return `Please ${action} and resolve the conflicts in: ${shown}${more}`
+}
+
+/**
+ * Text for sendToClaude, from the renderer: line endings made `\n`, other control characters but tabs replaced
+ * (an ESC could end the bracketed paste early, after which a newline would be read as Enter), and trimmed. Throws
+ * when nothing is left or it is over MAX_CLAUDE_MESSAGE characters.
+ */
+export function claudeMessage(text: unknown): string {
+  const clean = (typeof text === 'string' ? text : '')
+    .replace(/\r\n?/g, '\n')
+    // eslint-disable-next-line no-control-regex -- control characters are exactly what is removed
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '?')
+    .trim()
+  if (!clean) throw new Error('Nothing to send to Claude')
+  if (clean.length > MAX_CLAUDE_MESSAGE)
+    throw new Error(`The message for Claude is limited to ${MAX_CLAUDE_MESSAGE.toLocaleString('en-US')} characters`)
+  return clean
 }
 
 /** The usage group of a theme's targets. */
@@ -847,8 +870,27 @@ export class Orchestrator implements AppService {
   }
 
   /**
+   * Pastes without Enter: the user reads the comments in Claude's prompt and submits them. Unlike
+   * askClaudeToResolve, a closed Claude tab is not started again, as nobody would be there to submit the text.
+   */
+  async sendToClaude(target: Target, text: string): Promise<TabInfo[]> {
+    const { session } = this.resolve(target)
+    const message = claudeMessage(text)
+    if (!(await this.deps.tmux.hasSession(session))) {
+      throw new Error(`Open the ${target.taskId ? 'task' : 'folder'} first: its session is not running`)
+    }
+    const claude = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
+    if (!claude) throw new Error('There is no Claude tab — start one with “Restart Claude” first')
+    await this.assertClaudeReady(session)
+    await this.deps.tmux.sendText(session, CLAUDE_WINDOW, message, { enter: false })
+    await this.deps.tmux.selectWindow(session, claude.index)
+    return this.deps.tmux.listWindows(session)
+  }
+
+  /**
    * Refuses to type into a Claude that isn't at its prompt: the Enter after the text would pick the highlighted
-   * option of a permission prompt or choice menu, and a busy Claude would only queue it behind its work.
+   * option of a permission prompt or choice menu (and without Enter, the text would still land in that menu, not
+   * in the prompt), and a busy Claude would only queue it behind its work.
    */
   private async assertClaudeReady(session: string): Promise<void> {
     const [pane, activity] = await Promise.all([

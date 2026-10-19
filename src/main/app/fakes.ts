@@ -23,6 +23,7 @@ import type {
   OrchestratorDeps,
   PromptFilesApi,
   PtyApi,
+  SendTextOptions,
   StoreApi,
   TmuxApi,
   UsageApi,
@@ -255,10 +256,11 @@ export class FakeTmux implements TmuxApi {
     }
     return out
   }
+  /** `<session>:<window> <text>`, then ` ⏎` when Enter was pressed after it (the default). */
   sent: string[] = []
-  async sendText(session: string, windowName: string, text: string): Promise<void> {
+  async sendText(session: string, windowName: string, text: string, options: SendTextOptions = {}): Promise<void> {
     if (!this.sessions.get(session)?.windows.some((w) => w.name === windowName)) throw new Error("can't find window")
-    this.sent.push(`${session}:${windowName} ${text}`)
+    this.sent.push(`${session}:${windowName} ${text}${options.enter === false ? '' : ' ⏎'}`)
   }
   async capturePane(session: string, windowName: string): Promise<string | null> {
     this.captureCalls.push(`${session}:${windowName}`)

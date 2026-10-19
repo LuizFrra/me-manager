@@ -117,9 +117,14 @@ export interface TmuxApi {
   captureHistory(session: string, index: number, maxBytes: number): Promise<{ text: string; truncated: boolean }>
   /**
    * Pastes `text` literally into a window's active pane (through a tmux paste buffer, so any length works), then
-   * presses Enter.
+   * presses Enter, unless `options.enter` is false (the user reviews and submits it themselves).
    */
-  sendText(session: string, windowName: string, text: string): Promise<void>
+  sendText(session: string, windowName: string, text: string, options?: SendTextOptions): Promise<void>
+}
+
+export interface SendTextOptions {
+  /** Press Enter after the paste; true by default. */
+  enter?: boolean
 }
 
 /** Private files that hand a long prompt to a command tmux starts (see PromptFiles). */

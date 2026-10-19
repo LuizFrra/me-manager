@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MeManagerApi, SearchMatch, Target } from '../../../../shared/types'
 import { createMockApi } from '../../api/mockApi'
 import { DEFAULT_PANEL, type PanelState } from '../../lib/panelState'
-import { PANEL_POLL_MS, SidePanel } from './SidePanel'
+import type { ReviewComment } from '../../lib/review'
+import { PANEL_POLL_MS, SidePanel, type SidePanelReview } from './SidePanel'
 
 interface MdProps {
   source: string
@@ -57,6 +58,7 @@ interface HarnessProps {
   initial?: Partial<PanelState>
   pollMs?: number
   onError?: (e: unknown) => void
+  review?: SidePanelReview
 }
 
 function Harness({
@@ -67,6 +69,7 @@ function Harness({
   initial,
   pollMs,
   onError,
+  review,
 }: HarnessProps): React.JSX.Element {
   const [state, setState] = useState<PanelState>({ ...DEFAULT_PANEL, ...initial })
   return (
@@ -80,6 +83,7 @@ function Harness({
       onState={setState}
       onError={onError ?? (() => {})}
       onClose={() => {}}
+      review={review}
     />
   )
 }
@@ -586,6 +590,66 @@ describe('SidePanel', () => {
       // Picking another file drops the mark.
       await user.click(screen.getByRole('button', { name: 'README.md' }))
       await vi.waitFor(() => expect(document.querySelector('.code-line-mark')).toBeNull())
+    })
+  })
+
+  describe('review comments', () => {
+    const COMMENT: ReviewComment = {
+      id: 1,
+      tab: 'files',
+      path: 'src/app.ts',
+      lines: { start: 9, end: 10 },
+      note: 'Rename this',
+    }
+    const review = (over: Partial<SidePanelReview> = {}): SidePanelReview => ({
+      comments: [],
+      sending: false,
+      onComment: vi.fn(),
+      onEdit: vi.fn(),
+      onDelete: vi.fn(),
+      onSend: vi.fn(),
+      onCopy: vi.fn(),
+      ...over,
+    })
+
+    it('shows the tray only with comments, on every tab, and opens a comment at its lines', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      const { rerender } = render(<Harness api={api} review={review()} initial={{ tab: 'changes' }} />)
+      expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+      rerender(<Harness api={api} review={review({ comments: [COMMENT] })} initial={{ tab: 'changes' }} />)
+      expect(screen.getByRole('region', { name: 'Review comments' })).toBeInTheDocument()
+      await user.click(screen.getByRole('tab', { name: 'Search' }))
+      await user.click(screen.getByRole('button', { name: 'src/app.ts:9-10' }))
+      expect(screen.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+      await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+      expect(document.querySelector('.code-line-mark')).toHaveAttribute('data-line', '9')
+    })
+
+    it('hands the selected lines of the open file to onComment', async () => {
+      const user = userEvent.setup()
+      const onComment = vi.fn()
+      render(<Harness api={createMockApi()} review={review({ onComment })} initial={{ selected: 'src/app.ts' }} />)
+      await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+      screen.getByRole('group', { name: 'Line numbers' }).focus()
+      await user.keyboard('{ArrowDown}{ArrowDown}c')
+      expect(onComment).toHaveBeenCalledWith(
+        { path: 'src/app.ts', tab: 'files', lines: { start: 2, end: 2 } },
+        expect.any(Function),
+      )
+    })
+
+    it('moves focus to the Files tab when the last comment is deleted', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      function WithComments(): React.JSX.Element {
+        const [comments, setComments] = useState([COMMENT])
+        return <Harness api={api} review={review({ comments, onDelete: () => setComments([]) })} />
+      }
+      render(<WithComments />)
+      await user.click(screen.getByRole('button', { name: 'Delete the comment on src/app.ts:9-10' }))
+      expect(screen.queryByRole('region', { name: 'Review comments' })).toBeNull()
+      expect(screen.getByRole('tab', { name: 'Files' })).toHaveFocus()
     })
   })
 })

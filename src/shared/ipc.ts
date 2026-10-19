@@ -54,6 +54,7 @@ export const INVOKE_METHODS = [
   'createPullRequest',
   'updateFromBase',
   'askClaudeToResolve',
+  'sendToClaude',
   'getUsage',
   'getUsageReport',
 ] as const satisfies readonly (keyof MeManagerApi)[]
