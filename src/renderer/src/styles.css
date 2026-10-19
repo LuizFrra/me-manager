@@ -63,6 +63,30 @@ button:disabled {
   overflow-y: auto;
   padding: 8px 0;
 }
+/* Shown while two or more tasks are selected, above the footer. */
+.bulk-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: #4fa3ff14;
+}
+.bulk-bar-count {
+  font-weight: 600;
+}
+.bulk-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.bulk-bar-actions button {
+  border-color: var(--border);
+}
+.bulk-bar-actions .bulk-bar-remove {
+  color: var(--danger);
+}
 .sidebar-footer {
   flex: none;
   display: flex;
@@ -127,6 +151,15 @@ button:disabled {
 }
 .row.selected {
   background: #4fa3ff26;
+}
+/* A task in the multi-selection: a stripe, apart from the current task's fill (a row can be both). */
+.row.multi-selected {
+  background-image: linear-gradient(#4fa3ff14, #4fa3ff14);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* Shift+click selects a range of tasks, not the rows' text. */
+.sidebar .row {
+  user-select: none;
 }
 .row-label {
   flex: 1;

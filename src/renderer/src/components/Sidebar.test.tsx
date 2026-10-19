@@ -1,5 +1,6 @@
-import { createEvent, fireEvent, render, screen, type RenderResult } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen, within, type RenderResult } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { LiveStatus, TaskGitStatus } from '../../../shared/types'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
@@ -37,6 +38,9 @@ function sidebarProps(patch: Partial<SidebarProps> = {}): SidebarProps {
     onDeleteArchivedTask: vi.fn(),
     onEditRunCommand: vi.fn(),
     onMove: vi.fn(),
+    multiSelection: new Set(),
+    onMultiSelect: vi.fn(),
+    onBulkAction: vi.fn(),
     onAnnounce: vi.fn(),
     onOpenSettings: vi.fn(),
     onOpenUsage: vi.fn(),
@@ -447,5 +451,251 @@ describe('Sidebar budget badge', () => {
   it('shows nothing without budgets', () => {
     renderSidebar()
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar multi-selection', () => {
+  const twoRepos = appState(
+    theme('Client', [repo('api', [task('fix'), task('docs'), task('ship')]), folder('notes')]),
+    theme('Personal', [repo('web', [task('ui'), { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }])]),
+  )
+
+  /** The Sidebar with App's part played: it keeps the multi-selection, and `selected` follows plain clicks. */
+  function Harness(props: { patch?: Partial<SidebarProps>; initial?: string[] }): React.JSX.Element {
+    const [multi, setMulti] = useState<ReadonlySet<string>>(new Set(props.initial))
+    const [selected, setSelected] = useState(props.patch?.selected ?? null)
+    return (
+      <Sidebar
+        {...sidebarProps({ state: twoRepos, archivedOpen: new Set(['web']), ...props.patch })}
+        selected={selected}
+        multiSelection={multi}
+        onMultiSelect={(next) => {
+          setMulti(next)
+          props.patch?.onMultiSelect?.(next)
+        }}
+        onSelect={(t) => {
+          setSelected(t)
+          props.patch?.onSelect?.(t)
+        }}
+      />
+    )
+  }
+  const fixTarget = { themeId: 'Client', itemId: 'api', taskId: 'fix' }
+  const label = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(`^\\S ${name}$`, 'u') })
+  const row = (name: string): HTMLElement => label(name).closest('.row') as HTMLElement
+  /** The tasks in the multi-selection, by their rows' aria-selected. */
+  const chosen = (): string[] =>
+    [...document.querySelectorAll('.task-row[aria-selected="true"]')].map(
+      (r) => r.querySelector('.row-label')?.textContent?.replace(/^\S /u, '') ?? '',
+    )
+  const bar = (): HTMLElement => screen.getByRole('toolbar', { name: 'Selected tasks' })
+
+  it('toggles tasks in with Ctrl+click, the current one included, without opening them', async () => {
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+    render(<Harness patch={{ selected: fixTarget, onSelect }} />)
+    await user.keyboard('{Control>}')
+    await user.click(label('docs'))
+    expect(chosen()).toEqual(['fix', 'docs'])
+    await user.click(label('ui')) // another repo: Ctrl+click spans repos
+    expect(chosen()).toEqual(['fix', 'docs', 'ui'])
+    await user.click(label('fix'))
+    await user.keyboard('{/Control}')
+    expect(chosen()).toEqual(['docs', 'ui'])
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(row('ship')).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('marks selected rows apart from the current task', () => {
+    render(<Harness patch={{ selected: fixTarget }} initial={['docs', 'ship']} />)
+    expect(row('fix')).toHaveClass('selected')
+    expect(row('fix')).not.toHaveClass('multi-selected')
+    expect(row('docs')).toHaveClass('multi-selected')
+    expect(row('docs')).not.toHaveClass('selected')
+    expect(row('docs')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it("selects a range with Shift+click, within the clicked task's repo", async () => {
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+    render(<Harness patch={{ onSelect }} />)
+    await user.click(label('fix'))
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    await user.keyboard('{Shift>}')
+    await user.click(label('ship'))
+    expect(chosen()).toEqual(['fix', 'docs', 'ship'])
+    await user.click(label('docs')) // from the same anchor: the range shrinks
+    expect(chosen()).toEqual(['fix', 'docs'])
+    await user.click(label('ui')) // the anchor is in another repo, above: from the top of web
+    await user.keyboard('{/Shift}')
+    expect(chosen()).toEqual(['ui'])
+    expect(onSelect).toHaveBeenCalledTimes(1)
+  })
+
+  it('adds a range with Ctrl+Shift+click', async () => {
+    const user = userEvent.setup()
+    render(<Harness initial={['ui']} />)
+    await user.keyboard('{Control>}')
+    await user.click(label('fix')) // the anchor
+    await user.keyboard('{Shift>}')
+    await user.click(label('docs'))
+    await user.keyboard('{/Shift}{/Control}')
+    expect(chosen()).toEqual(['fix', 'docs', 'ui'])
+  })
+
+  it('opens the task on a plain click, clearing the multi-selection', async () => {
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+    render(<Harness patch={{ onSelect }} initial={['docs', 'ship']} />)
+    await user.click(label('ui'))
+    expect(onSelect).toHaveBeenCalledWith({ themeId: 'Personal', itemId: 'web', taskId: 'ui' })
+    expect(chosen()).toEqual([])
+    expect(row('ui')).toHaveClass('selected')
+  })
+
+  it("clears the selection with Esc in the sidebar, while the filter's Esc only clears the filter", async () => {
+    const onFilterChange = vi.fn()
+    const user = userEvent.setup()
+    render(<Harness patch={{ onFilterChange, filter: 'i' }} initial={['fix', 'ui']} />)
+    await user.click(screen.getByRole('textbox', { name: 'Filter sidebar' }))
+    await user.keyboard('{Escape}')
+    expect(onFilterChange).toHaveBeenCalledWith('')
+    expect(chosen()).toEqual(['fix', 'ui'])
+    label('fix').focus()
+    await user.keyboard('{Escape}')
+    expect(chosen()).toEqual([])
+  })
+
+  it('toggles the focused task with Space, and extends the selection with Shift+↑/↓, moving the focus', () => {
+    const onSelect = vi.fn()
+    render(<Harness patch={{ onSelect }} />)
+    label('docs').focus()
+    expect(fireEvent.keyDown(label('docs'), { key: ' ' })).toBe(false) // no click on the button
+    expect(chosen()).toEqual(['docs'])
+    fireEvent.keyDown(label('docs'), { key: 'ArrowDown', shiftKey: true })
+    expect(chosen()).toEqual(['docs', 'ship'])
+    expect(label('ship')).toHaveFocus()
+    fireEvent.keyDown(label('ship'), { key: 'ArrowDown', shiftKey: true }) // the end of the repo
+    expect(label('ship')).toHaveFocus()
+    fireEvent.keyDown(label('ship'), { key: 'ArrowUp', shiftKey: true })
+    fireEvent.keyDown(label('docs'), { key: 'ArrowUp', shiftKey: true })
+    expect(chosen()).toEqual(['fix', 'docs'])
+    expect(label('fix')).toHaveFocus()
+    fireEvent.keyDown(label('fix'), { key: ' ' })
+    expect(chosen()).toEqual(['docs'])
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('says how many tasks are selected', async () => {
+    const onAnnounce = vi.fn()
+    const user = userEvent.setup()
+    render(<Harness patch={{ onAnnounce }} initial={['fix']} />)
+    await user.keyboard('{Control>}')
+    await user.click(label('docs'))
+    await user.keyboard('{/Control}')
+    expect(onAnnounce).toHaveBeenLastCalledWith('2 tasks selected')
+  })
+
+  it('leaves archived tasks out, saying so', async () => {
+    const onAnnounce = vi.fn()
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+    render(<Harness patch={{ onAnnounce, onSelect }} initial={['fix', 'docs']} />)
+    await user.keyboard('{Control>}')
+    await user.click(screen.getByRole('button', { name: 'old' }))
+    await user.keyboard('{/Control}')
+    expect(chosen()).toEqual(['fix', 'docs'])
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onAnnounce).toHaveBeenCalledWith('Archived tasks can’t be selected')
+  })
+
+  it('never starts a drag from a Ctrl- or Shift-click', () => {
+    render(<Harness />)
+    const dt = { dropEffect: 'none', effectAllowed: 'all', setData: vi.fn(), getData: vi.fn(() => '') }
+    /** jsdom has no DragEvent: the modifier is set on the event by hand, as clientY is for reordering. */
+    const dragStart = (modifier: 'ctrlKey' | 'shiftKey'): boolean => {
+      const event = createEvent.dragStart(row('fix'), { dataTransfer: dt })
+      Object.defineProperty(event, modifier, { value: true })
+      return fireEvent(row('fix'), event)
+    }
+    expect(dragStart('ctrlKey')).toBe(false)
+    expect(dragStart('shiftKey')).toBe(false)
+    expect(row('fix')).not.toHaveClass('dragging')
+    expect(dt.setData).not.toHaveBeenCalled()
+  })
+
+  it('still drags and moves with Alt+Shift+↑/↓ while tasks are selected', () => {
+    const onMove = vi.fn()
+    render(<Harness patch={{ onMove }} initial={['fix', 'docs']} />)
+    fireEvent.keyDown(label('fix'), { key: 'ArrowDown', altKey: true, shiftKey: true })
+    expect(onMove).toHaveBeenLastCalledWith({
+      kind: 'task',
+      themeId: 'Client',
+      repoId: 'api',
+      taskId: 'fix',
+      toIndex: 1,
+    })
+    expect(chosen()).toEqual(['fix', 'docs'])
+    const dt = { dropEffect: 'none', effectAllowed: 'all', setData: vi.fn(), getData: vi.fn(() => '') }
+    for (const el of document.querySelectorAll<HTMLElement>('[data-drop]'))
+      vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({ top: 100, height: 20 } as DOMRect)
+    fireEvent.dragStart(row('ship'), { dataTransfer: dt })
+    const drop = createEvent.drop(row('fix'), { dataTransfer: dt })
+    Object.defineProperty(drop, 'clientY', { value: 105 })
+    fireEvent(row('fix'), drop)
+    expect(onMove).toHaveBeenLastCalledWith({
+      kind: 'task',
+      themeId: 'Client',
+      repoId: 'api',
+      taskId: 'ship',
+      toIndex: 0,
+    })
+  })
+
+  describe('bulk bar', () => {
+    it('shows from two selected tasks, with the bulk actions', async () => {
+      const onBulkAction = vi.fn()
+      const user = userEvent.setup()
+      const { rerender } = render(<Sidebar {...sidebarProps({ state: twoRepos, multiSelection: new Set(['fix']) })} />)
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
+      rerender(<Sidebar {...sidebarProps({ state: twoRepos, multiSelection: new Set(['fix', 'ui']), onBulkAction })} />)
+      expect(bar()).toHaveTextContent('2 tasks selected')
+      const buttons = within(bar()).getAllByRole('button')
+      expect(buttons.map((b) => b.textContent)).toEqual(['Push…', 'Update…', 'Archive…', 'Remove…', 'Clear'])
+      for (const name of [
+        'Push the selected tasks…',
+        'Update the selected tasks from base…',
+        'Archive the selected tasks…',
+        'Remove the selected tasks…',
+      ])
+        await user.click(within(bar()).getByRole('button', { name }))
+      expect(onBulkAction.mock.calls.map((c) => c[0])).toEqual(['push', 'update', 'archive', 'remove'])
+    })
+
+    it('clears the selection', async () => {
+      const user = userEvent.setup()
+      render(<Harness initial={['fix', 'ui']} />)
+      await user.click(within(bar()).getByRole('button', { name: 'Clear the selection' }))
+      expect(chosen()).toEqual([])
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
+    })
+
+    it('shows what runs, with its actions off meanwhile', () => {
+      renderSidebar({ state: twoRepos, multiSelection: new Set(['fix', 'ui']), bulkBusy: 'Pushing 2 tasks…' })
+      expect(bar()).toHaveTextContent('Pushing 2 tasks…')
+      for (const b of within(bar()).getAllByRole('button')) expect(b).toBeDisabled()
+    })
+
+    it('stays while a batch runs, as the tasks it removes leave the selection', () => {
+      renderSidebar({ state: twoRepos, multiSelection: new Set(), bulkBusy: 'Removing 2 tasks…' })
+      expect(bar()).toHaveTextContent('Removing 2 tasks…')
+    })
+
+    it('counts only active tasks', () => {
+      act(() => {
+        renderSidebar({ state: twoRepos, multiSelection: new Set(['fix', 'old', 'gone']) })
+      })
+      expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
+    })
   })
 })

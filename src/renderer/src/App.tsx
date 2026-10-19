@@ -20,6 +20,7 @@ import type {
   UiState,
   UnsavedWork,
   UpdateResult,
+  UpdateStrategy,
   UsageSummary,
 } from '../../shared/types'
 import { hasUnsavedWork, isArchived, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
@@ -34,6 +35,7 @@ import { Splitter } from './components/Splitter'
 import {
   ArchiveTaskDialog,
   BudgetDialog,
+  BulkConfirmDialog,
   ChooseThemeDialog,
   CloneRepoDialog,
   CommitDialog,
@@ -55,9 +57,11 @@ import { startVisibleInterval } from './lib/visibleInterval'
 import { keepIfEqual } from './lib/keepIfEqual'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
-import { useToasts } from './lib/toasts'
+import { cleanError, useToasts } from './lib/toasts'
 import { formatCost } from './lib/usageFormat'
-import type { GitActionKind } from './lib/gitActions'
+import { GIT_ACTION_BUSY, type GitActionKind } from './lib/gitActions'
+import { archiveSkipReason, bulkSummary, runLimited, type BulkAction, type BulkOutcome, type Settled } from './lib/bulk'
+import { pruneSelection, selectedTasks, type SelectedTask } from './lib/taskSelection'
 import { plural } from './lib/gitStatus'
 import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
@@ -110,6 +114,13 @@ type DialogBody =
   | { kind: 'newTask'; themeId: string; repoId: string; repoName: string; template?: string }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
+  | {
+      kind: 'bulk'
+      action: BulkAction
+      tasks: BulkTask[]
+      strategy: UpdateStrategy
+      onConfirm: (deleteBranches: boolean) => void
+    }
   | { kind: 'settings' }
   | { kind: 'clone'; themeId: string; themeName: string }
   | { kind: 'themeStyle'; themeId: string; themeName: string; style: ThemeStyle }
@@ -173,7 +184,9 @@ type AppAction =
         | 'moveTaskUp'
         | 'moveTaskDown'
         | 'taskBudget'
+        | 'clearSelection'
     }
+  | { type: 'bulk'; action: BulkAction }
   | { type: 'copy'; kind: CopyKind }
   | { type: 'newTaskFromTemplate'; themeId: string; repoId: string; template: string }
   | { type: 'openUrl'; url: string }
@@ -181,6 +194,34 @@ type AppAction =
 /** Palette entries carry data only; runCommand acts on them when one is picked. */
 interface AppCommand extends PaletteCommand {
   action: AppAction
+}
+
+/** A selected task as a bulk action runs it; `work` is what checkTaskRemoval found, for Remove and Archive. */
+type BulkTask = SelectedTask & { work?: UnsavedWork }
+
+/** How many pushes or updates a bulk action runs at once; main queues each task's git actions on their own. */
+const BULK_GIT_LIMIT = 3
+
+/** A bulk action's verb in its summary toast ("Pushed 3 of 4 tasks"), and in the bar while it runs. */
+const BULK_DONE: Record<BulkAction, string> = {
+  push: 'Pushed',
+  update: 'Updated',
+  archive: 'Archived',
+  remove: 'Removed',
+}
+const BULK_RUNNING: Record<BulkAction, string> = {
+  push: 'Pushing',
+  update: 'Updating',
+  archive: 'Archiving',
+  remove: 'Removing',
+}
+
+/** The palette's bulk entries, by action, for `n` selected tasks. */
+const BULK_LABEL: Record<BulkAction, (n: number) => string> = {
+  push: (n) => `Push the ${n} selected tasks…`,
+  update: (n) => `Update the ${n} selected tasks from base…`,
+  archive: (n) => `Archive the ${n} selected tasks…`,
+  remove: (n) => `Remove the ${n} selected tasks…`,
 }
 
 /** Renaming changes the display name only, never the slug that branches, worktrees and sessions are named by. */
@@ -268,6 +309,8 @@ function buildPaletteCommands(
   tmuxSocket: string | null,
   templates: readonly TaskTemplate[],
   live: PaletteLive,
+  /** How many tasks the sidebar's multi-selection holds: from two, the bulk actions are offered. */
+  multiSelected = 0,
 ): AppCommand[] {
   const commands: AppCommand[] = allTargets(state).map((entry) => ({
     id: `target:${targetKey(entry.target)}`,
@@ -278,12 +321,22 @@ function buildPaletteCommands(
   }))
   const action = (
     label: string,
-    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate' | 'openUrl'>,
+    type: Exclude<AppAction['type'], 'open' | 'copy' | 'newTaskFromTemplate' | 'openUrl' | 'bulk'>,
     shortcut?: string,
   ): void => {
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
   }
   action('New theme', 'newTheme')
+  if (multiSelected >= 2) {
+    for (const bulk of ['push', 'update', 'archive', 'remove'] as const)
+      commands.push({
+        id: `action:bulk:${bulk}`,
+        kind: 'action',
+        label: BULK_LABEL[bulk](multiSelected),
+        action: { type: 'bulk', action: bulk },
+      })
+    action('Clear the task selection', 'clearSelection')
+  }
   if (selected && isArchivedTarget(state, selected)) {
     // Nothing else applies: there is no session, worktree or folder to act on until it is restored.
     action('Restore archived task', 'restoreTask')
@@ -369,6 +422,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // Git status of the visible tasks (and the selected one), by task id.
   const [gitStatus, setGitStatus] = useState<Record<string, TaskGitStatus>>({})
   const [selected, setSelected] = useState<Target | null>(null)
+  // The sidebar's multi-selection of tasks, by id, for the bulk actions; tasks removed or archived since drop out.
+  const [multiSelected, setMultiSelected] = useState<ReadonlySet<string>>(new Set())
+  const multiSelection = useMemo(() => pruneSelection(state, multiSelected), [state, multiSelected])
+  // What the bulk action under way is doing ("Pushing 3 tasks…"), shown in the bar; one runs at a time.
+  const [bulkBusy, setBulkBusy] = useState<string | undefined>(undefined)
+  const bulkBusyRef = useRef(false)
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [sessionEnded, setSessionEnded] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
@@ -1239,26 +1298,35 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   }
 
   /**
-   * Runs a git action on a task, marking it busy (the header's Git buttons are off meanwhile), showing a failure
-   * as an error toast and refreshing the git badges after, whatever the outcome. Undefined when it failed or the
-   * task already had an action running.
+   * Runs a git action on a task, marking it busy meanwhile (the header's Git buttons are off) and refreshing the git
+   * badges after, whatever the outcome. Rejects at once when the task already has an action running.
    */
-  const gitAction = async <T,>(target: Target, kind: GitActionKind, fn: () => Promise<T>): Promise<T | undefined> => {
+  const withGitBusy = async <T,>(target: Target, kind: GitActionKind, fn: () => Promise<T>): Promise<T> => {
     const key = targetKey(target)
-    if (gitBusyRef.current[key]) return undefined
+    const running = gitBusyRef.current[key]
+    if (running) throw new Error(`it was busy (${GIT_ACTION_BUSY[running]})`)
     const mark = (next: Record<string, GitActionKind>): void => {
       gitBusyRef.current = next
       setGitBusy(next)
     }
     mark({ ...gitBusyRef.current, [key]: kind })
     try {
-      return await attempt(fn)
+      return await fn()
     } finally {
       const rest = { ...gitBusyRef.current }
       delete rest[key]
       mark(rest)
       refreshGit()
     }
+  }
+
+  /**
+   * withGitBusy, showing a failure as an error toast. Undefined when it failed or the task already had an action
+   * running.
+   */
+  const gitAction = async <T,>(target: Target, kind: GitActionKind, fn: () => Promise<T>): Promise<T | undefined> => {
+    if (gitBusyRef.current[targetKey(target)]) return undefined
+    return attempt(() => withGitBusy(target, kind, fn))
   }
 
   /** The selected target when it is a repo task, with the task. */
@@ -1327,6 +1395,128 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     closeDialog(dialogId)
     if (sameTarget(selectedRef.current, target)) setTabs(tabs)
     showInfo('Asked Claude to resolve the conflicts')
+  }
+
+  // Bulk actions on the sidebar's multi-selection: one confirmation, then the batch runs in the background (the bar
+  // says so) and ends with one summary toast; a failure doesn't stop the rest.
+
+  /**
+   * Asks to run `action` on the selected tasks; Remove and Archive check each for unsaved work first, and a check
+   * that fails counts as a warning, as for one task.
+   */
+  const startBulk = async (action: BulkAction): Promise<void> => {
+    if (bulkBusyRef.current) return
+    const found = selectedTasks(stateRef.current, multiSelection)
+    if (found.length === 0) return
+    const tasks: BulkTask[] =
+      action === 'remove' || action === 'archive'
+        ? await Promise.all(
+            found.map(async (t) => ({
+              ...t,
+              work: await api
+                .checkTaskRemoval(t.target.themeId, t.target.itemId, t.task.id)
+                .catch((err: unknown) => ({ uncommittedFiles: [], unpushedCommits: [], warning: cleanError(err) })),
+            })),
+          )
+        : found
+    const id = openDialog({
+      kind: 'bulk',
+      action,
+      tasks,
+      strategy: settings.updateStrategy,
+      onConfirm: (deleteBranches) => {
+        if (closeDialog(id)) void runBulk(action, tasks, deleteBranches)
+      },
+    })
+  }
+
+  /** Each task's outcome, from how its call settled; `conflict` tells an Update that stopped on conflicts. */
+  const outcomesOf = <R,>(
+    tasks: readonly BulkTask[],
+    results: readonly Settled<R>[],
+    conflict: (value: R) => boolean = () => false,
+  ): BulkOutcome[] =>
+    results.map((r, i) => {
+      const { name } = tasks[i].task
+      if (!r.ok) return { name, kind: 'failed', reason: r.error }
+      return conflict(r.value) ? { name, kind: 'conflict' } : { name, kind: 'done' }
+    })
+
+  /** Runs `call` on each task (one at a time: main runs state changes in turn anyway), showing each new state. */
+  const eachInTurn = (
+    tasks: readonly BulkTask[],
+    call: (t: BulkTask) => Promise<AppState>,
+  ): Promise<Settled<AppState>[]> =>
+    runLimited(tasks, 1, async (t) => {
+      const next = await call(t)
+      setState(next)
+      return next
+    })
+
+  const runBulk = async (action: BulkAction, tasks: BulkTask[], deleteBranches: boolean): Promise<void> => {
+    bulkBusyRef.current = true
+    setBulkBusy(`${BULK_RUNNING[action]} ${plural(tasks.length, 'task')}…`)
+    try {
+      let outcomes: BulkOutcome[]
+      let archived: BulkTask[] = []
+      if (action === 'push') {
+        const results = await runLimited(tasks, BULK_GIT_LIMIT, (t) =>
+          withGitBusy(t.target, 'push', () => api.pushTask(t.target)),
+        )
+        outcomes = outcomesOf(tasks, results)
+      } else if (action === 'update') {
+        // A conflict is only named in the summary: one conflict dialog per task would pile up.
+        const results = await runLimited(tasks, BULK_GIT_LIMIT, (t) =>
+          withGitBusy(t.target, 'update', () => api.updateFromBase(t.target)),
+        )
+        outcomes = outcomesOf(tasks, results, (r) => r.kind === 'conflict')
+      } else if (action === 'archive') {
+        // Never forced: a task with files to lose is left out (its line in the dialog said so).
+        const go = tasks.filter((t) => !archiveSkipReason(t.work))
+        const results = await eachInTurn(go, (t) =>
+          api.archiveTask(t.target.themeId, t.target.itemId, t.task.id, false),
+        )
+        archived = go.filter((_, i) => results[i].ok)
+        if (archived.some((t) => t.task.id === selectedRef.current?.taskId)) {
+          setTabs([])
+          setSessionEnded(false)
+        }
+        const done = outcomesOf(go, results)
+        const byId = new Map(go.map((t, i) => [t.task.id, done[i]]))
+        outcomes = tasks.map(
+          (t) => byId.get(t.task.id) ?? { name: t.task.name, kind: 'skipped', reason: archiveSkipReason(t.work) ?? '' },
+        )
+      } else {
+        const results = await eachInTurn(tasks, (t) =>
+          api.removeTask(t.target.themeId, t.target.itemId, t.task.id, deleteBranches),
+        )
+        const removed = new Set(tasks.filter((_, i) => results[i].ok).map((t) => t.task.id))
+        clearSelectionIf((t) => t.taskId !== undefined && removed.has(t.taskId))
+        outcomes = outcomesOf(tasks, results)
+      }
+      if (action === 'archive' || action === 'remove') refresh()
+      const { message, ok } = bulkSummary(BULK_DONE[action], outcomes)
+      if (!ok) showError(message)
+      else if (archived.length > 0)
+        showInfo(message, { action: { label: 'Restore', run: () => restoreBulk(archived) } })
+      else showInfo(message)
+    } finally {
+      bulkBusyRef.current = false
+      setBulkBusy(undefined)
+    }
+  }
+
+  /** The bulk Archive's "Restore": restores the tasks it archived; a selected one is then opened. */
+  const restoreBulk = async (tasks: BulkTask[]): Promise<void> => {
+    const results = await eachInTurn(tasks, (t) => api.unarchiveTask(t.target.themeId, t.target.itemId, t.task.id))
+    const { message, ok } = bulkSummary('Restored', outcomesOf(tasks, results))
+    if (ok) showInfo(message)
+    else showError(message)
+    const current = selectedRef.current
+    const last = results.findLast((r) => r.ok)
+    if (current && last?.ok && tasks.some((t, i) => results[i].ok && t.task.id === current.taskId))
+      void open(current, { state: last.value })
+    else refresh()
   }
 
   // Review comments: kept per target in `reviews`; the dialog asks for the note.
@@ -1492,12 +1682,29 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const paletteCommands = useMemo(
     () =>
       paletteOpen
-        ? buildPaletteCommands(state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, {
-            run,
-            urls: shownUrls,
-          })
+        ? buildPaletteCommands(
+            state,
+            selected,
+            hasActiveTab,
+            gitTools.gh,
+            tmuxSocket,
+            settings.taskTemplates,
+            { run, urls: shownUrls },
+            multiSelection.size,
+          )
         : [],
-    [paletteOpen, state, selected, hasActiveTab, gitTools.gh, tmuxSocket, settings.taskTemplates, run, shownUrls],
+    [
+      paletteOpen,
+      state,
+      selected,
+      hasActiveTab,
+      gitTools.gh,
+      tmuxSocket,
+      settings.taskTemplates,
+      run,
+      shownUrls,
+      multiSelection.size,
+    ],
   )
 
   /** Shows or hides the status bar at once, then saves it; a failed save puts it back. */
@@ -1614,6 +1821,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'moveTaskUp') moveSelectedTask(-1)
     else if (action.type === 'moveTaskDown') moveSelectedTask(1)
     else if (action.type === 'taskBudget') editTaskBudget()
+    else if (action.type === 'bulk') void startBulk(action.action)
+    else if (action.type === 'clearSelection') setMultiSelected(new Set())
     else if (action.type === 'editRunCommand') {
       if (selectedRef.current) editRunCommand(selectedRef.current.themeId, selectedRef.current.itemId)
     } else if (action.type === 'customizeTheme') {
@@ -1678,6 +1887,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           void deleteArchivedTask(themeId, repoId, taskId, taskName)
         }
         onMove={(next) => void move(next)}
+        multiSelection={multiSelection}
+        onMultiSelect={setMultiSelected}
+        onBulkAction={(action) => void startBulk(action)}
+        bulkBusy={bulkBusy}
         onAnnounce={setAnnouncement}
         onOpenSettings={openSettings}
         onOpenUsage={() => setUsageOpen(true)}
@@ -1994,6 +2207,21 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           files={dialog.result.files}
           onAskClaude={() => askClaudeToResolve(dialog.id, dialog.target, dialog.result)}
           onClose={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'bulk' && (
+        <BulkConfirmDialog
+          action={dialog.action}
+          tasks={dialog.tasks.map((t) => ({
+            id: t.task.id,
+            name: t.task.name,
+            repoName: t.repoName,
+            branch: t.task.branch,
+            work: t.work,
+          }))}
+          strategy={dialog.strategy}
+          onConfirm={dialog.onConfirm}
+          onCancel={() => closeDialog(dialog.id)}
         />
       )}
       {dialog?.kind === 'settings' && (
