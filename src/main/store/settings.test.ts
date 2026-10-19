@@ -24,9 +24,18 @@ const custom: Settings = {
   updateStrategy: 'merge',
   cloneDirectory: '/home/me/code',
   showStatusBar: false,
+  taskTemplates: [{ name: 'Review', taskName: 'review-{n}', base: 'origin/develop', prompt: 'Review the diff' }],
 }
 
 describe('SettingsStore', () => {
+  it('loads a settings file from before task templates unchanged, with no templates', async () => {
+    const { taskTemplates, ...old } = custom
+    expect(taskTemplates).toHaveLength(1)
+    await new SettingsStore(file).save(DEFAULT_SETTINGS) // creates the folder
+    await writeFile(file, JSON.stringify(old), 'utf8')
+    await expect(new SettingsStore(file).load()).resolves.toEqual({ ...old, taskTemplates: [] })
+  })
+
   it('gives the defaults when the file does not exist', async () => {
     await expect(new SettingsStore(file).load()).resolves.toEqual(DEFAULT_SETTINGS)
   })
@@ -85,6 +94,14 @@ describe('SettingsService', () => {
     const patch = { pollIntervalMs: 'fast', claudeArgs: [1], other: 'x' } as unknown as Partial<Settings>
     expect(await service.update(patch)).toEqual(custom)
     expect(await service.update(null as unknown as Partial<Settings>)).toEqual(custom)
+  })
+
+  it('replaces the task templates with a patch’s list, dropping its invalid entries', async () => {
+    const service = new SettingsService(new MemorySettingsStore(custom))
+    await service.init()
+    const taskTemplates = [{ name: 'Fix', prompt: 'Fix it' }, { name: '' }, { name: 'fix' }]
+    expect((await service.update({ taskTemplates })).taskTemplates).toEqual([{ name: 'Fix', prompt: 'Fix it' }])
+    expect((await service.update({ terminalFontSize: 18 })).taskTemplates).toEqual([{ name: 'Fix', prompt: 'Fix it' }])
   })
 
   it('applies concurrent updates one after the other, losing none', async () => {

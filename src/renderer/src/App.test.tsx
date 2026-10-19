@@ -1317,6 +1317,7 @@ describe('App settings', () => {
       skipPermissions: true,
       updateStrategy: 'rebase',
       showStatusBar: true,
+      taskTemplates: [],
     })
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(await screen.findByText('Settings saved')).toBeInTheDocument()
@@ -1973,6 +1974,123 @@ describe('App new task options', () => {
     expect(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })).toHaveValue('hello')
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('App task templates', () => {
+  const REVIEW = { name: 'Review', taskName: 'review-{n}', base: 'origin/develop', prompt: 'Review the diff' }
+  const FIX = { name: 'Fix', prompt: 'Fix the bug' }
+  const templatesApi = async (extra: Partial<MeManagerApi> = {}): Promise<MeManagerApi> => {
+    const api = repoApi(extra)
+    await api.updateSettings({ taskTemplates: [REVIEW, FIX] })
+    return api
+  }
+  const newTaskDialog = async (user: UserEvent): Promise<ReturnType<typeof within>> => {
+    await user.click(await screen.findByRole('button', { name: 'New task in my-api' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'New task in my-api' }))
+    await waitFor(() => expect(dialog.getByRole('combobox', { name: 'Base branch' })).toBeEnabled())
+    return dialog
+  }
+
+  it('creates a task from the template chosen, then starts on it in that repo, and remembers it', async () => {
+    const user = userEvent.setup()
+    const api = await templatesApi()
+    const createTask = vi.spyOn(api, 'createTask')
+    const saveUi = vi.spyOn(api, 'saveUiState')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+
+    let dialog = await newTaskDialog(user)
+    expect(dialog.getByRole('combobox', { name: 'Template' })).toHaveValue('')
+    await user.selectOptions(dialog.getByRole('combobox', { name: 'Template' }), 'Review')
+    expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveValue('review-1')
+    await user.click(dialog.getByRole('button', { name: 'Create' }))
+    await screen.findByRole('button', { name: 'Remove task review-1' })
+    expect(createTask).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), 'review-1', {
+      baseRef: 'origin/develop',
+      prompt: 'Review the diff',
+    })
+    const repoId = createTask.mock.calls[0][1]
+    await waitFor(() => expect(saveUi.mock.calls.at(-1)?.[0].lastTemplates).toEqual({ [repoId]: 'Review' }), {
+      timeout: 2_000,
+    })
+
+    dialog = await newTaskDialog(user)
+    expect(dialog.getByRole('combobox', { name: 'Template' })).toHaveValue('Review')
+    expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveValue('review-2')
+    // Creating without a template forgets it.
+    await user.selectOptions(dialog.getByRole('combobox', { name: 'Template' }), '')
+    await user.type(dialog.getByRole('textbox', { name: 'Name' }), 'plain')
+    await user.click(dialog.getByRole('button', { name: 'Create' }))
+    await screen.findByRole('button', { name: 'Remove task plain' })
+    dialog = await newTaskDialog(user)
+    expect(dialog.getByRole('combobox', { name: 'Template' })).toHaveValue('')
+    await waitFor(() => expect(saveUi.mock.calls.at(-1)?.[0]).not.toHaveProperty('lastTemplates'), {
+      timeout: 2_000,
+    })
+  })
+
+  it('starts the New task dialog on the template remembered from an earlier run', async () => {
+    const user = userEvent.setup()
+    const api = await templatesApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/home/me/code/my-api')).themes[0].items[0].id
+    await api.saveUiState({ version: 1, collapsed: [], panels: {}, lastTemplates: { [repoId]: 'Fix' } })
+    render(<App api={api} />)
+    const dialog = await newTaskDialog(user)
+    expect(dialog.getByRole('combobox', { name: 'Template' })).toHaveValue('Fix')
+    expect(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })).toHaveValue('Fix the bug')
+  })
+
+  it("offers each template in the palette for the selected task's repo, opening the dialog filled in", async () => {
+    const user = userEvent.setup()
+    const api = await templatesApi()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' })
+    const names = within(palette)
+      .getAllByRole('option')
+      .map((o) => o.getAttribute('aria-label'))
+    expect(names).toEqual(expect.arrayContaining(['New task from template: Review', 'New task from template: Fix']))
+    await user.type(within(palette).getByRole('combobox'), 'template review')
+    await user.keyboard('{Enter}')
+    const dialog = within(await screen.findByRole('dialog', { name: 'New task in my-api' }))
+    expect(dialog.getByRole('combobox', { name: 'Template' })).toHaveValue('Review')
+    expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveValue('review-1')
+    expect(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })).toHaveValue('Review the diff')
+    await waitFor(() => expect(dialog.getByRole('combobox', { name: 'Base branch' })).toHaveValue('origin/develop'))
+  })
+
+  it('offers no template entries in the palette with nothing selected', async () => {
+    render(<App api={await templatesApi()} />)
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' })
+    expect(within(palette).queryByRole('option', { name: /New task from template/ })).not.toBeInTheDocument()
+  })
+
+  it('saves a template added in Settings, and offers it in the New task dialog', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const updateSettings = vi.spyOn(api, 'updateSettings')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    const settings = within(screen.getByRole('region', { name: 'Task templates' }))
+    await user.click(settings.getByRole('button', { name: 'Add template' }))
+    await user.keyboard('Docs')
+    await user.type(settings.getByLabelText('Initial prompt'), 'Update the docs')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ taskTemplates: [{ name: 'Docs', prompt: 'Update the docs' }] }),
+    )
+    await screen.findByText('Settings saved')
+
+    const dialog = await newTaskDialog(user)
+    await user.selectOptions(dialog.getByRole('combobox', { name: 'Template' }), 'Docs')
+    expect(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })).toHaveValue('Update the docs')
   })
 })
 
