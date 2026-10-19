@@ -1,11 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { DiffLayout } from '../../lib/diff/layout'
 import type { LineSelection } from '../../lib/lineSelection'
 import { selectedLinesLabel, type SelectedLines } from '../../lib/review'
-import { DiffView } from './DiffView'
+import { DIFF_ROW_HEIGHT, DiffView } from './DiffView'
 import {
   ADDED_FILE,
   BINARY,
@@ -15,9 +15,6 @@ import {
   SINGLE_HUNK,
   UNTRACKED_NO_INDEX,
 } from '../../lib/diff/fixtures'
-
-// Large-diff tests render 5001 unvirtualized rows in jsdom: past the 5 s default when the machine is busy.
-vi.setConfig({ testTimeout: 20_000 })
 
 function largeDiff(lines: number): string {
   const body = Array.from({ length: lines }, (_, i) => `+added ${i + 1}`).join('\n')
@@ -75,26 +72,27 @@ describe('DiffView', () => {
 
   it('hides a large diff behind a button and renders it on click', async () => {
     const user = userEvent.setup()
-    render(<DiffView diff={largeDiff(5001)} />)
-    expect(screen.getByText('Large diff (5001 lines)')).toBeInTheDocument()
+    render(<DiffView diff={largeDiff(50_001)} />)
+    expect(screen.getByText('Large diff (50001 lines)')).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Show diff anyway' }))
-    expect(screen.getByRole('table')).toBeInTheDocument()
-    expect(screen.getByText('added 5001').closest('tr')).toHaveClass('diff-add')
+    // Its first rows: the others render as they are scrolled to.
+    expect(screen.getByRole('table')).toHaveAttribute('aria-rowcount', '50002')
+    expect(screen.getByText('added 1').closest('tr')).toHaveClass('diff-add')
   })
 
-  it('renders a 5000-line diff directly', () => {
-    render(<DiffView diff={largeDiff(5000)} />)
+  it('renders a 50,000-line diff directly', () => {
+    render(<DiffView diff={largeDiff(50_000)} />)
     expect(screen.queryByRole('button', { name: 'Show diff anyway' })).not.toBeInTheDocument()
     expect(screen.getByRole('table')).toBeInTheDocument()
   })
 
   it('collapses again when a different large diff arrives', async () => {
     const user = userEvent.setup()
-    const { rerender } = render(<DiffView diff={largeDiff(5001)} />)
+    const { rerender } = render(<DiffView diff={largeDiff(50_001)} />)
     await user.click(screen.getByRole('button', { name: 'Show diff anyway' }))
-    rerender(<DiffView diff={largeDiff(6000)} />)
-    expect(screen.getByText('Large diff (6000 lines)')).toBeInTheDocument()
+    rerender(<DiffView diff={largeDiff(60_000)} />)
+    expect(screen.getByText('Large diff (60000 lines)')).toBeInTheDocument()
   })
 
   it('renders <script> in diff text as plain text', () => {
@@ -161,19 +159,19 @@ describe('DiffView split layout', () => {
 
   it('collapses a large diff the same way, then renders it split', async () => {
     const user = userEvent.setup()
-    render(<DiffView diff={largeDiff(5001)} layout="split" />)
-    expect(screen.getByText('Large diff (5001 lines)')).toBeInTheDocument()
+    render(<DiffView diff={largeDiff(50_001)} layout="split" />)
+    expect(screen.getByText('Large diff (50001 lines)')).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Show diff anyway' }))
-    expect(screen.getByRole('table', { name: 'Side-by-side diff' })).toBeInTheDocument()
-    expect(screen.getByText('added 5001')).toHaveClass('diff-add')
+    expect(screen.getByRole('table', { name: 'Side-by-side diff' })).toHaveAttribute('aria-rowcount', '50002')
+    expect(screen.getByText('added 1')).toHaveClass('diff-add')
   })
 
   it('switches layouts without losing the expanded state of a large diff', async () => {
     const user = userEvent.setup()
-    const { rerender } = render(<DiffView diff={largeDiff(5001)} />)
+    const { rerender } = render(<DiffView diff={largeDiff(50_001)} />)
     await user.click(screen.getByRole('button', { name: 'Show diff anyway' }))
-    rerender(<DiffView diff={largeDiff(5001)} layout="split" />)
+    rerender(<DiffView diff={largeDiff(50_001)} layout="split" />)
     expect(screen.getByRole('table', { name: 'Side-by-side diff' })).toBeInTheDocument()
   })
 
@@ -270,5 +268,106 @@ describe('DiffView line selection', () => {
     render(<DiffView diff={SINGLE_HUNK} />)
     expect(screen.getByRole('table')).not.toHaveAttribute('tabindex')
     expect(document.querySelector('[data-sel]')).toBeNull()
+  })
+})
+
+/**
+ * Renders `ui` in a scroller 10 rows high. jsdom has no layout: the scroller gets its height, and the table's body a
+ * position that follows its scrollTop (call `layOut` again when the table is replaced).
+ */
+function renderScrolled(ui: React.ReactElement): { scroller: HTMLElement; layOut: () => void } {
+  render(
+    <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+      {ui}
+    </div>,
+  )
+  const scroller = screen.getByTestId('scroller')
+  Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 10 * DIFF_ROW_HEIGHT })
+  const layOut = (): void => {
+    scroller.querySelector('tbody')!.getBoundingClientRect = () => ({ top: -scroller.scrollTop }) as DOMRect
+  }
+  layOut()
+  return { scroller, layOut }
+}
+
+const scrollTo = (scroller: HTMLElement, top: number): void => {
+  scroller.scrollTop = top
+  act(() => {
+    scroller.dispatchEvent(new Event('scroll'))
+  })
+}
+
+/** The table's rows in the DOM, spacers left out. */
+const shownRows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('tbody tr:not(.diff-spacer)')]
+
+describe('DiffView virtualization', () => {
+  // The hunk header is row 0, so line n is row n.
+  const rowTop = (n: number): number => n * DIFF_ROW_HEIGHT
+
+  it.each(['unified', 'split'] as const)('renders only the rows in view of a 50,000-line diff (%s)', (layout) => {
+    const { scroller } = renderScrolled(<DiffView diff={largeDiff(50_000)} layout={layout} />)
+    const table = screen.getByRole('table')
+    expect(table).toHaveAttribute('aria-rowcount', '50001')
+    expect(shownRows().length).toBeLessThan(60)
+    expect(shownRows()[0]).toHaveAttribute('aria-rowindex', '1')
+    expect(screen.getByText('@@ -0,0 +1,50000 @@')).toBeInTheDocument()
+
+    scrollTo(scroller, rowTop(30_000))
+    expect(screen.queryByText('added 1')).toBeNull()
+    expect(screen.getByText('added 30000').closest('tr')).toHaveAttribute('aria-rowindex', '30001')
+    expect(screen.getByText('added 30009')).toBeInTheDocument()
+    expect(shownRows().length).toBeLessThan(40)
+    // The spacers stand for the rows left out, so the table keeps its height.
+    const [above, below] = document.querySelectorAll<HTMLElement>('tr.diff-spacer')
+    const first = Number(shownRows()[0].getAttribute('aria-rowindex')) - 1
+    expect(above.style.height).toBe(`${first * DIFF_ROW_HEIGHT}px`)
+    expect(parseFloat(above.style.height) + shownRows().length * DIFF_ROW_HEIGHT + parseFloat(below.style.height)).toBe(
+      50_001 * DIFF_ROW_HEIGHT,
+    )
+  })
+
+  it('keeps a selection wider than the rows rendered, and Shift-click after scrolling extends it', () => {
+    const { scroller } = renderScrolled(<Selectable diff={largeDiff(50_000)} />)
+    fireEvent.click(numbersOf('added 2')[1])
+    scrollTo(scroller, rowTop(40_000))
+    fireEvent.click(numbersOf('added 40005')[1], { shiftKey: true })
+    expect(screen.getByRole('status')).toHaveTextContent('Lines 2–40005')
+    expect(screen.getByText('added 40000').closest('tr')).toHaveClass('diff-selected')
+    expect(screen.getByText('added 40006').closest('tr')).not.toHaveClass('diff-selected')
+    scrollTo(scroller, rowTop(20_000))
+    expect(screen.getByText('added 20000').closest('tr')).toHaveClass('diff-selected')
+    scrollTo(scroller, 0)
+    expect(screen.getByText('added 1').closest('tr')).not.toHaveClass('diff-selected')
+    expect(screen.getByText('added 2').closest('tr')).toHaveClass('diff-selected')
+  })
+
+  it('scrolls the line the keys move to into view, rendering it', async () => {
+    const user = userEvent.setup()
+    const { scroller } = renderScrolled(<Selectable diff={largeDiff(50_000)} />)
+    screen.getByRole('table', { name: 'Diff' }).focus()
+    await user.keyboard('{End}')
+    expect(screen.getByRole('status')).toHaveTextContent('Line 50000')
+    expect(screen.getByText('added 50000').closest('tr')).toHaveClass('diff-selected')
+    expect(scroller.scrollTop).toBe(rowTop(50_001) - 10 * DIFF_ROW_HEIGHT)
+    await user.keyboard('{Shift>}{Home}{/Shift}')
+    expect(screen.getByRole('status')).toHaveTextContent('Lines 1–50000')
+    expect(screen.getByText('added 1').closest('tr')).toHaveClass('diff-selected')
+    expect(scroller.scrollTop).toBe(rowTop(1))
+  })
+
+  it('selects either side of the split layout after scrolling', () => {
+    const { scroller } = renderScrolled(<Selectable diff={largeDiff(50_000)} layout="split" />)
+    scrollTo(scroller, rowTop(25_000))
+    const newNo = (text: string): HTMLElement => screen.getByText(text).closest('tr')!.querySelectorAll('td')[2]
+    fireEvent.click(newNo('added 25001'))
+    fireEvent.click(newNo('added 25003'), { shiftKey: true })
+    expect(screen.getByRole('status')).toHaveTextContent('Lines 25001–25003')
+    expect(screen.getByText('added 25002')).toHaveClass('diff-selected')
+  })
+
+  it('renders every row of a small diff, without row counts', () => {
+    renderScrolled(<DiffView diff={MULTI_HUNK} />)
+    expect(screen.getByRole('table')).not.toHaveAttribute('aria-rowcount')
+    expect(document.querySelector('tr.diff-spacer')).toBeNull()
   })
 })
