@@ -7,6 +7,7 @@ const mermaidMock = vi.hoisted(() => ({
 }))
 vi.mock('mermaid', () => ({ default: mermaidMock }))
 
+import { AppearanceContext } from '../../lib/appearance'
 import { MermaidBlock } from './MermaidBlock'
 
 describe('MermaidBlock', () => {
@@ -79,5 +80,28 @@ describe('MermaidBlock', () => {
     const event = new MouseEvent('click', { bubbles: true, cancelable: true })
     fireEvent(a.querySelector('text')!, event)
     expect(event.defaultPrevented).toBe(true)
+  })
+
+  // Last: it re-initializes mermaid, which the "only once" test above counts.
+  it("draws in mermaid's default theme in light mode and re-renders when the appearance changes", async () => {
+    mermaidMock.render.mockImplementation(async (id: string) => ({ svg: `<svg data-testid="${id}"></svg>` }))
+    const themes = (): unknown[] => mermaidMock.initialize.mock.calls.map((c) => (c[0] as { theme: string }).theme)
+    mermaidMock.initialize.mockClear()
+    const block = (appearance: 'dark' | 'light'): React.JSX.Element => (
+      <AppearanceContext value={appearance}>
+        <MermaidBlock code="graph TD; A-->B" />
+      </AppearanceContext>
+    )
+    const { rerender, container } = render(block('light'))
+    await waitFor(() => expect(container.querySelector('svg')).not.toBeNull())
+    expect(themes()).toEqual(['default'])
+    expect(mermaidMock.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ securityLevel: 'strict' }))
+    const first = container.querySelector('svg')!.dataset.testid
+
+    rerender(block('dark'))
+    expect(container.querySelector('svg')).not.toBeNull() // the old diagram stays until the new one is drawn
+    await waitFor(() => expect(container.querySelector('svg')!.dataset.testid).not.toBe(first))
+    expect(themes()).toEqual(['default', 'dark'])
+    expect(mermaidMock.render).toHaveBeenCalledTimes(2)
   })
 })
