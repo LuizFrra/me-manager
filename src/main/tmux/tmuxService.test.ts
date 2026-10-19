@@ -272,6 +272,17 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     return id ? svc.captureTail(id, lines) : null
   }
 
+  /** A session of its own with a finished `run` window, so each test stands alone. */
+  const withRunWindow = async (session: string): Promise<string> => {
+    await svc.newSession(session, cwd, 'claude', 'sh')
+    await svc.newWindow(session, cwd, 'run', 'true', { remainOnExit: true })
+    await until(
+      () => svc.listWindows(session),
+      (t) => t[1]?.dead === true,
+    )
+    return session
+  }
+
   it('keeps a run window open after its command exits, and reports its pane dead', async () => {
     await svc.newSession('mmt_run_x_y', cwd, 'claude', 'sh')
     // Exits at once: remain-on-exit is set in the same tmux call, before the exit is handled.
@@ -295,7 +306,7 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
   })
 
   it('respawns a run window with a new command, keeping its output, and interrupts it', async () => {
-    const session = 'mmt_run_x_y'
+    const session = await withRunWindow('mmt_respawn_x_y')
     await svc.respawnWindow(session, 'run', cwd, "printf '  Local:   http://localhost:%s/\\n' 5173; exec cat")
     const text = await until(
       () => tailOf(session, 'run'),
@@ -334,11 +345,12 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     ).resolves.toMatch(/^second$/m)
     // Exact names only.
     await expect(svc.respawnWindow(session, 'ru', cwd, 'true')).rejects.toThrow()
-    await expect(svc.sendInterrupt('mmt_run_x', 'run')).rejects.toThrow()
+    await expect(svc.sendInterrupt('mmt_respawn_x', 'run')).rejects.toThrow()
+    await svc.killSession(session)
   })
 
   it('hands the command to the shell as typed: no tmux formats, a trailing ; or \\; kept', async () => {
-    const session = 'mmt_run_x_y'
+    const session = await withRunWindow('mmt_typed_x_y')
     const out = join(cwd, 'formats.txt')
     // tmux reads an argument ending in `;` as the end of its own command, and `\;` as a literal `;`.
     await svc.respawnWindow(session, 'run', cwd, `printf '%s\\n' '#{session_name}' '#(id)' > '${out}'; echo done \\;`)
