@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { TabInfo } from '../../shared/types'
-import type { SendTextOptions, TmuxApi } from '../contracts'
+import type { NewWindowOptions, SendTextOptions, TmuxApi, WindowActivity } from '../contracts'
 import { CommandError, run, runTail, type RunOptions } from '../exec'
 import { TMUX_CONF } from './tmuxConf'
 
@@ -14,6 +14,13 @@ import { TMUX_CONF } from './tmuxConf'
 export function escapeFormat(value: string): string {
   return value.replace(/#/g, '##')
 }
+
+/**
+ * A shell command as one tmux argument. tmux reads an argument that ends in `;` as the end of its own command (and
+ * `\;` as a literal `;`), so a command ending in either would lose or change its end: a trailing space, which the
+ * shell ignores, keeps it as typed.
+ */
+export const shellCommandArg = (command: string): string => (command.endsWith(';') ? `${command} ` : command)
 
 const isNoServer = (err: unknown): boolean =>
   err instanceof CommandError && /no server running|error connecting/i.test(err.stderr)
@@ -146,13 +153,17 @@ export class TmuxService implements TmuxApi {
     return { text: tidyCapture(stdout), truncated }
   }
 
+  /** In copy mode (the user scrolled back) tmux, not the app, would get keys and pastes: leaves it first. */
+  private async leaveMode(target: string): Promise<void> {
+    const inMode = (await this.tmux(['display-message', '-p', '-t', target, '#{pane_in_mode}'])).trim()
+    // (Other modes, like choose-tree, may not take `cancel`; the keys still go to the app then.)
+    if (inMode !== '0') await this.tmux(['send-keys', '-t', target, '-X', 'cancel']).catch(() => {})
+  }
+
   async sendText(session: string, windowName: string, text: string, options: SendTextOptions = {}): Promise<void> {
     // `=` on both parts: exact names, never a prefix or pattern match.
     const target = `=${session}:=${windowName}`
-    // In copy mode (the user scrolled back) tmux, not the app, would get the text and the Enter: leave it first.
-    const inMode = (await this.tmux(['display-message', '-p', '-t', target, '#{pane_in_mode}'])).trim()
-    // (Other modes, like choose-tree, may not take `cancel`; the paste still goes to the app then.)
-    if (inMode !== '0') await this.tmux(['send-keys', '-t', target, '-X', 'cancel']).catch(() => {})
+    await this.leaveMode(target)
     // Through a paste buffer read from stdin, not `send-keys -l`: tmux refuses a command over ~16 KB, and the text
     // is never parsed as tmux syntax (`;`, key names). -p: as a bracketed paste when the app asked for those, so
     // it is read as text, never as keys; -d: the buffer is deleted once pasted.
@@ -170,7 +181,17 @@ export class TmuxService implements TmuxApi {
   }
 
   async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
-    await this.tmux(['new-session', '-d', '-s', name, '-c', escapeFormat(cwd), '-n', windowName, command])
+    await this.tmux([
+      'new-session',
+      '-d',
+      '-s',
+      name,
+      '-c',
+      escapeFormat(cwd),
+      '-n',
+      windowName,
+      shellCommandArg(command),
+    ])
   }
 
   async killSession(name: string): Promise<void> {
@@ -178,23 +199,32 @@ export class TmuxService implements TmuxApi {
   }
 
   async listWindows(session: string): Promise<TabInfo[]> {
+    // The name last: it is the only field that could hold a tab. Pane formats are the window's active pane.
     const out = await this.tmux([
       'list-windows',
       '-t',
       `=${session}`,
       '-F',
-      '#{window_index}\t#{window_name}\t#{window_active}',
+      '#{window_index}\t#{window_active}\t#{pane_dead}\t#{window_name}',
     ])
     return out
       .split('\n')
       .filter(Boolean)
       .map((line) => {
-        const [index, windowName, active] = line.split('\t')
-        return { index: Number(index), name: windowName, active: active === '1' }
+        const [index, active, dead, ...name] = line.split('\t')
+        const tab: TabInfo = { index: Number(index), name: name.join('\t'), active: active === '1' }
+        if (dead === '1') tab.dead = true
+        return tab
       })
   }
 
-  async newWindow(session: string, cwd: string, windowName: string, command?: string): Promise<void> {
+  async newWindow(
+    session: string,
+    cwd: string,
+    windowName: string,
+    command?: string,
+    options: NewWindowOptions = {},
+  ): Promise<void> {
     await this.tmux([
       'new-window',
       '-t',
@@ -203,8 +233,64 @@ export class TmuxService implements TmuxApi {
       escapeFormat(cwd),
       '-n',
       windowName,
-      ...(command ? [command] : []),
+      ...(command ? [shellCommandArg(command)] : []),
+      // In the same tmux call, so it is set before a command that exits at once is reaped: tmux runs a call's
+      // commands in one go. The new window is the session's current one (`=session:`), as it was not made with -d.
+      ...(options.remainOnExit ? [';', 'set-option', '-w', '-t', `=${session}:`, 'remain-on-exit', 'on'] : []),
     ])
+  }
+
+  async respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void> {
+    await this.tmux([
+      'respawn-window',
+      '-k',
+      '-t',
+      `=${session}:=${windowName}`,
+      '-c',
+      escapeFormat(cwd),
+      shellCommandArg(command),
+    ])
+  }
+
+  async sendInterrupt(session: string, windowName: string): Promise<void> {
+    const target = `=${session}:=${windowName}`
+    await this.leaveMode(target)
+    await this.tmux(['send-keys', '-t', target, 'C-c'])
+  }
+
+  async listWindowActivity(session: string): Promise<WindowActivity[]> {
+    let out: string
+    try {
+      out = await this.tmux([
+        'list-windows',
+        '-t',
+        `=${session}`,
+        '-F',
+        '#{window_index}\t#{window_id}\t#{window_activity}\t#{window_name}',
+      ])
+    } catch (err) {
+      if (err instanceof CommandError) return [] // no such session, or no server
+      throw err
+    }
+    const windows: WindowActivity[] = []
+    for (const line of out.split('\n')) {
+      const [index, id, activity, ...name] = line.split('\t')
+      if (!/^\d+$/.test(index ?? '') || !/^@\d+$/.test(id ?? '') || !/^\d+$/.test(activity ?? '')) continue
+      windows.push({ index: Number(index), id, name: name.join('\t'), activity: Number(activity) })
+    }
+    return windows
+  }
+
+  async captureTail(windowId: string, lines: number): Promise<string | null> {
+    if (!/^@\d+$/.test(windowId)) throw new Error(`Invalid window id: ${windowId}`)
+    const start = `-${Math.max(0, Math.floor(lines))}`
+    try {
+      // -J joins wrapped lines, so a long URL stays one line; without -e there are no escape sequences.
+      return await this.tmux(['capture-pane', '-p', '-J', '-S', start, '-t', windowId])
+    } catch (err) {
+      if (err instanceof CommandError) return null
+      throw err
+    }
   }
 
   async selectWindow(session: string, index: number): Promise<void> {
