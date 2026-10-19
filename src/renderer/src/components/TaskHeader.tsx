@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
+import type { DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
 import type { CopyEntry } from '../lib/copy'
 import { GIT_ACTION_BUSY, type GitActionKind } from '../lib/gitActions'
@@ -7,6 +7,7 @@ import { baseSummary, plural } from '../lib/gitStatus'
 import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
+import { DevUrlLinks } from './DevUrlLinks'
 import { UsageBadge } from './UsageBadge'
 
 /** The header's git line: checked-out branch, standing against the base, uncommitted files and the last commit. */
@@ -219,6 +220,9 @@ export function TaskHeader(props: {
   gitActions?: GitActionsProps
   /** The run command's buttons (tasks and folders). */
   run?: RunControlsProps
+  /** Dev-server URLs printed in the session's tabs (see getDevUrls), as links opened with onOpenUrl. */
+  devUrls?: readonly DevUrl[]
+  onOpenUrl?: (url: string) => void
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -258,6 +262,14 @@ export function TaskHeader(props: {
           </div>
           <div className="task-subtitle">{props.subtitle}</div>
           {props.git && props.baseRef !== undefined && <GitLine git={props.git} baseRef={props.baseRef} />}
+          {props.devUrls && props.devUrls.length > 0 && props.onOpenUrl && (
+            <div className="task-urls" role="group" aria-label="Dev-server links">
+              <span className="task-urls-label" aria-hidden="true">
+                ↗
+              </span>
+              <DevUrlLinks urls={props.devUrls} onOpen={props.onOpenUrl} className="dev-url" />
+            </div>
+          )}
         </div>
         <div className="task-header-actions">
           <div className="task-header-actions-row">

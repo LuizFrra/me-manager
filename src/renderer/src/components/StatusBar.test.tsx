@@ -141,4 +141,34 @@ describe('StatusBar', () => {
     renderBar({ run: 'none' })
     expect(screen.queryByRole('button', { name: /^Run tab/ })).not.toBeInTheDocument()
   })
+
+  it('shows dev-server URLs as links, for tasks and folders, that open through onOpenUrl', async () => {
+    const user = userEvent.setup()
+    const devUrls = [
+      { url: 'http://localhost:3000/', index: 1, tab: 'run' },
+      { url: 'https://localhost:8443/', index: 2, tab: 'shell' },
+    ]
+    for (const task of [undefined, { branch: 'b', baseRef: 'origin/main' }]) {
+      const onOpenUrl = vi.fn()
+      const { unmount } = render(
+        <StatusBar
+          task={task}
+          path="/p"
+          session="idle"
+          tabs={2}
+          skipPermissions={false}
+          devUrls={devUrls}
+          onOpenUrl={onOpenUrl}
+          onCopyBranch={vi.fn()}
+          onOpenChanges={vi.fn()}
+          onOpenUsage={vi.fn()}
+        />,
+      )
+      const links = within(bar()).getAllByRole('link')
+      expect(links.map((l) => l.textContent)).toEqual(['localhost:3000', 'https://localhost:8443'])
+      await user.click(links[0])
+      expect(onOpenUrl).toHaveBeenCalledWith('http://localhost:3000/')
+      unmount()
+    }
+  })
 })

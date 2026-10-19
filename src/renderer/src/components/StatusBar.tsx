@@ -1,9 +1,10 @@
-import type { TaskGitStatus } from '../../../shared/types'
+import type { DevUrl, TaskGitStatus } from '../../../shared/types'
 import { baseSummary, plural } from '../lib/gitStatus'
 import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
 import { formatCost } from '../lib/usageFormat'
 import { claudeStateText, STATUS_SUBJECT_MAX, truncate } from '../lib/statusText'
+import { DevUrlLinks } from './DevUrlLinks'
 
 export interface StatusBarTask {
   /** The task's branch, shown until (and unless) git reports the checked-out one. */
@@ -28,6 +29,9 @@ export interface StatusBarProps {
   /** The session's run tab; shown (a click shows the tab) unless there is none. */
   run?: RunState
   onShowRun?: () => void
+  /** Dev-server URLs printed in the session's tabs, as links opened with onOpenUrl. */
+  devUrls?: readonly DevUrl[]
+  onOpenUrl?: (url: string) => void
   /** Copies the branch the bar shows. */
   onCopyBranch: (branch: string) => void
   onOpenChanges: () => void
@@ -61,11 +65,26 @@ function RunSegment({ run, onShow }: { run?: RunState; onShow?: () => void }): R
   )
 }
 
+function Links({
+  urls,
+  onOpen,
+}: {
+  urls?: readonly DevUrl[]
+  onOpen?: (url: string) => void
+}): React.JSX.Element | null {
+  if (!urls?.length || !onOpen) return null
+  return (
+    <span className="status-seg status-urls">
+      <DevUrlLinks urls={urls} onOpen={onOpen} className="dev-url" />
+    </span>
+  )
+}
+
 /**
  * A thin bar at the bottom of the main area for the selected target, from data the app already polls. A task's
  * left side: branch (click copies it), ↑ahead ↓behind its base, uncommitted files (click opens Changes) and the
- * last commit; its right side: the run tab's state (click shows it), Claude's state, the tab count, today's cost (click opens the usage view) and a
- * warning while permission prompts are skipped. A folder shows its path, the run tab's state and the session state.
+ * last commit; its right side: dev-server links, the run tab's state (click shows it), Claude's state, the tab count, today's cost (click opens the usage view) and a
+ * warning while permission prompts are skipped. A folder shows its path, the links, the run tab's state and the session state.
  */
 export function StatusBar(p: StatusBarProps): React.JSX.Element {
   if (!p.task) {
@@ -77,6 +96,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
           </span>
         </div>
         <div className="status-right">
+          <Links urls={p.devUrls} onOpen={p.onOpenUrl} />
           <RunSegment run={p.run} onShow={p.onShowRun} />
           <ClaudeState session={p.session} />
         </div>
@@ -130,6 +150,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
         )}
       </div>
       <div className="status-right">
+        <Links urls={p.devUrls} onOpen={p.onOpenUrl} />
         <RunSegment run={p.run} onShow={p.onShowRun} />
         <ClaudeState session={p.session} />
         <span className="status-seg" title="Terminal tabs in this session">

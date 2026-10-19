@@ -3618,3 +3618,102 @@ describe('App run command', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Open the task first: its session is not running')
   })
 })
+
+describe('App dev-server links', () => {
+  const RUN_TABS: TabInfo[] = [
+    { index: 0, name: 'claude', active: false },
+    { index: 1, name: 'run', active: true },
+  ]
+  const VITE = { url: 'http://localhost:5173/', index: 1, tab: 'run' }
+
+  it("polls the selected target's URLs and opens one in the browser from the header and the status bar", async () => {
+    const user = userEvent.setup()
+    const getDevUrls = vi.fn(async () => [VITE])
+    const api = repoApi({ getDevUrls, openTarget: async () => RUN_TABS, listTabs: async () => RUN_TABS })
+    const openExternal = vi.spyOn(api, 'openExternal')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const header = await screen.findByRole('group', { name: 'Dev-server links' })
+    expect(getDevUrls).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }))
+    await user.click(within(header).getByRole('link', { name: 'localhost:5173' }))
+    expect(openExternal).toHaveBeenCalledWith('http://localhost:5173/')
+    const bar = screen.getByRole('group', { name: 'Status bar' })
+    await user.click(within(bar).getByRole('link', { name: 'localhost:5173' }))
+    expect(openExternal).toHaveBeenCalledTimes(2)
+  })
+
+  it('opens a URL from the palette', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      getDevUrls: async () => [VITE],
+      openTarget: async () => RUN_TABS,
+      listTabs: async () => RUN_TABS,
+    })
+    const openExternal = vi.spyOn(api, 'openExternal')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('group', { name: 'Dev-server links' })
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    await user.type(await screen.findByRole('combobox'), 'Open http://localhost:5173/')
+    expect(screen.getAllByRole('option')[0]).toHaveAccessibleName('Open http://localhost:5173/')
+    await user.keyboard('{Enter}')
+    expect(openExternal).toHaveBeenCalledWith('http://localhost:5173/')
+  })
+
+  it('hides a URL as soon as its tab closes', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      getDevUrls: async () => [VITE],
+      openTarget: async () => RUN_TABS,
+      listTabs: async () => RUN_TABS,
+      closeTab: async () => [RUN_TABS[0]],
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('group', { name: 'Dev-server links' })
+    await user.click(screen.getByRole('button', { name: 'Close tab run' }))
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Dev-server links' })).not.toBeInTheDocument())
+  })
+
+  it("never shows another task's URLs, even before the new one's have loaded", async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const nameOf = async (target: Target): Promise<string | undefined> => {
+      const repo = (await api.getState()).themes[0].items[0]
+      return repo.kind === 'repo' ? repo.tasks.find((t) => t.id === target.taskId)?.name : undefined
+    }
+    const api: MeManagerApi = repoApi({
+      openTarget: async () => RUN_TABS,
+      listTabs: async () => RUN_TABS,
+      getDevUrls: async (target) => {
+        if ((await nameOf(target)) === 'task A') return [VITE]
+        await gate.promise // task B's answer is late
+        return []
+      },
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task B', 'task A') // task A is selected
+    await screen.findByRole('group', { name: 'Dev-server links' })
+    await user.click(taskButton('task B'))
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Dev-server links' })).not.toBeInTheDocument()
+    gate.resolve()
+  })
+
+  it('shows the error when the browser could not be opened', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      getDevUrls: async () => [VITE],
+      openTarget: async () => RUN_TABS,
+      listTabs: async () => RUN_TABS,
+      openExternal: async () => {
+        throw new Error('Only http(s) links can be opened')
+      },
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const header = await screen.findByRole('group', { name: 'Dev-server links' })
+    await user.click(within(header).getByRole('link', { name: 'localhost:5173' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Only http(s) links can be opened')
+  })
+})
