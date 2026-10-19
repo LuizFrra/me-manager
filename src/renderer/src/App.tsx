@@ -67,7 +67,7 @@ import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, typ
 import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
 import { repoChoices, taskNameFromPrompt } from './lib/composer'
-import { windowTitle } from './lib/attention'
+import { finishedIds, windowTitle } from './lib/attention'
 import { filterSidebar } from './lib/sidebarFilter'
 import { useLatestCallback } from './lib/useLatestCallback'
 import { placeBack, placeOf } from './lib/placeBack'
@@ -472,6 +472,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   // Repos whose "Archived" group is expanded; each starts collapsed.
   const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+  // Targets whose Claude finished (busy → idle or waiting) while they weren't shown, by targetKey; the sidebar marks
+  // them until they are opened. For this session only.
+  const [unread, setUnread] = useState<ReadonlySet<string>>(new Set())
+  const lastActivity = useRef<LiveStatus['activity']>({})
   // The window's title names the selection and counts the sessions waiting for the user (see windowTitle).
   useEffect(() => {
     document.title = windowTitle(state, status, selected)
@@ -527,6 +531,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const select = (target: Target | null): void => {
     selectedRef.current = target
     setSelected(target)
+    const key = target && targetKey(target)
+    if (key)
+      setUnread((prev) => {
+        if (!prev.has(key)) return prev
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
     setPanel((target && panelsRef.current.get(targetKey(target))) || DEFAULT_PANEL)
   }
 
@@ -620,7 +632,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const refresh = useCallback(() => {
     // Polled every few seconds: only update (and re-render) when something actually changed.
     api.getStatus().then(
-      (next) => setStatus(keepIfEqual(next)),
+      (next) => {
+        const finished = finishedIds(lastActivity.current, next.activity)
+        lastActivity.current = next.activity
+        const shown = selectedRef.current ? targetKey(selectedRef.current) : null
+        const marked = finished.filter((id) => id !== shown)
+        if (marked.length > 0) setUnread((prev) => new Set([...prev, ...marked]))
+        setStatus(keepIfEqual(next))
+      },
       () => {},
     )
     refreshGit()
@@ -1928,6 +1947,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
         rail={sidebarCollapsed}
+        unread={unread}
         onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
         state={state}
         status={status}

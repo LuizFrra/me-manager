@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { LiveStatus } from '../../../shared/types'
 import { appState, folder, repo, task, theme } from '../test/fixtures'
-import { waitingTargets, windowTitle } from './attention'
+import { finishedIds, waitingTargets, windowTitle } from './attention'
 
 const state = appState(theme('Client', [repo('api', [task('fix'), task('docs')]), folder('notes')]))
 const status = (activity: LiveStatus['activity']): LiveStatus => ({
@@ -26,5 +26,16 @@ describe('windowTitle', () => {
     expect(windowTitle(state, status({ docs: 'waiting' }), { themeId: 'Client', itemId: 'gone' })).toBe(
       '(1) me-manager',
     )
+  })
+})
+
+describe('finishedIds', () => {
+  it('lists the sessions that went from busy to idle or waiting', () => {
+    expect(
+      finishedIds(
+        { a: 'busy', b: 'busy', c: 'busy', d: 'idle', e: 'busy' },
+        { a: 'idle', b: 'waiting', c: 'busy', d: 'waiting' },
+      ),
+    ).toEqual(['a', 'b'])
   })
 })
