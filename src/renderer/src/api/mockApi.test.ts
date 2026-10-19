@@ -209,6 +209,12 @@ describe('createMockApi', () => {
     await expect(api.setTaskBudget(themeId, repoId, taskId, 0)).rejects.toThrow(/The budget must be an amount/)
     expect(budgetOf(await api.setTaskBudget(themeId, repoId, taskId, 2.345))).toBe(2.35)
     expect(budgetOf(await api.setTaskBudget(themeId, repoId, taskId, null))).toBeUndefined()
+
+    expect(await api.getBudgets()).toEqual({ daily: null, tasks: {} })
+    await api.updateSettings({ dailyBudgetUsd: 100_000, taskBudgetUsd: 0.01 })
+    const budgets = await api.getBudgets()
+    expect(budgets.tasks[taskId]).toMatchObject({ level: 'over', limit: 0.01 })
+    expect(budgets.daily).toMatchObject({ level: 'ok', limit: 100_000 })
   })
 
   it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {

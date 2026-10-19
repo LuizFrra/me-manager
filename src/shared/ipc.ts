@@ -66,6 +66,7 @@ export const INVOKE_METHODS = [
   'sendToClaude',
   'getUsage',
   'getUsageReport',
+  'getBudgets',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

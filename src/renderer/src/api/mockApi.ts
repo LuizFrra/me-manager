@@ -29,7 +29,7 @@ import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { moveActiveTask, moveEntry } from '../../../shared/reorder'
 import { normalizeBudget } from '../../../shared/budget'
-import { demoUsage, demoUsageReport } from './demoUsage'
+import { demoBudgets, demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
 /** The branches a demo task can start from; listBranches' default is the first. */
@@ -412,6 +412,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     },
     getUsage: async (target) => demoUsage(targetKey(target)),
     getUsageReport: async () => demoUsageReport(state),
+    getBudgets: async () => demoBudgets(state, settings),
     ptyWrite: () => {},
     ptyResize: () => {},
     onPtyData: () => () => {},
