@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
+  hasUnsavedWork,
   MAX_COMMIT_MESSAGE,
   MAX_TASK_NOTES,
   MAX_TASK_PROMPT,
@@ -14,6 +15,7 @@ import { budgetFromText, budgetText } from '../../../shared/budget'
 import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
 import { MAX_RUN_COMMAND, runCommandError } from '../../../shared/runCommand'
 import { expandTaskName, templateBase } from '../../../shared/templates'
+import { archiveSkipReason, type BulkAction } from '../lib/bulk'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
@@ -1397,6 +1399,154 @@ export function ChooseThemeDialog(props: {
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel}>
             Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** A task as a bulk confirmation lists it. `work`: what checkTaskRemoval found (Remove and Archive only). */
+export interface BulkDialogTask {
+  id: string
+  name: string
+  repoName: string
+  branch: string
+  work?: UnsavedWork
+}
+
+const BULK_VERB: Record<BulkAction, string> = { push: 'Push', update: 'Update', archive: 'Archive', remove: 'Remove' }
+
+/** How many of a task's files or commits the Remove confirmation lists; the rest are counted. */
+const BULK_LIST_MAX = 5
+
+/** Up to BULK_LIST_MAX entries of `items`, under a heading that counts them all. */
+function CappedList({ items, heading }: { items: string[]; heading: string }): React.JSX.Element | null {
+  if (items.length === 0) return null
+  const rest = items.length - BULK_LIST_MAX
+  return (
+    <>
+      <h4>{heading}</h4>
+      <ul>
+        {items.slice(0, BULK_LIST_MAX).map((f) => (
+          <li key={f}>{f}</li>
+        ))}
+        {rest > 0 && <li className="bulk-task-more">and {rest} more</li>}
+      </ul>
+    </>
+  )
+}
+
+/** What a task's line in the Remove confirmation says about its unsaved work. */
+function RemovalWork({ work }: { work: UnsavedWork }): React.JSX.Element {
+  if (!hasUnsavedWork(work))
+    return (
+      <p className="dialog-safe">
+        <span aria-hidden="true">✓</span> No unsaved work
+      </p>
+    )
+  return (
+    <div className="bulk-task-work">
+      {work.warning && <p className="bulk-task-warning">Could not fully check: {work.warning}</p>}
+      <CappedList items={work.uncommittedFiles} heading={plural(work.uncommittedFiles.length, 'uncommitted file')} />
+      <CappedList items={work.unpushedCommits} heading={plural(work.unpushedCommits.length, 'unpushed commit')} />
+    </div>
+  )
+}
+
+/**
+ * The one confirmation of a bulk action on the selected tasks, listing them. Remove shows each task's unsaved
+ * work and offers to delete the branches: on at first only when none has any, as a clean task's branch goes when
+ * it is removed on its own. Archive marks the tasks it leaves out (see archiveSkipReason). Confirming closes it:
+ * the batch runs in the background, and ends with one summary toast. Esc cancels; Cancel is focused for Archive
+ * and Remove, so Enter loses nothing.
+ */
+export function BulkConfirmDialog(props: {
+  action: BulkAction
+  tasks: BulkDialogTask[]
+  /** How Update from base updates (Settings.updateStrategy). */
+  strategy: UpdateStrategy
+  onConfirm: (deleteBranches: boolean) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const { action, tasks } = props
+  const unsaved = tasks.some((t) => t.work && hasUnsavedWork(t.work))
+  const [deleteBranches, setDeleteBranches] = useState(!unsaved)
+  const destructive = action === 'archive' || action === 'remove'
+  const runs = action === 'archive' ? tasks.filter((t) => !archiveSkipReason(t.work)).length : tasks.length
+  const verb = BULK_VERB[action]
+  const title = `${verb} ${plural(tasks.length, 'task')}`
+  const intro = {
+    push: 'Each task’s branch is pushed to origin and set as its upstream (git push -u).',
+    update:
+      props.strategy === 'rebase'
+        ? 'Fetches, then rebases each task’s branch onto its base (git rebase).'
+        : 'Fetches, then merges each task’s base into its branch (git merge --no-edit).',
+    archive:
+      'Archiving removes each task’s worktree and closes its session; the branches and their commits are kept, and the tasks can be restored later.',
+    remove: 'Each task’s session is closed, its worktree removed and the task dropped.',
+  }[action]
+  return (
+    <div className="overlay">
+      <div
+        className="dialog bulk-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
+        <h2>{title}?</h2>
+        <p>{intro}</p>
+        {action === 'update' && (
+          <p className="dialog-field-hint">
+            A task whose update conflicts is put back as it was, and named in the summary, to update on its own.
+          </p>
+        )}
+        <ul className="bulk-task-list" aria-label="Tasks">
+          {tasks.map((t) => {
+            const skip = action === 'archive' ? archiveSkipReason(t.work) : undefined
+            return (
+              <li key={t.id}>
+                <div className="bulk-task-head">
+                  <span className="bulk-task-name">{t.name}</span>
+                  <span className="bulk-task-repo">{t.repoName}</span>
+                </div>
+                {(action === 'push' || action === 'update') && <code className="bulk-task-branch">{t.branch}</code>}
+                {skip && (
+                  <p className="bulk-task-warning">
+                    Skipped: {skip}
+                    {t.work?.warning ? ` (${t.work.warning})` : ''}. Archive it on its own to discard its changes.
+                  </p>
+                )}
+                {action === 'remove' && t.work && <RemovalWork work={t.work} />}
+              </li>
+            )
+          })}
+        </ul>
+        {action === 'remove' && (
+          <label className="checkbox">
+            <input type="checkbox" checked={deleteBranches} onChange={(e) => setDeleteBranches(e.target.checked)} />
+            Also delete the branches
+          </label>
+        )}
+        <div className="dialog-actions">
+          <button type="button" autoFocus={destructive} onClick={props.onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={destructive ? 'danger' : 'primary'}
+            autoFocus={!destructive}
+            disabled={runs === 0}
+            onClick={() => props.onConfirm(deleteBranches)}
+          >
+            {verb} {plural(runs, 'task')}
+            {action === 'remove' && unsaved ? ' anyway' : ''}
           </button>
         </div>
       </div>
