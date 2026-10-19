@@ -91,3 +91,72 @@ describe('useVirtualRows', () => {
     expect(screen.getByTestId('scroller').scrollTop).toBe(3210 * ROW_HEIGHT + ROW_HEIGHT - FALLBACK_VIEWPORT)
   })
 })
+
+/** Rows in a body of their own, 100 px below the top of an ancestor that scrolls (like a table in the viewer). */
+function NestedList({ count, scrollTo }: { count: number; scrollTo?: number }): React.JSX.Element {
+  const { setContainer, start, end, scrollToIndex } = useVirtualRows<HTMLDivElement>({ count, scrollParent: true })
+  return (
+    <div data-testid="scroller" style={{ overflowY: 'auto' }}>
+      <button onClick={() => scrollTo !== undefined && scrollToIndex(scrollTo)}>go</button>
+      <div ref={setContainer} data-testid="rows">
+        {Array.from({ length: end - start }, (_, k) => (
+          <div key={start + k} className="row">
+            {start + k}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** The same, with no scrolling ancestor. */
+function NestedListWithoutScroller(): React.JSX.Element {
+  const { setContainer, start, end } = useVirtualRows<HTMLDivElement>({ count: 5000, scrollParent: true })
+  return (
+    <div ref={setContainer}>
+      {Array.from({ length: end - start }, (_, k) => (
+        <div key={start + k} className="row">
+          {start + k}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * jsdom has no layout: gives the scroller a height, and the rows a position that follows its scrollTop, `above`
+ * px below its top.
+ */
+function layOut(height: number, above: number): HTMLElement {
+  const scroller = screen.getByTestId('scroller')
+  Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: height })
+  screen.getByTestId('rows').getBoundingClientRect = () => ({ top: above - scroller.scrollTop }) as DOMRect
+  return scroller
+}
+
+describe('useVirtualRows in a scroll parent', () => {
+  it('follows the scrolling ancestor, from where the rows start in it', () => {
+    render(<NestedList count={5000} />)
+    const scroller = layOut(220, 100)
+    scroller.scrollTop = 100 + 1000 * ROW_HEIGHT
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll'))
+    })
+    expect(rendered()[0]).toBe(1000 - OVERSCAN)
+    expect(rendered().at(-1)).toBe(1000 + 10 + OVERSCAN - 1)
+  })
+
+  it('scrolls the ancestor to show a row', () => {
+    render(<NestedList count={5000} scrollTo={3210} />)
+    const scroller = layOut(220, 100)
+    act(() => screen.getByRole('button', { name: 'go' }).click())
+    expect(rendered()).toContain(3210)
+    expect(scroller.scrollTop).toBe(100 + 3210 * ROW_HEIGHT + ROW_HEIGHT - 220)
+  })
+
+  it('renders the first rows when no ancestor scrolls', () => {
+    render(<NestedListWithoutScroller />)
+    expect(rendered()[0]).toBe(0)
+    expect(rendered()).toHaveLength(Math.ceil(FALLBACK_VIEWPORT / ROW_HEIGHT) + OVERSCAN)
+  })
+})

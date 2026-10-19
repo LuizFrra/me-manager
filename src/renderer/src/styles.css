@@ -1839,7 +1839,7 @@ body.resizing .side-panel {
   vertical-align: top;
 }
 .diff-ln,
-.diff-unified tr:not(.diff-hunk) td:nth-child(-n + 2) {
+.diff-unified tr:not(.diff-hunk, .diff-spacer) td:nth-child(-n + 2) {
   width: 1%;
   min-width: 42px;
   text-align: right;
@@ -1848,7 +1848,7 @@ body.resizing .side-panel {
   white-space: nowrap;
 }
 .diff-text,
-.diff-unified tr:not(.diff-hunk) td:last-child {
+.diff-unified tr:not(.diff-hunk, .diff-spacer) td:last-child {
   white-space: pre;
   width: 100%;
   tab-size: 4;
@@ -1909,7 +1909,7 @@ body.resizing .side-panel {
   overflow-wrap: anywhere;
 }
 /* The seam between the old and new halves. */
-.diff-split tr:not(.diff-hunk) td:nth-child(3) {
+.diff-split tr:not(.diff-hunk, .diff-spacer) td:nth-child(3) {
   border-left: 1px solid #3a3a3a;
 }
 .diff-split td.diff-context.diff-text {
@@ -1960,6 +1960,39 @@ body.resizing .side-panel {
 .diff-unified tr.diff-selected td:first-child,
 .diff-split td.diff-ln.diff-selected {
   box-shadow: inset 2px 0 0 var(--accent);
+}
+/* A long diff renders only the rows in view (see DiffView): every row is one 18 px line (DIFF_ROW_HEIGHT), and
+   spacer rows stand for the others. */
+.diff-virtual tr {
+  height: 18px;
+}
+.diff-spacer td {
+  padding: 0;
+}
+.diff-virtual .diff-hunk td {
+  padding: 0 12px;
+  border: none;
+  box-shadow:
+    inset 0 1px #388bfd26,
+    inset 0 -1px #388bfd26;
+}
+/* Long lines are cut short rather than wrapped; the whole line is in the cell's tooltip. */
+.diff-virtual.diff-split td.diff-text {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Columns as wide as the widest line number and line of the whole diff (--diff-ln-ch and --diff-text-ch
+   characters), not just of the rows rendered, so they don't change while it scrolls. */
+.diff-virtual.diff-unified {
+  --diff-ln-width: max(42px, calc(var(--diff-ln-ch) * 1ch + 20px));
+  min-width: calc(var(--diff-text-ch) * 1ch + 20px + 2 * var(--diff-ln-width));
+}
+.diff-virtual.diff-unified tr:not(.diff-hunk, .diff-spacer) td:nth-child(-n + 2) {
+  min-width: var(--diff-ln-width);
+}
+.diff-virtual.diff-split col.diff-col-ln {
+  width: max(52px, calc(var(--diff-ln-ch) * 1ch + 16px));
 }
 pre.diff-raw {
   margin: 0;
