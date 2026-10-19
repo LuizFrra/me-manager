@@ -95,10 +95,11 @@ export const FETCH_TIMEOUT_MS = 20_000
 
 /**
  * The shell command of a `run` tab: the item's run command line, as typed, after a `$ <command>` line that shows
- * what runs. Only the command itself is shell: in that line it is one shell-quoted word. tmux runs this with the user's shell (`default-shell -c`, which is $SHELL) in the
- * worktree or folder, and keeps the tab open with its output once the command exits (remain-on-exit, set for that
- * tab only: see TmuxApi.newWindow), rather than `…; exec $SHELL`, so that a stopped command reads as stopped
- * (`#{pane_dead}`) and Restart can run it again in place (`respawn-window -k`).
+ * what runs. Only the command itself is shell: in that line it is one shell-quoted word. tmux runs this with the
+ * user's shell (`default-shell -c`, which is $SHELL) in the worktree or folder, and keeps the tab open with its
+ * output once the command exits (remain-on-exit, set for that tab only: see TmuxApi.newWindow), rather than
+ * `…; exec $SHELL`, so that a stopped command reads as stopped (`#{pane_dead}`) and Restart can run it again in
+ * place (`respawn-window -k`).
  */
 export const runWindowCommand = (command: string): string => `printf '$ %s\\n' ${shellQuote(command)}; ${command}`
 /** How long Restart waits after Ctrl-C, so a dev server can shut down (and free its port) before it runs again. */
