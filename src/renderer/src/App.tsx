@@ -17,7 +17,7 @@ import type {
   UpdateResult,
   UsageSummary,
 } from '../../shared/types'
-import { hasUnsavedWork, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
+import { hasUnsavedWork, isArchived, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
 import { targetKey } from '../../shared/naming'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { GH_INSTALL_HINT } from '../../shared/git'
@@ -26,11 +26,13 @@ import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { Splitter } from './components/Splitter'
 import {
+  ArchiveTaskDialog,
   ChooseThemeDialog,
   CloneRepoDialog,
   CommitDialog,
   ConfirmRemoveDialog,
   ConflictDialog,
+  DeleteArchivedTaskDialog,
   NameDialog,
   NewTaskDialog,
   NotesDialog,
@@ -62,6 +64,7 @@ import { UsageView } from './components/UsageView'
 import { StatusBar } from './components/StatusBar'
 import { ThemeStyleDialog } from './components/ThemeStyleDialog'
 import { Home, Welcome } from './components/Welcome'
+import { ArchivedTaskView } from './components/ArchivedTaskView'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
@@ -78,6 +81,15 @@ interface NameAsk {
 type DialogBody =
   | ({ kind: 'name'; onSubmit: (name: string) => Promise<void> } & NameAsk)
   | { kind: 'removeTask'; taskName: string; work: UnsavedWork; onConfirm: (deleteBranch: boolean) => Promise<void> }
+  | { kind: 'archiveTask'; taskName: string; work: UnsavedWork; onConfirm: () => Promise<void> }
+  | {
+      kind: 'deleteArchived'
+      taskName: string
+      branch: string
+      baseRef: string
+      work: UnsavedWork
+      onConfirm: () => Promise<void>
+    }
   | { kind: 'notes'; taskName: string; notes: string; onSave: (notes: string) => Promise<void> }
   | { kind: 'newTask'; themeId: string; repoId: string; repoName: string }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
@@ -125,6 +137,9 @@ type AppAction =
         | 'customizeTheme'
         | 'copyTranscript'
         | 'saveTranscript'
+        | 'archiveTask'
+        | 'restoreTask'
+        | 'deleteArchivedTask'
     }
   | { type: 'copy'; kind: CopyKind }
 
@@ -149,6 +164,12 @@ const transcriptCut = ({ truncated }: { truncated: boolean }): string =>
   truncated ? ` (the last ${MAX_TRANSCRIPT_BYTES / (1024 * 1024)} MB of the scrollback)` : ''
 
 const sameTarget = (a: Target | null, b: Target): boolean => a !== null && targetKey(a) === targetKey(b)
+
+/** Whether `target` is an archived task: it has no session or worktree, so nothing may open, attach or poll it. */
+const isArchivedTarget = (state: AppState, target: Target | null): boolean => {
+  const task = target ? resolveTarget(state, target)?.task : undefined
+  return task !== undefined && isArchived(task)
+}
 
 /** What "copy …" offers for `target`: its branch, path, attach command. */
 function copiesOf(state: AppState, target: Target | null, tmuxSocket: string | null): CopyEntry[] {
@@ -175,7 +196,11 @@ function buildPaletteCommands(
     commands.push({ id: `action:${type}`, kind: 'action', label, shortcut, action: { type } })
   }
   action('New theme', 'newTheme')
-  if (selected) {
+  if (selected && isArchivedTarget(state, selected)) {
+    // Nothing else applies: there is no session, worktree or folder to act on until it is restored.
+    action('Restore archived task', 'restoreTask')
+    action('Delete archived task…', 'deleteArchivedTask')
+  } else if (selected) {
     action('Toggle files panel', 'togglePanel', shortcutLabel('panel'))
     action('Search in files', 'searchFiles', shortcutLabel('searchFiles'))
     action('New shell tab', 'newTab', shortcutLabel('newTab'))
@@ -189,14 +214,16 @@ function buildPaletteCommands(
     action('Toggle status bar', 'toggleStatusBar')
     action('Customize theme…', 'customizeTheme')
   }
-  if (selected?.taskId) {
+  if (selected?.taskId && !isArchivedTarget(state, selected)) {
     action('Rename current task', 'renameTask')
     action('Git: Commit all…', 'commit')
     action('Git: Push branch', 'push')
     action(ghAvailable ? 'Git: Open pull request' : 'Git: Open pull request (needs gh)', 'openPr')
     action('Git: Update from base', 'update')
+    action('Archive current task', 'archiveTask')
   }
-  for (const { kind, label } of copiesOf(state, selected, tmuxSocket))
+  const copies = isArchivedTarget(state, selected) ? [] : copiesOf(state, selected, tmuxSocket)
+  for (const { kind, label } of copies)
     commands.push({ id: `action:copy:${kind}`, kind: 'action', label, action: { type: 'copy', kind } })
   action('Show usage', 'usage', shortcutLabel('usage'))
   action('Open settings', 'settings', shortcutLabel('settings'))
@@ -246,6 +273,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  // Repos whose "Archived" group is expanded; each starts collapsed.
+  const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+  const toggleArchived = useCallback(
+    (repoId: string) =>
+      setArchivedOpen((prev) => {
+        const next = new Set(prev)
+        if (next.has(repoId)) next.delete(repoId)
+        else next.add(repoId)
+        return next
+      }),
+    [],
+  )
   const [sidebarFilter, setSidebarFilter] = useState('')
   const sidebarFilterRef = useRef<HTMLInputElement>(null)
   const toggleCollapsed = useCallback(
@@ -336,7 +375,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // The tasks whose git status is polled: the ones the sidebar shows, plus the selected one for the header.
   const gitTargets = useMemo(() => {
     const targets = visibleTargets(state, collapsed, filterSidebar(state, sidebarFilter)).filter((t) => t.taskId)
-    if (selected?.taskId && !targets.some((t) => sameTarget(selected, t))) targets.push(selected)
+    if (selected?.taskId && !isArchivedTarget(state, selected) && !targets.some((t) => sameTarget(selected, t)))
+      targets.push(selected)
     return targets
   }, [state, collapsed, sidebarFilter, selected])
   const gitTargetsRef = useRef<Target[]>([])
@@ -367,7 +407,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     )
     refreshGit()
     const current = selectedRef.current
-    if (current)
+    if (current && !isArchivedTarget(stateRef.current, current))
       api.listTabs(current).then(
         (next) => {
           if (sameTarget(selectedRef.current, current)) setTabs(keepIfEqual(next))
@@ -378,7 +418,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const refreshUsage = useCallback((): Promise<void> | undefined => {
     const current = selectedRef.current
-    if (!current) return undefined
+    if (!current || isArchivedTarget(stateRef.current, current)) return undefined
     const key = targetKey(current)
     return api.getUsage(current).then(
       (summary) => {
@@ -424,11 +464,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     [api, refresh],
   )
 
-  /** `quiet`: a failure selects nothing instead of showing an error (restoring the last selection at start). */
-  const open = async (target: Target, { quiet = false } = {}): Promise<void> => {
+  /**
+   * `quiet`: a failure selects nothing instead of showing an error (restoring the last selection at start). An
+   * archived task is only selected: there is no session to open, and the main area offers Restore instead.
+   */
+  const open = async (target: Target, { quiet = false, state: known = stateRef.current } = {}): Promise<void> => {
     select(target)
     setSessionEnded(false)
     setTabs([])
+    if (isArchivedTarget(known, target)) return
     const result = quiet
       ? await api.openTarget(target).catch(() => undefined)
       : await attempt(() => api.openTarget(target))
@@ -457,6 +501,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     ),
     panelWidth: panelFraction,
     ...(sidebarFilter.trim() ? { sidebarFilter } : {}),
+    ...(archivedOpen.size > 0 ? { archivedOpen: [...archivedOpen] } : {}),
   }))
   const saveUiNow = useLatestCallback((): void => {
     if (uiSaveTimer.current === null) return
@@ -474,6 +519,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       if (!loaded) return
       const [ui, live] = await Promise.all([api.getUiState(), api.getStatus().catch(() => null)])
       setCollapsed(new Set(ui.collapsed))
+      if (ui.archivedOpen) setArchivedOpen(new Set(ui.archivedOpen))
       if (ui.sidebarFilter) setSidebarFilter((current) => current || (ui.sidebarFilter ?? ''))
       for (const [key, entry] of Object.entries(ui.panels)) {
         if (!panelsRef.current.has(key)) panelsRef.current.set(key, { ...DEFAULT_PANEL, ...entry })
@@ -483,7 +529,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       // The user may have picked something while this loaded: theirs wins.
       if (!target || selectedRef.current || !resolveTarget(loaded, target)) return
       if (live?.missing.includes(targetKey(target))) return
-      void open(target, { quiet: true })
+      void open(target, { quiet: true, state: loaded })
     } catch {
       // No saved UI state to restore: start as usual.
     } finally {
@@ -508,7 +554,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       uiSaveTimer.current = null
       api.saveUiState(uiSnapshot()).catch(() => {})
     }, UI_SAVE_MS)
-  }, [api, uiSnapshot, selected, collapsed, sidebarFilter, panel, panelFraction])
+  }, [api, uiSnapshot, selected, collapsed, archivedOpen, sidebarFilter, panel, panelFraction])
 
   // A save still waiting goes out when the window closes or reloads (and if the App unmounts).
   useEffect(() => {
@@ -534,7 +580,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   const tabAction = async (fn: (target: Target) => Promise<TabInfo[]>): Promise<void> => {
     const target = selectedRef.current
-    if (!target) return
+    if (!target || isArchivedTarget(stateRef.current, target)) return
     const result = await attempt(() => fn(target))
     if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
@@ -682,6 +728,78 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
     if (hasUnsavedWork(work)) dialogId = openDialog({ kind: 'removeTask', taskName, work, onConfirm: doRemove })
     else await doRemove(true)
+  }
+
+  /**
+   * Archives a task: at once when its worktree is clean (main checks again, and refuses if that changed meanwhile);
+   * after "Archive anyway" in a dialog when it has uncommitted or untracked files, or could not be checked, which
+   * then discards them (`force`). A selected task stays selected and shows as archived.
+   */
+  const archiveTask = async (themeId: string, repoId: string, taskId: string, taskName: string): Promise<void> => {
+    const work = await attempt(() => api.checkTaskRemoval(themeId, repoId, taskId))
+    if (!work) return
+    let dialogId: number | undefined
+    const doArchive = async (force: boolean): Promise<void> => {
+      const next = await update(() => api.archiveTask(themeId, repoId, taskId, force))
+      if (!next) return
+      if (dialogId !== undefined) closeDialog(dialogId)
+      if (selectedRef.current?.taskId === taskId) {
+        setTabs([])
+        setSessionEnded(false)
+      }
+      refresh()
+      showInfo(`Archived “${taskName}”`, {
+        action: { label: 'Restore', run: () => restoreTask(themeId, repoId, taskId, taskName) },
+      })
+    }
+    if (work.uncommittedFiles.length > 0 || work.warning)
+      dialogId = openDialog({ kind: 'archiveTask', taskName, work, onConfirm: () => doArchive(true) })
+    else await doArchive(false)
+  }
+
+  /** Recreates an archived task's worktree; a selected one is then opened, which starts its session. */
+  const restoreTask = async (themeId: string, repoId: string, taskId: string, taskName: string): Promise<void> => {
+    const next = await update(() => api.unarchiveTask(themeId, repoId, taskId))
+    if (!next) return
+    showInfo(`Restored “${taskName}”`)
+    const current = selectedRef.current
+    if (current?.taskId === taskId) void open(current, { state: next })
+    else refresh()
+  }
+
+  /** Deletes an archived task and its branch, once confirmed; the dialog warns about commits only it has. */
+  const deleteArchivedTask = async (
+    themeId: string,
+    repoId: string,
+    taskId: string,
+    taskName: string,
+  ): Promise<void> => {
+    const task = resolveTarget(stateRef.current, { themeId, itemId: repoId, taskId })?.task
+    if (!task) return
+    const work = await attempt(() => api.checkTaskRemoval(themeId, repoId, taskId))
+    if (!work) return
+    const id = openDialog({
+      kind: 'deleteArchived',
+      taskName,
+      branch: task.branch,
+      baseRef: task.baseRef,
+      work,
+      onConfirm: async () => {
+        if (!(await update(() => api.removeTask(themeId, repoId, taskId, true)))) return
+        closeDialog(id)
+        clearSelectionIf((t) => t.taskId === taskId)
+        showInfo(`Deleted “${taskName}” and its branch`)
+      },
+    })
+  }
+
+  /** The selected task with its ids, for the palette's archive actions. */
+  const withSelectedTask = (
+    fn: (themeId: string, repoId: string, taskId: string, taskName: string) => unknown,
+  ): void => {
+    const target = selectedRef.current
+    const task = target?.taskId ? resolveTarget(stateRef.current, target)?.task : undefined
+    if (target?.taskId && task) void fn(target.themeId, target.itemId, target.taskId, task.name)
   }
 
   /**
@@ -833,7 +951,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   /** Opens the selected task's worktree or folder in an editor, or in the file manager. */
   const openExternally = (where: 'editor' | 'fileManager'): void => {
     const target = selectedRef.current
-    if (!target) return
+    if (!target || isArchivedTarget(stateRef.current, target)) return
     void attempt(async () => {
       if (where === 'editor') await api.openInEditor(target)
       else await api.openInFileManager(target)
@@ -1113,6 +1231,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     else if (action.type === 'toggleStatusBar') toggleStatusBar()
     else if (action.type === 'copyTranscript') void copyTranscript()
     else if (action.type === 'saveTranscript') void saveTranscript()
+    else if (action.type === 'archiveTask') withSelectedTask(archiveTask)
+    else if (action.type === 'restoreTask') withSelectedTask(restoreTask)
+    else if (action.type === 'deleteArchivedTask') withSelectedTask(deleteArchivedTask)
     else if (action.type === 'customizeTheme') {
       if (selectedRef.current) customizeTheme(selectedRef.current.themeId)
     } else if (action.type === 'copy') {
@@ -1160,12 +1281,29 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onAddTask={newTask}
         onRenameTask={renameTask}
         onRemoveTask={(themeId, repoId, taskId, taskName) => void removeTask(themeId, repoId, taskId, taskName)}
+        onArchiveTask={(themeId, repoId, taskId, taskName) => void archiveTask(themeId, repoId, taskId, taskName)}
+        archivedOpen={archivedOpen}
+        onToggleArchived={toggleArchived}
+        onRestoreTask={(themeId, repoId, taskId, taskName) => void restoreTask(themeId, repoId, taskId, taskName)}
+        onDeleteArchivedTask={(themeId, repoId, taskId, taskName) =>
+          void deleteArchivedTask(themeId, repoId, taskId, taskName)
+        }
         onOpenSettings={openSettings}
         onOpenUsage={() => setUsageOpen(true)}
         inert={modalOpen}
       />
       <main className="main" inert={modalOpen}>
-        {selected && header ? (
+        {selected && selectedTask && isArchived(selectedTask) && item ? (
+          <ArchivedTaskView
+            key={targetKey(selected)}
+            task={selectedTask}
+            repoName={item.name}
+            onRestore={() => restoreTask(selected.themeId, selected.itemId, selectedTask.id, selectedTask.name)}
+            onDelete={() =>
+              void deleteArchivedTask(selected.themeId, selected.itemId, selectedTask.id, selectedTask.name)
+            }
+          />
+        ) : selected && header ? (
           <>
             <TaskHeader
               key={targetKey(selected)}
@@ -1316,6 +1454,24 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       {dialog?.kind === 'removeTask' && (
         <RemoveTaskDialog
           taskName={dialog.taskName}
+          work={dialog.work}
+          onConfirm={dialog.onConfirm}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'archiveTask' && (
+        <ArchiveTaskDialog
+          taskName={dialog.taskName}
+          work={dialog.work}
+          onConfirm={dialog.onConfirm}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'deleteArchived' && (
+        <DeleteArchivedTaskDialog
+          taskName={dialog.taskName}
+          branch={dialog.branch}
+          baseRef={dialog.baseRef}
           work={dialog.work}
           onConfirm={dialog.onConfirm}
           onCancel={() => closeDialog(dialog.id)}

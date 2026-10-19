@@ -3011,3 +3011,216 @@ describe('App background actions and the dialog shown by then', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 })
+
+describe('App archiving tasks', () => {
+  const placeholder = (): Promise<HTMLElement> => screen.findByRole('region', { name: 'Archived task' })
+  const idOf = async (api: MeManagerApi, name: string): Promise<string> => {
+    const repo = (await api.getState()).themes[0].items[0]
+    return (repo.kind === 'repo' && repo.tasks.find((t) => t.name === name)?.id) || ''
+  }
+  const openPalette = async (): Promise<HTMLElement> => {
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    return screen.findByRole('dialog', { name: 'Command palette' })
+  }
+  const optionNames = (dialog: HTMLElement): (string | null)[] =>
+    within(dialog)
+      .getAllByRole('option')
+      .map((o) => o.getAttribute('aria-label'))
+
+  it('archives a clean task from its row without asking, and shows it archived in place of the terminal', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const archiveTask = vi.spyOn(api, 'archiveTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    expect(screen.getByTestId('terminal')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Archive task fix login bug' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(archiveTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String), false)
+    const region = await placeholder()
+    expect(region).toHaveTextContent('“fix login bug” is archived')
+    expect(region).toHaveTextContent('claude/client-x/fix-login-bug')
+    expect(screen.queryByTestId('terminal')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^(\S )?fix login bug$/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '▶ Archived (1)' })).toBeInTheDocument()
+    expect(await screen.findByText('Archived “fix login bug”')).toBeInTheDocument()
+  })
+
+  it('asks before archiving a task with uncommitted files, and discards them only once confirmed', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      checkTaskRemoval: async () => ({ uncommittedFiles: ['src/login.ts'], unpushedCommits: [] }),
+    })
+    const archiveTask = vi.spyOn(api, 'archiveTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Archive task fix login bug' }))
+    let dialog = await screen.findByRole('alertdialog', { name: 'Archive fix login bug' })
+    expect(within(dialog).getByText('src/login.ts')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(archiveTask).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Archive task fix login bug' }))
+    dialog = await screen.findByRole('alertdialog', { name: 'Archive fix login bug' })
+    await user.click(within(dialog).getByRole('button', { name: 'Archive anyway (discards changes)' }))
+    expect(archiveTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String), true)
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(await placeholder()).toBeInTheDocument()
+  })
+
+  it("shows main's refusal and keeps the task as it was", async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      archiveTask: async () => {
+        throw new Error('"fix login bug" has 1 uncommitted or untracked file. Commit or discard the changes first')
+      },
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Archive task fix login bug' }))
+    expect(await screen.findByText(/Commit or discard the changes first/)).toBeInTheDocument()
+    expect(taskButton('fix login bug')).toBeInTheDocument()
+    expect(screen.getByTestId('terminal')).toBeInTheDocument()
+  })
+
+  it('restores from the placeholder, then opens the task, starting its session lazily', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const unarchiveTask = vi.spyOn(api, 'unarchiveTask')
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Archive task fix login bug' }))
+    const region = await placeholder()
+    openTarget.mockClear()
+    await user.click(within(region).getByRole('button', { name: 'Restore' }))
+    const taskId = await idOf(api, 'fix login bug')
+    expect(unarchiveTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), taskId)
+    expect(await screen.findByTestId('terminal')).toBeInTheDocument()
+    expect(openTarget).toHaveBeenCalledWith(expect.objectContaining({ taskId }))
+    expect(screen.queryByRole('button', { name: /Archived/ })).not.toBeInTheDocument()
+    expect(taskButton('fix login bug')).toBeInTheDocument()
+  })
+
+  it('restores and deletes from the Archived group, which starts collapsed and is remembered', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({
+      checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: ['abc1234 wip'] }),
+    })
+    const unarchiveTask = vi.spyOn(api, 'unarchiveTask')
+    const removeTask = vi.spyOn(api, 'removeTask')
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const saveUiState = vi.spyOn(api, 'saveUiState')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B', 'task C') // task C is selected
+    await user.click(screen.getByRole('button', { name: 'Archive task task A' }))
+    await user.click(screen.getByRole('button', { name: 'Archive task task B' }))
+    const group = await screen.findByRole('button', { name: '▶ Archived (2)' })
+    expect(group).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'Restore task task A' })).not.toBeInTheDocument()
+    await user.click(group)
+    const repoId = (await api.getState()).themes[0].items[0].id
+    await waitFor(() => expect(saveUiState.mock.lastCall?.[0].archivedOpen).toEqual([repoId]))
+
+    openTarget.mockClear()
+    await user.click(screen.getByRole('button', { name: 'Restore task task A' }))
+    expect(unarchiveTask).toHaveBeenCalledWith(expect.any(String), repoId, await idOf(api, 'task A'))
+    expect(await screen.findByText('Restored “task A”')).toBeInTheDocument()
+    expect(taskButton('task A')).toBeInTheDocument()
+    expect(openTarget).not.toHaveBeenCalled() // not selected: its session starts when it is opened
+    expect(screen.getByText('my-api › task C')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Delete archived task task B' }))
+    const dialog = await screen.findByRole('alertdialog', { name: 'Delete archived task task B' })
+    expect(dialog).toHaveTextContent('claude/client-x/task-b')
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('1 commit that is not on origin/main or pushed')
+    expect(removeTask).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: 'Delete task and branch' }))
+    const taskB = (await api.getState()).themes[0].items[0]
+    expect(taskB.kind === 'repo' && taskB.tasks.map((t) => t.name)).toEqual(['task A', 'task C'])
+    expect(removeTask).toHaveBeenCalledWith(expect.any(String), repoId, expect.any(String), true)
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Archived/ })).not.toBeInTheDocument()
+  })
+
+  it('skips archived tasks for Alt+1..9 and the git, tab and usage polls, and never attaches to one', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const getGitStatus = vi.spyOn(api, 'getGitStatus')
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const listTabs = vi.spyOn(api, 'listTabs')
+    const getUsage = vi.spyOn(api, 'getUsage')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B', 'task C') // task C is selected
+    await user.click(screen.getByRole('button', { name: 'Archive task task A' }))
+    await screen.findByRole('button', { name: '▶ Archived (1)' })
+    const archivedId = await idOf(api, 'task A')
+    for (const spy of [getGitStatus, openTarget, listTabs, getUsage]) spy.mockClear() // it was opened when created
+    fireEvent.keyDown(window, { key: '1', altKey: true })
+    expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
+    await waitFor(() => expect(getGitStatus.mock.lastCall?.[0].map((t) => t.taskId)).toHaveLength(2))
+    expect(getGitStatus.mock.lastCall?.[0].map((t) => t.taskId)).not.toContain(archivedId)
+
+    await user.click(screen.getByRole('button', { name: '▶ Archived (1)' }))
+    await user.click(screen.getByRole('button', { name: 'task A' }))
+    expect(await placeholder()).toHaveTextContent('“task A” is archived')
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'T', ctrlKey: true, shiftKey: true }) // new tab: nothing to open it in
+    })
+    const touched = (spy: { mock: { calls: unknown[][] } }): boolean =>
+      spy.mock.calls.some((args) => (args[0] as Target | undefined)?.taskId === archivedId)
+    expect(touched(openTarget)).toBe(false)
+    expect(touched(listTabs)).toBe(false)
+    expect(touched(getUsage)).toBe(false)
+    expect(getGitStatus.mock.calls.some((args) => args[0].some((t) => t.taskId === archivedId))).toBe(false)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('archives the current task from the palette, and offers only Restore and Delete for an archived one', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const archiveTask = vi.spyOn(api, 'archiveTask')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    let dialog = await openPalette()
+    await user.type(screen.getByRole('combobox'), 'archive current')
+    expect(optionNames(dialog)[0]).toBe('Archive current task')
+    await user.keyboard('{Enter}')
+    expect(archiveTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), await idOf(api, 'task B'), false)
+    await placeholder()
+
+    dialog = await openPalette()
+    const names = optionNames(dialog)
+    expect(names).toEqual(expect.arrayContaining(['Restore archived task', 'Delete archived task…']))
+    for (const name of ['Archive current task', 'New shell tab', 'Git: Push branch', 'Toggle files panel'])
+      expect(names).not.toContain(name)
+    expect(names).not.toContain('Client X › my-api › task B') // archived tasks are not jump targets
+    await user.type(screen.getByRole('combobox'), 'restore archived')
+    await user.keyboard('{Enter}')
+    expect(await screen.findByTestId('terminal')).toBeInTheDocument()
+  })
+
+  it('restores a saved selection that is archived as the placeholder, with its group open, without opening it', async () => {
+    const api = repoApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/home/me/code/my-api')).themes[0].items[0].id
+    await api.createTask(themeId, repoId, 'task A')
+    const taskId = await idOf(api, 'task A')
+    await api.archiveTask(themeId, repoId, taskId)
+    await api.saveUiState({
+      version: 1,
+      selected: { themeId, itemId: repoId, taskId },
+      collapsed: [],
+      panels: {},
+      archivedOpen: [repoId],
+    })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    expect(await placeholder()).toHaveTextContent('“task A” is archived')
+    expect(screen.getByRole('button', { name: '▼ Archived (1)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'task A' }).closest('.row')).toHaveClass('selected')
+    expect(openTarget).not.toHaveBeenCalled()
+  })
+})
