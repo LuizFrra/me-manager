@@ -11,6 +11,7 @@ import type {
   TabInfo,
   Target,
   TaskGitStatus,
+  UnsavedWork,
   UsageReport,
   UsageSummary,
 } from '../../shared/types'
@@ -3983,5 +3984,275 @@ describe('App reordering', () => {
     fireEvent.keyDown(taskButton('task A'), altShift('ArrowDown'))
     expect(screen.getByTestId('announcer')).toHaveTextContent('Clear the filter to move rows')
     expect(moveTask).not.toHaveBeenCalled()
+  })
+})
+
+describe('App bulk actions', () => {
+  const bar = (): ReturnType<typeof within> => within(screen.getByRole('toolbar', { name: 'Selected tasks' }))
+  const dialog = (name: string): ReturnType<typeof within> => within(screen.getByRole('alertdialog', { name }))
+  /** The tasks a bulk confirmation lists (their items hold lists of their own: files, commits). */
+  const taskItems = (d: ReturnType<typeof within>): HTMLElement[] =>
+    [...d.getByRole('list', { name: 'Tasks' }).children] as HTMLElement[]
+  const listed = (d: ReturnType<typeof within>): string[] =>
+    taskItems(d).map((li) => li.querySelector('.bulk-task-name')?.textContent ?? '')
+  /** The task's name, from main's state. */
+  const nameOf = async (api: MeManagerApi, target: Target): Promise<string> => {
+    const repo = (await api.getState()).themes.flatMap((t) => t.items).find((i) => i.id === target.itemId)
+    return repo?.kind === 'repo' ? (repo.tasks.find((k) => k.id === target.taskId)?.name ?? '?') : '?'
+  }
+  /** Creates the tasks (the last one is opened), then Ctrl+clicks the others into the selection with it. */
+  async function selectAll(user: UserEvent, ...names: string[]): Promise<void> {
+    await createRepoAndTask(user, ...names)
+    await user.keyboard('{Control>}')
+    for (const name of names.slice(0, -1)) await user.click(taskButton(name))
+    await user.keyboard('{/Control}')
+    expect(bar().getByText(`${names.length} tasks selected`)).toBeInTheDocument()
+  }
+
+  it('pushes the selected tasks after one confirmation listing them, and sums up a partial failure', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const push = api.pushTask
+    const pushTask = vi.fn<MeManagerApi['pushTask']>(async (target) => {
+      if ((await nameOf(api, target)) === 'task B')
+        throw new Error("Error invoking remote method 'api:pushTask': Error: git push failed: ! [rejected]")
+      return push(target)
+    })
+    api.pushTask = pushTask
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B', 'task C')
+    await user.click(bar().getByRole('button', { name: 'Push the selected tasks…' }))
+    const confirm = dialog('Push 3 tasks')
+    expect(listed(confirm)).toEqual(['task A', 'task B', 'task C'])
+    expect(confirm.getByText('claude/client-x/task-b')).toBeInTheDocument()
+    expect(pushTask).not.toHaveBeenCalled()
+    await user.click(confirm.getByRole('button', { name: 'Push 3 tasks' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Pushed 2 of 3 tasks; task B failed: git push failed: ! [rejected]',
+    )
+    expect(pushTask).toHaveBeenCalledTimes(3)
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(bar().getByText('3 tasks selected')).toBeInTheDocument() // kept, for another action
+  })
+
+  it('says when every push went through, and Cancel or Esc pushes nothing', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const pushTask = vi.spyOn(api, 'pushTask')
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(bar().getByRole('button', { name: 'Push the selected tasks…' }))
+    await user.click(dialog('Push 2 tasks').getByRole('button', { name: 'Cancel' }))
+    await user.click(bar().getByRole('button', { name: 'Push the selected tasks…' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(pushTask).not.toHaveBeenCalled()
+    await user.click(bar().getByRole('button', { name: 'Push the selected tasks…' }))
+    await user.click(dialog('Push 2 tasks').getByRole('button', { name: 'Push 2 tasks' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Pushed 2 tasks')
+  })
+
+  it('shows the batch running in the bar, with its actions off, until it ends', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = repoApi()
+    const push = api.pushTask
+    api.pushTask = async (target) => {
+      await gate.promise
+      return push(target)
+    }
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(bar().getByRole('button', { name: 'Push the selected tasks…' }))
+    await user.click(dialog('Push 2 tasks').getByRole('button', { name: 'Push 2 tasks' }))
+    expect(bar().getByText('Pushing 2 tasks…')).toBeInTheDocument()
+    for (const b of bar().getAllByRole('button')) expect(b).toBeDisabled()
+    expect(
+      within(screen.getByRole('group', { name: 'Git' })).getByRole('button', { name: 'Push branch' }),
+    ).toBeDisabled()
+    await act(async () => gate.resolve())
+    expect(await screen.findByRole('status')).toHaveTextContent('Pushed 2 tasks')
+    expect(bar().getByText('2 tasks selected')).toBeInTheDocument()
+    expect(bar().getByRole('button', { name: 'Clear the selection' })).toBeEnabled()
+  })
+
+  it('updates from base with the configured strategy, naming conflicts and failures without a dialog for each', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.updateSettings({ updateStrategy: 'merge' })
+    const update = api.updateFromBase
+    const updateFromBase = vi.fn<MeManagerApi['updateFromBase']>(async (target) => {
+      if ((await nameOf(api, target)) === 'task C') throw new Error('Commit or stash your changes first')
+      return update(target)
+    })
+    api.updateFromBase = updateFromBase
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'conflict demo', 'task C')
+    await user.click(bar().getByRole('button', { name: 'Update the selected tasks from base…' }))
+    const confirm = dialog('Update 3 tasks')
+    expect(confirm.getByText(/git merge --no-edit/)).toBeInTheDocument()
+    await user.click(confirm.getByRole('button', { name: 'Update 3 tasks' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Updated 1 of 3 tasks; conflicts in conflict demo (undone: run Update from base on it to resolve); task C failed: Commit or stash your changes first',
+    )
+    expect(updateFromBase).toHaveBeenCalledTimes(3)
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('archives the selected tasks, skipping one with uncommitted files, as it would lose them', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    api.checkTaskRemoval = async (_themeId, repoId, taskId) =>
+      (await nameOf(api, { themeId: '', itemId: repoId, taskId })) === 'task B'
+        ? { uncommittedFiles: ['src/b.ts'], unpushedCommits: [] }
+        : { uncommittedFiles: [], unpushedCommits: [] }
+    const archiveTask = vi.spyOn(api, 'archiveTask')
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B', 'task C')
+    await user.click(bar().getByRole('button', { name: 'Archive the selected tasks…' }))
+    const confirm = dialog('Archive 3 tasks')
+    expect(listed(confirm)).toEqual(['task A', 'task B', 'task C'])
+    expect(confirm.getByText(/Skipped: it has uncommitted or untracked files/)).toBeInTheDocument()
+    expect(confirm.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.click(confirm.getByRole('button', { name: 'Archive 2 tasks' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Archived 2 of 3 tasks; skipped task B: it has uncommitted or untracked files',
+    )
+    expect(archiveTask).toHaveBeenCalledTimes(2)
+    for (const call of archiveTask.mock.calls) expect(call[3]).toBe(false) // never forced
+    expect(screen.getByRole('button', { name: '▶ Archived (2)' })).toBeInTheDocument()
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument() // one task left selected
+  })
+
+  it('offers Restore after archiving them all, which brings them back', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const unarchiveTask = vi.spyOn(api, 'unarchiveTask')
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(bar().getByRole('button', { name: 'Archive the selected tasks…' }))
+    await user.click(dialog('Archive 2 tasks').getByRole('button', { name: 'Archive 2 tasks' }))
+    const toast = await screen.findByRole('status')
+    expect(toast).toHaveTextContent('Archived 2 tasks')
+    await user.click(within(toast).getByRole('button', { name: 'Restore' }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Restored 2 tasks'))
+    expect(unarchiveTask).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('button', { name: /Archived/ })).not.toBeInTheDocument()
+  })
+
+  it('removes the selected tasks, showing unsaved work per task and offering to delete their branches', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const work: Record<string, UnsavedWork> = {
+      'task A': { uncommittedFiles: ['src/a.ts'], unpushedCommits: [] },
+      'task B': { uncommittedFiles: [], unpushedCommits: ['abc123 wip'] },
+    }
+    api.checkTaskRemoval = async (_themeId, repoId, taskId) =>
+      work[await nameOf(api, { themeId: '', itemId: repoId, taskId })] ?? { uncommittedFiles: [], unpushedCommits: [] }
+    const remove = api.removeTask
+    const removeTask = vi.fn<MeManagerApi['removeTask']>(async (themeId, repoId, taskId, deleteBranch) => {
+      if ((await nameOf(api, { themeId, itemId: repoId, taskId })) === 'task B') throw new Error('worktree is locked')
+      return remove(themeId, repoId, taskId, deleteBranch)
+    })
+    api.removeTask = removeTask
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B', 'task C')
+    await user.click(bar().getByRole('button', { name: 'Remove the selected tasks…' }))
+    const confirm = dialog('Remove 3 tasks')
+    const items = taskItems(confirm)
+    expect(listed(confirm)).toEqual(['task A', 'task B', 'task C'])
+    expect(within(items[0]).getByText('src/a.ts')).toBeInTheDocument()
+    expect(within(items[0]).getByText('1 uncommitted file')).toBeInTheDocument()
+    expect(within(items[1]).getByText('abc123 wip')).toBeInTheDocument()
+    expect(within(items[2]).getByText(/No unsaved work/)).toBeInTheDocument()
+    const deleteBranches = confirm.getByRole('checkbox', { name: 'Also delete the branches' })
+    expect(deleteBranches).not.toBeChecked() // as for one task with unsaved work
+    await user.click(deleteBranches)
+    expect(removeTask).not.toHaveBeenCalled()
+    await user.click(confirm.getByRole('button', { name: 'Remove 3 tasks anyway' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Removed 2 of 3 tasks; task B failed: worktree is locked',
+    )
+    expect(removeTask.mock.calls.map((c) => c[3])).toEqual([true, true, true])
+    expect(screen.queryByRole('button', { name: /task A$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /task C$/ })).not.toBeInTheDocument()
+    expect(taskButton('task B')).toBeInTheDocument()
+    expect(screen.queryByTestId('terminal')).not.toBeInTheDocument() // task C, the open one, is gone
+  })
+
+  it('deletes the branches of clean tasks by default, as for one task', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const removeTask = vi.spyOn(api, 'removeTask')
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(bar().getByRole('button', { name: 'Remove the selected tasks…' }))
+    const confirm = dialog('Remove 2 tasks')
+    expect(confirm.getAllByText(/No unsaved work/)).toHaveLength(2)
+    expect(confirm.getByRole('checkbox', { name: 'Also delete the branches' })).toBeChecked()
+    await user.click(confirm.getByRole('button', { name: 'Remove 2 tasks' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Removed 2 tasks')
+    expect(removeTask.mock.calls.map((c) => c[3])).toEqual([true, true])
+  })
+
+  it('says a task could not be checked for unsaved work', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    api.checkTaskRemoval = async () => Promise.reject(new Error('the repository is gone'))
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(bar().getByRole('button', { name: 'Remove the selected tasks…' }))
+    const confirm = dialog('Remove 2 tasks')
+    expect(confirm.getAllByText(/Could not fully check: the repository is gone/)).toHaveLength(2)
+    expect(confirm.getByRole('checkbox', { name: 'Also delete the branches' })).not.toBeChecked()
+  })
+
+  it('offers the bulk actions in the palette while tasks are selected, and clears the selection there', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await selectAll(user, 'task A', 'task B')
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const palette = within(await screen.findByRole('dialog', { name: 'Command palette' }))
+    await user.type(palette.getByRole('combobox'), 'select')
+    expect(palette.getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(
+      expect.arrayContaining([
+        'Push the 2 selected tasks…',
+        'Update the 2 selected tasks from base…',
+        'Archive the 2 selected tasks…',
+        'Remove the 2 selected tasks…',
+        'Clear the task selection',
+      ]),
+    )
+    await user.clear(palette.getByRole('combobox'))
+    await user.type(palette.getByRole('combobox'), 'archive the 2')
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('alertdialog', { name: 'Archive 2 tasks' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const again = within(await screen.findByRole('dialog', { name: 'Command palette' }))
+    await user.type(again.getByRole('combobox'), 'clear the task selection')
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true })
+    const none = within(await screen.findByRole('dialog', { name: 'Command palette' }))
+    await user.type(none.getByRole('combobox'), 'selected tasks')
+    expect(none.queryByRole('option', { name: /selected tasks/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps a plain click opening one task and clearing the selection, and Esc clearing it', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(taskButton('task A'))
+    expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
+    await user.keyboard('{Control>}')
+    await user.click(taskButton('task B'))
+    await user.keyboard('{/Control}')
+    expect(bar().getByText('2 tasks selected')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
   })
 })

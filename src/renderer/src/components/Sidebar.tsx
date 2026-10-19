@@ -10,10 +10,12 @@ import {
   type Task,
   type TaskGitStatus,
 } from '../../../shared/types'
-import { gitBadges } from '../lib/gitStatus'
+import type { BulkAction } from '../lib/bulk'
+import { gitBadges, plural } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
-import { rowMoveStep, shortcutLabel } from '../lib/shortcuts'
+import { clickSelectMode, rowExtendStep, rowMoveStep, shortcutLabel } from '../lib/shortcuts'
+import { neighbourTask, rangeOf, selectedTasks, taskRows, toggleTask } from '../lib/taskSelection'
 import {
   dropIndex,
   entryId,
@@ -70,6 +72,16 @@ export interface SidebarProps {
    * Alt+Shift+↑/↓ on its row. Never into another theme or repo. Off while filtering, when only some rows show.
    */
   onMove: (move: Move) => void
+  /**
+   * Ids of the tasks in the multi-selection (see lib/taskSelection): Mod+click, Shift+click, Space and Shift+↑/↓
+   * on task rows. App owns it, for the bulk actions and the palette.
+   */
+  multiSelection: ReadonlySet<string>
+  onMultiSelect: (ids: ReadonlySet<string>) => void
+  /** A bulk action on the selected tasks, from the bar that shows while two or more are (App confirms it first). */
+  onBulkAction: (action: BulkAction) => void
+  /** What the bulk action under way is doing ("Pushing 3 tasks…"): the bar says it, with its buttons off. */
+  bulkBusy?: string
   /** Something for screen readers to hear (App's live region). */
   onAnnounce: (message: string) => void
   onOpenSettings: () => void
@@ -123,7 +135,7 @@ function ArchivedTasks(props: {
   open: boolean
   selectedTaskId?: string
   onToggle: () => void
-  onSelect: (taskId: string) => void
+  onSelect: (taskId: string, e: React.MouseEvent) => void
   onRestore: (task: Task) => void
   onDelete: (task: Task) => void
 }): React.JSX.Element | null {
@@ -143,7 +155,7 @@ function ArchivedTasks(props: {
       {props.open &&
         props.tasks.map((task) => (
           <div key={task.id} className={`row archived-row${props.selectedTaskId === task.id ? ' selected' : ''}`}>
-            <button className="row-label" title={task.notes} onClick={() => props.onSelect(task.id)}>
+            <button className="row-label" title={task.notes} onClick={(e) => props.onSelect(task.id, e)}>
               {task.name}
             </button>
             <span className="row-actions">
@@ -218,21 +230,85 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   // The row last moved with the keyboard. Moving a focused element in the DOM drops its focus, so once the row
   // shows at its new place it gets it back, unless the focus went somewhere else meanwhile.
   const refocus = useRef<string | null>(null)
+  /** Focuses the label of the row of `id` (a theme, item or task id). */
+  const focusRow = (id: string): void => {
+    const rows = navRef.current?.querySelectorAll<HTMLElement>('[data-row]') ?? []
+    const row = [...rows].find((r) => r.dataset.row === id)
+    row?.querySelector<HTMLElement>('.row-label')?.focus()
+  }
   useEffect(() => {
     const id = refocus.current
     refocus.current = null
     if (id === null || (document.activeElement !== null && document.activeElement !== document.body)) return
-    const rows = navRef.current?.querySelectorAll<HTMLElement>('[data-row]') ?? []
-    const row = [...rows].find((r) => r.dataset.row === id)
-    row?.querySelector<HTMLElement>('.row-label')?.focus()
+    focusRow(id)
   }, [p.state])
+
+  // The multi-selection. `anchor` is where a Shift range starts: the task last clicked or toggled here, else the
+  // current task.
+  const rows = taskRows(p.state, collapsed, filter)
+  const anchor = useRef<string | undefined>(undefined)
+  const currentTask = rows.some((r) => r.taskId === p.selected?.taskId) ? p.selected?.taskId : undefined
+  const multi = selectedTasks(p.state, p.multiSelection)
+  const choose = (next: ReadonlySet<string>): void => {
+    p.onMultiSelect(next)
+    p.onAnnounce(next.size === 0 ? 'Selection cleared' : `${plural(next.size, 'task')} selected`)
+  }
+  /** A plain click opens the task (and clears the multi-selection); Mod and Shift select instead (clickSelectMode). */
+  const clickTask = (e: React.MouseEvent, target: Target & { taskId: string }): void => {
+    const mode = clickSelectMode(e)
+    const id = target.taskId
+    if (mode === null) {
+      anchor.current = id
+      if (p.multiSelection.size > 0) choose(new Set())
+      return p.onSelect(target)
+    }
+    if (mode === 'toggle') {
+      anchor.current = id
+      return choose(toggleTask(p.multiSelection, id, currentTask))
+    }
+    const from = anchor.current ?? currentTask ?? id
+    anchor.current = from
+    const range = rangeOf(rows, from, id)
+    choose(new Set(mode === 'addRange' ? [...p.multiSelection, ...range] : range))
+  }
+  /** Folders and archived tasks open on any click; Mod and Shift, which select tasks, do nothing there. */
+  const clickOther = (e: React.MouseEvent, target: Target, refusal: string): void => {
+    if (clickSelectMode(e) !== null) return p.onAnnounce(refusal)
+    if (p.multiSelection.size > 0) choose(new Set())
+    p.onSelect(target)
+  }
+  /**
+   * A task row's keys: Alt+Shift+↑/↓ moves it; Space on its label toggles it into the selection; Shift+↑/↓ extends
+   * the selection to the task above or below in its repo, from the anchor (or this task, if the anchor is in another
+   * repo), and moves the focus there.
+   */
+  const taskKeys = (e: React.KeyboardEvent, entry: Extract<MoveEntry, { kind: 'task' }>): void => {
+    if (rowMoveStep(e) !== 0) return moveByKey(e, entry)
+    const id = entry.taskId
+    const onLabel = e.target instanceof HTMLElement && e.target.classList.contains('row-label')
+    if (e.key === ' ' && onLabel && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault() // no click: that would open the task
+      anchor.current = id
+      return choose(toggleTask(p.multiSelection, id, currentTask))
+    }
+    const step = rowExtendStep(e)
+    if (step === 0) return
+    e.preventDefault()
+    const next = neighbourTask(rows, id, step)
+    if (next === undefined) return
+    const from = rows.find((r) => r.taskId === anchor.current)?.repoId === entry.repoId ? anchor.current : id
+    anchor.current = from
+    choose(new Set(rangeOf(rows, from, next)))
+    focusRow(next)
+  }
 
   const endDrag = (): void => {
     setDragged(null)
     setDropAt(null)
   }
   const startDrag = (e: React.DragEvent, entry: MoveEntry): void => {
-    if (!reorderable) return e.preventDefault()
+    // Mod and Shift select tasks: a click with them that wanders a little never turns into a drag.
+    if (!reorderable || clickSelectMode(e) !== null) return e.preventDefault()
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData(DRAG_TYPE, entryId(entry))
     setDragged(entry)
@@ -301,7 +377,17 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   }
 
   return (
-    <nav ref={navRef} className="sidebar" inert={p.inert}>
+    <nav
+      ref={navRef}
+      className="sidebar"
+      inert={p.inert}
+      onKeyDown={(e) => {
+        // Esc anywhere in the sidebar clears the selection; the filter's Esc clears the filter only.
+        if (e.key !== 'Escape' || e.isDefaultPrevented() || p.multiSelection.size === 0) return
+        e.preventDefault()
+        choose(new Set())
+      }}
+    >
       <div
         className="sidebar-scroll"
         onDragOver={dragOver}
@@ -411,7 +497,9 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                       >
                         <button
                           className="row-label"
-                          onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id })}
+                          onClick={(e) =>
+                            clickOther(e, { themeId: theme.id, itemId: item.id }, 'Only tasks can be selected')
+                          }
                         >
                           {dot(item.id)} 📁 {item.name}
                         </button>
@@ -461,14 +549,18 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 key={task.id}
                                 {...dropZone(
                                   { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id },
-                                  `row task-row${isSelected(item.id, task.id) ? ' selected' : ''}`,
+                                  `row task-row${isSelected(item.id, task.id) ? ' selected' : ''}${p.multiSelection.has(task.id) ? ' multi-selected' : ''}`,
                                 )}
                                 {...movable({ kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })}
+                                onKeyDown={(e) =>
+                                  taskKeys(e, { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })
+                                }
+                                aria-selected={p.multiSelection.has(task.id)}
                               >
                                 <button
                                   className="row-label"
                                   title={task.notes}
-                                  onClick={() => p.onSelect({ themeId: theme.id, itemId: item.id, taskId: task.id })}
+                                  onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
                                 >
                                   {dot(task.id)} {task.name}
                                 </button>
@@ -509,7 +601,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             onToggle={() => {
                               if (!filter) p.onToggleArchived(item.id)
                             }}
-                            onSelect={(taskId) => p.onSelect({ themeId: theme.id, itemId: item.id, taskId })}
+                            onSelect={(taskId, e) =>
+                              clickOther(
+                                e,
+                                { themeId: theme.id, itemId: item.id, taskId },
+                                'Archived tasks can’t be selected',
+                              )
+                            }
                             onRestore={(task) => p.onRestoreTask(theme.id, item.id, task.id, task.name)}
                             onDelete={(task) => p.onDeleteArchivedTask(theme.id, item.id, task.id, task.name)}
                           />
@@ -520,6 +618,55 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
             </div>
           ))}
       </div>
+      {/* Kept while a batch runs, as the tasks it archives or removes leave the selection. */}
+      {(multi.length >= 2 || p.bulkBusy !== undefined) && (
+        <div className="bulk-bar" role="toolbar" aria-label="Selected tasks">
+          <span className="bulk-bar-count">{p.bulkBusy ?? `${multi.length} tasks selected`}</span>
+          <span className="bulk-bar-actions">
+            <button
+              aria-label="Push the selected tasks…"
+              title="Push each selected task's branch"
+              disabled={p.bulkBusy !== undefined}
+              onClick={() => p.onBulkAction('push')}
+            >
+              Push…
+            </button>
+            <button
+              aria-label="Update the selected tasks from base…"
+              title="Fetch, then update each selected task from its base"
+              disabled={p.bulkBusy !== undefined}
+              onClick={() => p.onBulkAction('update')}
+            >
+              Update…
+            </button>
+            <button
+              aria-label="Archive the selected tasks…"
+              title="Archive the selected tasks (removes their worktrees, keeps their branches)"
+              disabled={p.bulkBusy !== undefined}
+              onClick={() => p.onBulkAction('archive')}
+            >
+              Archive…
+            </button>
+            <button
+              aria-label="Remove the selected tasks…"
+              title="Remove the selected tasks"
+              className="bulk-bar-remove"
+              disabled={p.bulkBusy !== undefined}
+              onClick={() => p.onBulkAction('remove')}
+            >
+              Remove…
+            </button>
+            <button
+              aria-label="Clear the selection"
+              title="Clear the selection (Esc)"
+              disabled={p.bulkBusy !== undefined}
+              onClick={() => choose(new Set())}
+            >
+              Clear
+            </button>
+          </span>
+        </div>
+      )}
       <div className="sidebar-footer">
         <button
           className="sidebar-settings"
