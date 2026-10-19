@@ -91,7 +91,7 @@ export function ThemeStyleDialog(props: {
                   checked={color === c.name}
                   onChange={() => setColor(c.name)}
                 />
-                <span aria-hidden="true" style={{ background: c.css }} />
+                <span aria-hidden="true" style={{ '--theme-color': c.css } as React.CSSProperties} />
               </label>
             ))}
           </div>
