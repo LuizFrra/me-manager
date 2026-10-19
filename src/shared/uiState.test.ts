@@ -46,6 +46,7 @@ describe('normalizeUiState', () => {
       },
       panelWidth: 0.45,
       sidebarFilter: 'fix',
+      lastTemplates: { r1: 'Review' },
     }
     expect(normalizeUiState(ui, app())).toEqual(ui)
   })
@@ -121,6 +122,13 @@ describe('normalizeUiState', () => {
     expect(ui.archivedOpen).toEqual(['r1'])
     expect('archivedOpen' in normalizeUiState({ archivedOpen: ['gone'] }, app())).toBe(false)
     expect('archivedOpen' in normalizeUiState({ archivedOpen: 'r1' }, app())).toBe(false)
+  })
+
+  it('keeps the last template used in repos that exist, by name, and leaves out an empty map', () => {
+    const ui = normalizeUiState({ lastTemplates: { r1: 'Review', gone: 'Fix', f1: 'Fix', t1: 'Fix' } }, app())
+    expect(ui.lastTemplates).toEqual({ r1: 'Review' })
+    for (const lastTemplates of [{ r1: '' }, { r1: 3 }, { r1: 'x'.repeat(61) }, { r1: 'a\nb' }, ['Review'], 'r1'])
+      expect('lastTemplates' in normalizeUiState({ lastTemplates }, app()), JSON.stringify(lastTemplates)).toBe(false)
   })
 
   it('keeps an archived task as the selection and its panel entry', () => {

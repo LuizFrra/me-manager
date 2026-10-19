@@ -76,16 +76,23 @@ function taskNameError(pattern: string): string | undefined {
   return undefined
 }
 
+/** What is wrong with a template's name (trimmed first), if anything. */
+export function templateNameError(raw: string): string | undefined {
+  const name = raw.trim()
+  if (!name) return 'Enter a name.'
+  if (name.length > MAX_TEMPLATE_NAME) return `Use at most ${MAX_TEMPLATE_NAME} characters.`
+  if (hasControl(name)) return 'No tabs, line breaks or other control characters.'
+  return undefined
+}
+
 /**
  * What is wrong with each field of one template (trimmed first); {} when it can be saved. A base is only checked
  * to look like a branch name here: whether a repo has it is up to the New task dialog (see templateBase).
  */
 export function templateErrors(fields: TemplateFields): TemplateErrors {
   const errors: TemplateErrors = {}
-  const name = fields.name.trim()
-  if (!name) errors.name = 'Enter a name.'
-  else if (name.length > MAX_TEMPLATE_NAME) errors.name = `Use at most ${MAX_TEMPLATE_NAME} characters.`
-  else if (hasControl(name)) errors.name = 'No tabs, line breaks or other control characters.'
+  const name = templateNameError(fields.name)
+  if (name) errors.name = name
   const taskName = taskNameError(fields.taskName.trim())
   if (taskName) errors.taskName = taskName
   const base = fields.base.trim()

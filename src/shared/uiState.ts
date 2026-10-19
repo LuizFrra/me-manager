@@ -1,4 +1,5 @@
 import { targetKey } from './naming'
+import { templateNameError } from './templates'
 import type { AppState, PanelTabName, Target, UiPanelState, UiState } from './types'
 
 /** Side panel entries kept at most: the most recently changed ones (and always the selected target's). */
@@ -56,9 +57,9 @@ function panelEntry(raw: unknown, isTask: boolean): UiPanelState | undefined {
 
 /**
  * Makes UI state read from disk or sent by the renderer safe to use against `app`: unknown fields and wrong types
- * are dropped, targets (the selection, panel entries, collapsed ids, expanded Archived groups) that no longer exist
- * are dropped, sizes are capped (at most MAX_UI_PANELS panel entries, the most recent ones) and the panel width is
- * checked. Pure.
+ * are dropped, targets (the selection, panel entries, collapsed ids, expanded Archived groups, last templates) that
+ * no longer exist are dropped, sizes are capped (at most MAX_UI_PANELS panel entries, the most recent ones) and the
+ * panel width is checked. Pure.
  */
 export function normalizeUiState(raw: unknown, app: AppState): UiState {
   const out = emptyUiState()
@@ -101,6 +102,14 @@ export function normalizeUiState(raw: unknown, app: AppState): UiState {
 
   if (typeof raw.sidebarFilter === 'string' && raw.sidebarFilter.trim() !== '')
     out.sidebarFilter = raw.sidebarFilter.slice(0, MAX_FILTER)
+
+  if (isRecord(raw.lastTemplates)) {
+    const lastTemplates = Object.entries(raw.lastTemplates).filter(
+      (entry): entry is [string, string] =>
+        repoIds.has(entry[0]) && typeof entry[1] === 'string' && !templateNameError(entry[1]),
+    )
+    if (lastTemplates.length > 0) out.lastTemplates = Object.fromEntries(lastTemplates)
+  }
 
   return out
 }

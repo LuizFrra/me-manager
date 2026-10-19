@@ -296,6 +296,11 @@ export interface UiState {
   sidebarFilter?: string
   /** Ids of repos whose "Archived" group is expanded (each starts collapsed); absent when there are none. */
   archivedOpen?: string[]
+  /**
+   * The task template last used to create a task in each repo, by repo id: the New task dialog starts on it.
+   * Names only; one that no longer names a template is ignored. Absent when there are none.
+   */
+  lastTemplates?: Record<string, string>
 }
 
 /** The API the renderer sees as `window.api`. */
