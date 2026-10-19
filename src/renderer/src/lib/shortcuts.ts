@@ -259,13 +259,29 @@ export const REVIEW_HELP: readonly ShortcutHelpEntry[] = [
   { keys: ['Esc'], description: 'Line numbers: clear the selection' },
 ]
 
-/** Every shortcut, as listed in the help overlay, then the line numbers' keys (REVIEW_HELP). */
+/**
+ * Alt+Shift+↑ / ↓ (Option+Shift on macOS) on a focused sidebar row moves the theme, repo, folder or task up (-1) or
+ * down (1) among its siblings; 0 for any other key. Only the row's own keydown counts, so it never reaches the
+ * terminal, where the chord means something to the shell.
+ */
+export function rowMoveStep(e: KeyLike): -1 | 0 | 1 {
+  if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return 0
+  return e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+}
+
+/** rowMoveStep's keys, for the help overlay. */
+const rowMoveHelp = (mac: boolean): ShortcutHelpEntry => ({
+  keys: [mac ? '⌥⇧↑ ↓' : 'Alt+Shift+↑ ↓'],
+  description: 'Sidebar: move the focused row up or down',
+})
+
+/** Every shortcut, as listed in the help overlay, then the sidebar rows' and the line numbers' keys (REVIEW_HELP). */
 export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
   const app = SHORTCUTS.map((def) => ({
     keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
-  return [...app, ...REVIEW_HELP]
+  return [...app, rowMoveHelp(mac), ...REVIEW_HELP]
 }
 
 /** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */
