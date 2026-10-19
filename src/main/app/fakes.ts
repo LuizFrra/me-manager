@@ -122,10 +122,17 @@ export class FakeGit implements GitApi {
   async removeWorktree(_repo: string, wt: string): Promise<void> {
     this.calls.push(`removeWorktree ${wt}`)
   }
+  /** When set, restoreWorktree rejects with it (e.g. the branch is gone). */
+  failRestore: string | null = null
+  async restoreWorktree(_repo: string, wt: string, branch: string): Promise<void> {
+    this.calls.push(`restoreWorktree ${wt} ${branch}`)
+    if (this.failRestore) throw new Error(this.failRestore)
+  }
   async deleteBranch(_repo: string, branch: string): Promise<void> {
     this.calls.push(`deleteBranch ${branch}`)
   }
-  async getUnsavedWork(): Promise<UnsavedWork> {
+  async getUnsavedWork(_repo: string, wt: string): Promise<UnsavedWork> {
+    this.calls.push(`getUnsavedWork ${wt}`)
     return this.unsaved
   }
   /** By worktree path; a path without an entry rejects, like a folder that isn't a work tree. */

@@ -48,6 +48,12 @@ export interface GitApi {
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>
   /** Removes the worktree (forced); prunes if its folder is already gone. */
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>
+  /**
+   * Recreates an archived task's worktree: `git worktree add <worktreePath> <branch>`, checking out the kept branch
+   * (no new branch), after pruning stale worktree entries. Refuses when the branch no longer exists or something is
+   * at `worktreePath`.
+   */
+  restoreWorktree(repoPath: string, worktreePath: string, branch: string): Promise<void>
   deleteBranch(repoPath: string, branch: string): Promise<void>
   getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork>
   /**
