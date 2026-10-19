@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
+import { MAX_TASK_TEMPLATES } from '../../../shared/templates'
 import { SettingsDialog } from './SettingsDialog'
 
 describe('SettingsDialog: Remote Control and permissions', () => {
@@ -81,5 +82,122 @@ describe('SettingsDialog: claude arguments with a line break', () => {
       />,
     )
     expect(screen.queryByText(/settings\.json/)).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsDialog: task templates', () => {
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    skipPermissions: false,
+    taskTemplates: [
+      { name: 'Review', taskName: 'review-{n}' },
+      { name: 'Fix', prompt: 'Fix it' },
+    ],
+  }
+  const section = (): HTMLElement => screen.getByRole('region', { name: 'Task templates' })
+  const template = (name: string): HTMLElement => within(section()).getByRole('group', { name: `Template ${name}` })
+
+  it('lists the templates with their fields, and explains the name pattern', () => {
+    render(<SettingsDialog settings={settings} onSave={vi.fn()} onCancel={vi.fn()} />)
+    expect(
+      within(section())
+        .getAllByRole('group')
+        .map((g) => g.getAttribute('aria-label')),
+    ).toEqual(['Template Review', 'Template Fix'])
+    expect(within(template('Review')).getByLabelText('Name')).toHaveValue('Review')
+    expect(within(template('Review')).getByLabelText('Task name')).toHaveValue('review-{n}')
+    expect(within(template('Fix')).getByLabelText('Initial prompt')).toHaveValue('Fix it')
+    expect(within(template('Fix')).getByLabelText('Base branch')).toHaveValue('')
+    expect(section()).toHaveTextContent('{date}')
+    expect(section()).toHaveTextContent('{n}')
+  })
+
+  it('adds, edits, reorders and deletes templates, and saves them in order', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={settings} onSave={onSave} onCancel={vi.fn()} />)
+    const taskName = within(template('Review')).getByLabelText('Task name')
+    await user.clear(taskName)
+    await user.type(taskName, 'review-{{date}-{{n}')
+
+    await user.click(within(template('Fix')).getByRole('button', { name: 'Move template Fix up' }))
+    expect(
+      within(section())
+        .getAllByRole('group')
+        .map((g) => g.getAttribute('aria-label')),
+    ).toEqual(['Template Fix', 'Template Review'])
+    // At the top, Up is off: focus goes to Down, so the keyboard user isn't left on nothing.
+    expect(within(template('Fix')).getByRole('button', { name: 'Move template Fix up' })).toBeDisabled()
+    expect(within(template('Fix')).getByRole('button', { name: 'Move template Fix down' })).toHaveFocus()
+
+    await user.click(within(section()).getByRole('button', { name: 'Add template' }))
+    const added = within(section()).getByRole('group', { name: 'Template 3' })
+    expect(within(added).getByLabelText('Name')).toHaveFocus()
+    await user.keyboard('Docs')
+    await user.type(within(template('Docs')).getByLabelText('Base branch'), 'develop')
+
+    await user.click(within(template('Review')).getByRole('button', { name: 'Delete template Review' }))
+    expect(within(section()).queryByRole('group', { name: 'Template Review' })).not.toBeInTheDocument()
+    expect(within(template('Docs')).getByRole('button', { name: 'Delete template Docs' })).toHaveFocus()
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskTemplates: [
+          { name: 'Fix', prompt: 'Fix it' },
+          { name: 'Docs', base: 'develop' },
+        ],
+      }),
+    )
+  })
+
+  it('saves edits to an existing template', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={settings} onSave={onSave} onCancel={vi.fn()} />)
+    await user.type(within(template('Fix')).getByLabelText('Initial prompt'), ', then add a test')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskTemplates: [
+          { name: 'Review', taskName: 'review-{n}' },
+          { name: 'Fix', prompt: 'Fix it, then add a test' },
+        ],
+      }),
+    )
+  })
+
+  it('shows what is wrong under each field, as its description, and keeps Save off until fixed', async () => {
+    const user = userEvent.setup()
+    render(<SettingsDialog settings={settings} onSave={vi.fn()} onCancel={vi.fn()} />)
+    await user.click(within(section()).getByRole('button', { name: 'Add template' }))
+    const added = (): HTMLElement => within(section()).getByRole('group', { name: /^Template (3|review)$/ })
+    const name = within(added()).getByLabelText('Name')
+    expect(name).toHaveAttribute('aria-invalid', 'true')
+    expect(name).toHaveAccessibleDescription(/Enter a name\./)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+
+    await user.type(name, 'review')
+    expect(name).toHaveAccessibleDescription(/Another template has this name\./)
+    const pattern = within(added()).getByLabelText('Task name')
+    await user.type(pattern, 'fix-{{when}')
+    expect(pattern).toHaveAttribute('aria-invalid', 'true')
+    expect(pattern).toHaveAccessibleDescription('Unknown placeholder {when}: use {date} or {n}.')
+
+    await user.clear(name)
+    await user.type(name, 'Fix later')
+    await user.clear(pattern)
+    await user.type(pattern, 'fix-{{n}')
+    expect(name).toHaveAttribute('aria-invalid', 'false')
+    expect(pattern).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('stops adding at the limit, and says so', () => {
+    const many = Array.from({ length: MAX_TASK_TEMPLATES }, (_, i) => ({ name: `t${i}` }))
+    render(<SettingsDialog settings={{ ...settings, taskTemplates: many }} onSave={vi.fn()} onCancel={vi.fn()} />)
+    const add = within(section()).getByRole('button', { name: 'Add template' })
+    expect(add).toBeDisabled()
+    expect(add).toHaveAccessibleDescription(`At most ${MAX_TASK_TEMPLATES} templates.`)
   })
 })
