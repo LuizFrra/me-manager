@@ -563,6 +563,13 @@ button:disabled {
 .dialog-field-error {
   color: #f47067;
 }
+.dialog-field-warning {
+  color: var(--waiting);
+}
+.dialog-field select.template-select {
+  font-family: inherit;
+  font-size: inherit;
+}
 .dialog-actions-hint {
   margin-right: auto;
   align-self: center;

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   MAX_COMMIT_MESSAGE,
   MAX_TASK_NOTES,
@@ -6,10 +6,12 @@ import {
   type BranchList,
   type ChangeList,
   type NewTaskOptions,
+  type TaskTemplate,
   type UnsavedWork,
   type UpdateStrategy,
 } from '../../../shared/types'
 import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
+import { expandTaskName, templateBase } from '../../../shared/templates'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
@@ -731,30 +733,70 @@ export function NotesDialog(props: {
 
 type BranchLoad = { kind: 'loading' } | { kind: 'ready'; list: BranchList } | { kind: 'failed'; error: string }
 
+/** What the chosen template filled in, so choosing another one (or None) can tell it from what the user typed. */
+interface Prefill {
+  name: string
+  prompt: string
+  /** The base it selected; '' when it selected none. */
+  baseRef: string
+}
+
 /**
  * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
  * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
  * default base. Mod+Enter creates from anywhere in the form, Esc cancels.
+ *
+ * With templates, a "Template" choice comes first: picking one fills in the fields it sets (all stay editable),
+ * and clears what the previous template filled in unless the user has changed it since. A template's base that
+ * the repo lacks gives the default branch, with a note saying so (see templateBase).
  */
 export function NewTaskDialog(props: {
   repoName: string
   loadBranches: () => Promise<BranchList>
-  onSubmit: (name: string, options: NewTaskOptions) => Promise<void>
+  /** The task templates to choose from (Settings.taskTemplates). */
+  templates?: TaskTemplate[]
+  /** The names of the repo's tasks, archived ones included: what a template's `{n}` counts. */
+  taskNames?: string[]
+  /** The template chosen when the dialog opens, by name; None when no template has that name. */
+  initialTemplate?: string
+  /** `template`: the name of the template chosen when creating, if any. */
+  onSubmit: (name: string, options: NewTaskOptions, template?: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
   useRestoreFocus()
+  const templates = props.templates ?? []
   // The loader the dialog opened with: App re-renders (and passes a new function) on every status poll.
   const [loadBranches] = useState(() => props.loadBranches)
-  const [name, setName] = useState('')
-  const [prompt, setPrompt] = useState('')
+  const [initial] = useState(() => {
+    const template = templates.find((t) => t.name === props.initialTemplate)
+    const name = template?.taskName ? expandTaskName(template.taskName, props.taskNames ?? [], new Date()) : ''
+    return { template, prefill: { name, prompt: template?.prompt ?? '', baseRef: '' } }
+  })
+  const [templateName, setTemplateName] = useState(initial.template?.name ?? '')
+  const prefill = useRef<Prefill>({ ...initial.prefill })
+  // The chosen template's base, for when the branches arrive.
+  const wantedBase = useRef(initial.template?.base)
+  const [name, setName] = useState(initial.prefill.name)
+  const [prompt, setPrompt] = useState(initial.prefill.prompt)
   const [branches, setBranches] = useState<BranchLoad>({ kind: 'loading' })
   const [baseRef, setBaseRef] = useState('')
+  // A template's base that the repo doesn't have (the default was selected instead).
+  const [missingBase, setMissingBase] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const templateId = useId()
   const baseId = useId()
   const baseHintId = useId()
   const promptId = useId()
   const promptHintId = useId()
+
+  /** Selects the base `wantedBase` asks for in `list` (the default when none), noting one the repo lacks. */
+  const selectBase = useCallback((list: BranchList): void => {
+    const { baseRef: ref, missing } = templateBase(wantedBase.current, list)
+    setBaseRef(ref)
+    setMissingBase(missing ?? null)
+    prefill.current.baseRef = wantedBase.current ? ref : ''
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -762,14 +804,33 @@ export function NewTaskDialog(props: {
       (list) => {
         if (!alive) return
         setBranches({ kind: 'ready', list })
-        setBaseRef(list.default)
+        selectBase(list)
       },
       (err: unknown) => alive && setBranches({ kind: 'failed', error: cleanError(err) }),
     )
     return () => {
       alive = false
     }
-  }, [loadBranches])
+  }, [loadBranches, selectBase])
+
+  /** Fills in what `template` sets; clears what the last one set and the user left alone (None: no template). */
+  const chooseTemplate = (template: TaskTemplate | undefined): void => {
+    const last = prefill.current
+    const nextName = template?.taskName
+      ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
+      : name === last.name
+        ? ''
+        : name
+    const nextPrompt = template?.prompt ?? (prompt === last.prompt ? '' : prompt)
+    setTemplateName(template?.name ?? '')
+    setName(nextName)
+    setPrompt(nextPrompt)
+    prefill.current = { name: template?.taskName ? nextName : '', prompt: template?.prompt ?? '', baseRef: '' }
+    wantedBase.current = template?.base
+    if (branches.kind !== 'ready') return
+    if (template?.base || baseRef === last.baseRef) selectBase(branches.list)
+    else setMissingBase(null)
+  }
 
   const submit = async (): Promise<void> => {
     if (busyRef.current || !name.trim()) return
@@ -779,7 +840,7 @@ export function NewTaskDialog(props: {
     if (branches.kind === 'ready' && baseRef) options.baseRef = baseRef
     if (prompt.trim()) options.prompt = prompt.trim()
     try {
-      await props.onSubmit(name.trim(), options)
+      await props.onSubmit(name.trim(), options, templateName || undefined)
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -810,6 +871,24 @@ export function NewTaskDialog(props: {
         <h2>
           New task <span className="dialog-title-context">in {props.repoName}</span>
         </h2>
+        {templates.length > 0 && (
+          <div className="dialog-field">
+            <label htmlFor={templateId}>Template</label>
+            <select
+              id={templateId}
+              className="template-select"
+              value={templateName}
+              onChange={(e) => chooseTemplate(templates.find((t) => t.name === e.target.value))}
+            >
+              <option value="">None</option>
+              {templates.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <input
           autoFocus
           aria-label="Name"
@@ -824,7 +903,10 @@ export function NewTaskDialog(props: {
             aria-describedby={baseHintId}
             disabled={branches.kind !== 'ready'}
             value={branches.kind === 'ready' ? baseRef : ''}
-            onChange={(e) => setBaseRef(e.target.value)}
+            onChange={(e) => {
+              setBaseRef(e.target.value)
+              setMissingBase(null)
+            }}
           >
             {branches.kind === 'ready' ? (
               branches.list.branches.map((b) => (
@@ -839,6 +921,11 @@ export function NewTaskDialog(props: {
           {branches.kind === 'failed' ? (
             <p id={baseHintId} className="dialog-field-hint dialog-field-error" role="alert">
               Could not list the branches: {branches.error}. The task will start from the default branch.
+            </p>
+          ) : branches.kind === 'ready' && missingBase !== null ? (
+            <p id={baseHintId} className="dialog-field-hint dialog-field-warning" role="status">
+              The template&apos;s base {missingBase} isn&apos;t in {props.repoName}: starting from{' '}
+              {branches.list.default}, the default.
             </p>
           ) : (
             <p id={baseHintId} className="dialog-field-hint">
