@@ -87,6 +87,84 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
 }
 
 /**
+ * Runs a binary without a shell and resolves with the end of its stdout: all of it when it is at most `maxBytes`,
+ * otherwise the whole lines in its last `maxBytes` bytes, with `truncated` set. For output that may be too large to
+ * keep (where `run` would fail), and whose end matters most. Rejects with CommandError.
+ */
+export function runTail(
+  file: string,
+  args: string[],
+  maxBytes: number,
+  opts: Pick<RunOptions, 'cwd' | 'env' | 'timeoutMs'> = {},
+): Promise<{ stdout: string; truncated: boolean }> {
+  const command = [file, ...args].join(' ')
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { cwd: opts.cwd, env: childEnv(opts), stdio: ['ignore', 'pipe', 'pipe'] })
+    let settled = false
+    let timedOut = false
+    let stderr = ''
+    // The newest chunks whose total is just over maxBytes: older ones are dropped as new ones arrive.
+    const chunks: Buffer[] = []
+    let kept = 0
+    let dropped = false
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true
+          child.kill()
+        }, opts.timeoutMs)
+      : undefined
+    const settle = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      fn()
+    }
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      chunks.push(chunk)
+      kept += chunk.length
+      while (chunks.length > 1 && kept - chunks[0].length >= maxBytes) {
+        kept -= chunks.shift()!.length
+        dropped = true
+      }
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderr.length < MAX_STDERR) stderr += chunk.toString('utf8')
+    })
+    child.on('error', (err: NodeJS.ErrnoException) =>
+      settle(() =>
+        reject(
+          err.code === 'ENOENT'
+            ? new CommandError(command, null, '', `${file}: command not found on PATH`)
+            : new CommandError(command, null, stderr, `${command} failed: ${err.message}`),
+        ),
+      ),
+    )
+    child.on('close', (code) =>
+      settle(() => {
+        if (timedOut) return reject(new CommandError(command, null, stderr, `${command} timed out`, true))
+        if (code !== 0) {
+          const detail = stderr.trim() || `exit code ${code}`
+          return reject(new CommandError(command, code, stderr, `${command} failed: ${detail}`))
+        }
+        let out = Buffer.concat(chunks)
+        const truncated = dropped || out.length > maxBytes
+        if (truncated) {
+          out = out.subarray(Math.max(0, out.length - maxBytes))
+          // Start at a line: the cut may have landed inside one, or inside a multi-byte character. With no line
+          // break left (one huge line), at least skip the partial character (UTF-8 continuation bytes).
+          const newline = out.indexOf(0x0a)
+          let start = newline + 1
+          if (newline === -1) while (start < out.length && (out[start] & 0xc0) === 0x80) start++
+          out = out.subarray(start)
+        }
+        resolve({ stdout: out.toString('utf8'), truncated })
+      }),
+    )
+  })
+}
+
+/**
  * Runs a binary without a shell and calls `onItem` with each NUL-terminated item of its stdout, decoded as UTF-8,
  * as it arrives (for output too large to buffer, like `git ls-files -z` in a huge repo). When `onItem` returns
  * false the process is killed and the promise resolves with `stopped: true`. Rejects with CommandError.
