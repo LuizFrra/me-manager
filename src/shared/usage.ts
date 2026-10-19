@@ -27,3 +27,14 @@ export const usageTokens = (t: UsageTotals): number =>
 
 /** Cache reads plus cache writes. */
 export const usageCacheTokens = (t: UsageTotals): number => t.cacheRead + t.cacheWrite5m + t.cacheWrite1h
+
+/**
+ * US dollars: "$0.00" for nothing, "<$0.01" for a fraction of a cent, cents below $1,000 ("$3.42", "$123.45"),
+ * whole dollars from there on ("$1,234").
+ */
+export function formatCost(usd: number): string {
+  if (!Number.isFinite(usd) || usd <= 0) return '$0.00'
+  if (usd < 0.005) return '<$0.01'
+  if (usd < 999.995) return `$${usd.toFixed(2)}`
+  return `$${Math.round(usd).toLocaleString('en-US')}`
+}
