@@ -8,7 +8,15 @@ export interface Task {
   createdAt: string
   /** Free-text notes about the task, at most MAX_TASK_NOTES characters; absent when there are none. */
   notes?: string
+  /**
+   * When the task was archived (ISO time; see MeManagerApi.archiveTask): its worktree and session are gone, its
+   * branch, base and notes are kept. Absent for an active task, and in state files from before archiving existed.
+   */
+  archivedAt?: string
 }
+
+/** An archived task has no worktree and no session: nothing may poll, open or attach to it until it is restored. */
+export const isArchived = (task: Task): boolean => task.archivedAt !== undefined
 
 export const MAX_TASK_NOTES = 2000
 
@@ -266,6 +274,8 @@ export interface UiState {
   panelWidth?: number
   /** The sidebar filter's text; absent when empty. */
   sidebarFilter?: string
+  /** Ids of repos whose "Archived" group is expanded (each starts collapsed); absent when there are none. */
+  archivedOpen?: string[]
 }
 
 /** The API the renderer sees as `window.api`. */
