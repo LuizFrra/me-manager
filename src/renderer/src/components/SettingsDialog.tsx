@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { FONT_SIZE_LIMITS } from '../../../shared/settings'
 import { MAX_TASK_TEMPLATES, type TemplateErrors } from '../../../shared/templates'
-import { MAX_TASK_PROMPT, type Settings, type UpdateStrategy } from '../../../shared/types'
+import { MAX_TASK_PROMPT, type Appearance, type Settings, type UpdateStrategy } from '../../../shared/types'
 import {
   newTemplateKey,
   parseForm,
@@ -241,6 +241,12 @@ const UPDATE_CHOICES: { value: UpdateStrategy; label: string; hint: string }[] =
   { value: 'merge', label: 'Merge', hint: 'adds a merge commit (git merge --no-edit)' },
 ]
 
+const APPEARANCE_CHOICES: { value: Appearance; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+]
+
 /** Edits the app settings. Fields are checked as you type; Save is off while one is invalid. Esc cancels. */
 export function SettingsDialog(props: {
   settings: Settings
@@ -266,13 +272,20 @@ export function SettingsDialog(props: {
   const remoteHintId = useId()
   const skipHintId = useId()
   const strategyHintId = useId()
+  const appearanceHintId = useId()
   useRestoreFocus()
 
   const set =
     (
       field: Exclude<
         keyof SettingsForm,
-        'notifications' | 'remoteControl' | 'skipPermissions' | 'updateStrategy' | 'showStatusBar' | 'taskTemplates'
+        | 'notifications'
+        | 'remoteControl'
+        | 'skipPermissions'
+        | 'updateStrategy'
+        | 'showStatusBar'
+        | 'taskTemplates'
+        | 'appearance'
       >,
     ) =>
     (e: React.ChangeEvent<HTMLInputElement>): void =>
@@ -419,6 +432,30 @@ export function SettingsDialog(props: {
             ))}
             <p id={strategyHintId} className="settings-hint">
               How a task gets its base branch&apos;s new commits. Either way, a conflict is undone and reported.
+            </p>
+          </fieldset>
+        </section>
+
+        <section className="settings-section" aria-label="Appearance">
+          <h3>Appearance</h3>
+          <fieldset className="settings-choice" aria-label="Appearance" aria-describedby={appearanceHintId}>
+            <div className="settings-choice-row">
+              {APPEARANCE_CHOICES.map(({ value, label }) => (
+                <label key={value} className="settings-choice-option">
+                  <input
+                    type="radio"
+                    name="appearance"
+                    value={value}
+                    checked={form.appearance === value}
+                    onChange={() => setForm((f) => ({ ...f, appearance: value }))}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <p id={appearanceHintId} className="settings-hint">
+              Light or dark colours for the whole window: the terminal, code and diagrams too. System follows your
+              desktop&apos;s setting as it changes.
             </p>
           </fieldset>
         </section>
