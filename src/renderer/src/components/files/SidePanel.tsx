@@ -17,7 +17,9 @@ import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
 import { ChangesList } from './ChangesList'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
+import { ReviewTray } from './ReviewTray'
 import { SearchView } from './SearchView'
+import type { ReviewComment, ReviewDraft } from '../../lib/review'
 import { startVisibleInterval } from '../../lib/visibleInterval'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 
@@ -38,6 +40,19 @@ export interface SidePanelProps {
    */
   searchFocus?: number
   takeSearchFocus?: () => boolean
+  /** Review comments on this target's files (kept by App); lines can be commented on when given. */
+  review?: SidePanelReview
+}
+
+/** The review tray's comments and actions (see ReviewTray), and what the viewer's "Comment" calls. */
+export interface SidePanelReview {
+  comments: readonly ReviewComment[]
+  sending: boolean
+  onComment: (draft: ReviewDraft, done: () => void) => void
+  onEdit: (comment: ReviewComment) => void
+  onDelete: (comment: ReviewComment) => void
+  onSend: () => void
+  onCopy: () => void
 }
 
 export const PANEL_POLL_MS = 3000
@@ -246,6 +261,27 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
     })
   })
+  // A comment opens where it was made: the diff, or the file at its first line (Markdown and SVG as their text).
+  const openComment = (c: ReviewComment): void => {
+    const inFiles = c.tab === 'files' || !isRepo
+    onState({
+      ...state,
+      tab: inFiles ? 'files' : 'changes',
+      selected: c.path,
+      line: inFiles ? (c.lines?.start ?? c.removed?.start) : undefined,
+      history: [],
+      mdMode: inFiles && (isMarkdown(c.path) || isSvgPath(c.path)) ? 'raw' : state.mdMode,
+    })
+  }
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const { review } = p
+  const deleteComment = (c: ReviewComment): void => {
+    // The tray goes away with its last comment: focus would be lost with it.
+    if (review?.comments.length === 1 && document.activeElement?.closest('.review-tray')) {
+      tabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus()
+    }
+    review?.onDelete(c)
+  }
   const setSearch = useLatestCallback((search: SearchState): void => onState({ ...state, search }))
   // Focus requests for the search input: the app's (shortcut, palette) and a click on the Search tab.
   const [tabFocus, setTabFocus] = useState(0)
@@ -265,7 +301,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   return (
     <div className="panel" ref={panelRef}>
       <div className="panel-header">
-        <div className="panel-tabs" role="tablist" aria-label="Side panel">
+        <div className="panel-tabs" role="tablist" aria-label="Side panel" ref={tabsRef}>
           <button role="tab" aria-selected={tab === 'files'} onClick={() => onState({ ...state, tab: 'files' })}>
             Files
           </button>
@@ -308,6 +344,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
           </button>
         </div>
       </div>
+      {review && review.comments.length > 0 && (
+        <ReviewTray
+          comments={review.comments}
+          sending={review.sending}
+          onOpen={openComment}
+          onEdit={review.onEdit}
+          onDelete={deleteComment}
+          onSend={review.onSend}
+          onCopy={review.onCopy}
+        />
+      )}
       {missing ? (
         <div className="panel-missing" role="status">
           ⚠ This task&apos;s folder is missing.
@@ -400,6 +447,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             onOpenLink={openLink}
             onOpenFile={openFile}
             onError={onError}
+            onComment={review?.onComment}
           />
         </div>
       )}

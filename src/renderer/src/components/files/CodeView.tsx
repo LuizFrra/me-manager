@@ -59,6 +59,7 @@ export function CodeView({ path, content, highlightLine, select }: CodeViewProps
         // Focusable for the selection keys; a Shift-click would select text.
         <pre
           className="code-gutter code-gutter-select"
+          data-line-select
           role="group"
           aria-label="Line numbers"
           aria-describedby={hintId}
