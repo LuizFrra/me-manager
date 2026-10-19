@@ -30,6 +30,9 @@ export interface ReviewComment extends ReviewAnchor {
   note: string
 }
 
+/** A comment before its note is written: what the viewer hands over when lines are commented on. */
+export type ReviewDraft = Omit<ReviewComment, 'id' | 'note'>
+
 /** The longest note a review comment takes. */
 export const MAX_REVIEW_NOTE = 5_000
 

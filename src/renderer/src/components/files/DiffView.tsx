@@ -108,6 +108,7 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
   const selectProps = select && {
     ref: tableRef,
     tabIndex: 0,
+    'data-line-select': true,
     'aria-describedby': hintId,
     onKeyDown,
     onMouseDown: (e: React.MouseEvent) => {

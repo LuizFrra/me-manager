@@ -1,5 +1,5 @@
 import 'highlight.js/styles/github-dark.css'
-import { useCallback } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../../shared/types'
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { isImagePath, isSvgPath } from '../../../../shared/images'
@@ -10,6 +10,8 @@ import { DiffView } from './DiffView'
 import { ImageView } from './ImageView'
 import { MarkdownView } from './MarkdownView'
 import { useLatestCallback } from '../../lib/useLatestCallback'
+import type { LineSelection, LineSelectProps } from '../../lib/lineSelection'
+import { selectedLinesLabel, type ReviewDraft, type SelectedLines } from '../../lib/review'
 
 export interface FileViewerProps {
   api: Pick<MeManagerApi, 'readImage' | 'openExternal'>
@@ -35,6 +37,23 @@ export interface FileViewerProps {
   onOpenLink: (path: string) => void
   onOpenFile: (path: string) => void
   onError: (err: unknown) => void
+  /**
+   * Lines of the code view and the diff can be selected and commented on: called with what the comment is about,
+   * and `done`, which clears the selection (once the comment is saved).
+   */
+  onComment?: (draft: ReviewDraft, done: () => void) => void
+}
+
+/**
+ * The selected lines, with what they were selected in: the file's content or the diff text, as loaded. A new
+ * version (a poll brought changes), another file or the other tab drops the selection, as its rows may have moved.
+ */
+interface ViewSelection {
+  /** `<tab>:<path>`. */
+  key: string
+  source: unknown
+  selection: LineSelection
+  lines: SelectedLines
 }
 
 export function FileViewer(p: FileViewerProps): React.JSX.Element {
@@ -42,6 +61,24 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   const onError = useLatestCallback(p.onError)
   const loadImage = useCallback((rel: string) => api.readImage(target, rel), [api, target])
   const openExternal = useCallback((url: string) => void api.openExternal(url).catch(onError), [api, onError])
+  const sectionRef = useRef<HTMLElement>(null)
+  const [viewSel, setViewSel] = useState<ViewSelection | null>(null)
+  const source = p.tab === 'changes' ? p.diff : p.content
+  const selKey = `${p.tab}:${p.path}`
+  const current =
+    viewSel && source !== undefined && viewSel.key === selKey && viewSel.source === source ? viewSel : null
+  const comment = (): void => {
+    if (!current || !p.path || !p.onComment || p.tab === 'search') return
+    // The dialog gives focus back to what had it: the line numbers, not the Comment button about to disappear.
+    sectionRef.current?.querySelector<HTMLElement>('[data-line-select]')?.focus({ preventScroll: true })
+    const done = (): void => setViewSel((s) => (s === current ? null : s))
+    p.onComment({ path: p.path, tab: p.tab, ...current.lines }, done)
+  }
+  const select: LineSelectProps | undefined = p.onComment && {
+    selection: current?.selection ?? null,
+    onSelect: (selection, lines) => setViewSel(selection && lines ? { key: selKey, source, selection, lines } : null),
+    onComment: comment,
+  }
 
   if (!p.path) {
     return (
@@ -62,7 +99,11 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   let body: React.ReactNode
   if (p.tab === 'changes') {
     const diff =
-      p.diff === undefined ? <p className="panel-hint">Loading…</p> : <DiffView diff={p.diff} layout={p.diffLayout} />
+      p.diff === undefined ? (
+        <p className="panel-hint">Loading…</p>
+      ) : (
+        <DiffView diff={p.diff} layout={p.diffLayout} select={select} />
+      )
     // A changed image: its new version, when there is one, above the diff ("Binary file changed").
     const current = p.change && (p.change.status !== 'D' || p.change.existsOnDisk)
     body =
@@ -102,14 +143,15 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
             />
           </div>
         ) : (
-          <CodeView path={path} content={text.content} highlightLine={p.highlightLine} />
+          <CodeView path={path} content={text.content} highlightLine={p.highlightLine} select={select} />
         )}
       </>
     )
   }
 
+  const label = current && selectedLinesLabel(current.lines)
   return (
-    <section className="viewer" aria-label="File viewer">
+    <section className="viewer" aria-label="File viewer" ref={sectionRef}>
       <div className="viewer-header">
         {p.canGoBack && p.tab === 'files' && (
           <button className="viewer-btn" onClick={p.onBack} title="Back to the previous file">
@@ -160,6 +202,28 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
           </button>
         )}
       </div>
+      {p.onComment && (
+        <span className="sr-only" role="status">
+          {label && `${label} selected`}
+        </span>
+      )}
+      {label && (
+        <div className="viewer-selection">
+          <span className="viewer-selection-label">{label}</span>
+          <span className="viewer-selection-hint">C to comment · Esc to clear</span>
+          <button className="viewer-btn primary" title="Comment on the selected lines (C)" onClick={comment}>
+            Comment
+          </button>
+          <button
+            className="panel-icon"
+            aria-label="Clear the line selection"
+            title="Clear the selection (Esc)"
+            onClick={() => setViewSel(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="viewer-body">{body}</div>
     </section>
   )
