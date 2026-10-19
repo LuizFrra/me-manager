@@ -1556,6 +1556,38 @@ body.resizing .side-panel {
   pointer-events: none;
   scroll-margin: 48px;
 }
+/* Lines selected for a review comment, over the gutter and the text like .code-line-mark. */
+.code-line-sel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(8px + var(--sel-line, 0) * 18px);
+  height: calc(var(--sel-lines, 1) * 18px);
+  background: #4fa3ff1f;
+  box-shadow: inset 2px 0 0 var(--accent);
+  pointer-events: none;
+}
+/* The selection's moving end, scrolled into view as the arrow keys move it. */
+.code-line-cursor {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  top: calc(8px + var(--sel-line, 0) * 18px);
+  height: 18px;
+  pointer-events: none;
+  scroll-margin: 24px;
+}
+.code-gutter-select {
+  cursor: pointer;
+  outline: none;
+}
+.code-gutter-select:hover,
+.code-gutter-select:focus-visible {
+  color: #a8b1bb;
+}
+.code-gutter-select:focus-visible {
+  box-shadow: inset -1px 0 0 var(--accent);
+}
 .code-view pre {
   margin: 0;
   padding: 8px 0;
@@ -1714,6 +1746,27 @@ body.resizing .side-panel {
 .diff-split td.diff-note {
   color: var(--muted);
   font-style: italic;
+}
+/* Line selection for review comments: line numbers are clicked, the table takes focus for the keys. */
+.diff-table[tabindex] {
+  outline: none;
+}
+.diff-table[tabindex]:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.diff-table td[data-sel] {
+  cursor: pointer;
+}
+.diff-table td[data-sel]:hover {
+  color: #a8b1bb;
+}
+.diff-unified tr.diff-selected td,
+.diff-split td.diff-selected {
+  background-image: linear-gradient(#4fa3ff2e, #4fa3ff2e);
+}
+.diff-unified tr.diff-selected td:first-child,
+.diff-split td.diff-ln.diff-selected {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 pre.diff-raw {
   margin: 0;
