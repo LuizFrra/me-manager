@@ -66,4 +66,4 @@ Status: `todo` · `doing` · `done (<sha>)` · `dropped (<reason>)`.
 | 39 | Save the terminal transcript: export a tab's tmux scrollback to a file, or copy it | feature | done (merge of feat/f39-transcript) |
 | 40 | Appearance: light theme and system-follow option, with the terminal colors matching | ux | in progress (feat/f40-theme) |
 | 41 | Portuguese (pt-BR) UI translation, with a language setting (English default) | ux | todo |
-| 42 | Virtualize the diff view: an expanded large diff (over 5,000 lines) renders every row today, unlike the code viewer; render only the visible rows, keeping line selection, split layout and review comments working | perf | in progress (feat/f42-diffvirt) |
+| 42 | Virtualize the diff view: an expanded large diff (over 5,000 lines) renders every row today, unlike the code viewer; render only the visible rows, keeping line selection, split layout and review comments working | perf | done (merge of feat/f42-diffvirt) |
