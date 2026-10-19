@@ -103,6 +103,8 @@ export function normalizeUiState(raw: unknown, app: AppState): UiState {
   if (typeof raw.sidebarFilter === 'string' && raw.sidebarFilter.trim() !== '')
     out.sidebarFilter = raw.sidebarFilter.slice(0, MAX_FILTER)
 
+  if (raw.sidebarCollapsed === true) out.sidebarCollapsed = true
+
   if (isRecord(raw.lastTemplates)) {
     const lastTemplates = Object.entries(raw.lastTemplates).filter(
       (entry): entry is [string, string] =>

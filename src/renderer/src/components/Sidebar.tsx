@@ -7,6 +7,7 @@ import {
   FolderGit2,
   FolderPlus,
   Palette,
+  PanelLeft,
   Pencil,
   Plus,
   RotateCcw,
@@ -66,6 +67,10 @@ export interface SidebarProps {
   onAddTheme: () => void
   /** New task: the home screen's composer. Without it, no New task button. */
   onNewTask?: () => void
+  /** Collapsed to a rail of icons (toggle, New task, Usage, Settings), as Claude's sidebar collapses. */
+  rail?: boolean
+  /** Hides or shows the sidebar. Without it, no toggle. */
+  onToggleSidebar?: () => void
   onRenameTheme: (themeId: string, currentName: string) => void
   /** Opens "Customize theme…" (colour and icon). */
   onCustomizeTheme: (themeId: string) => void
@@ -396,6 +401,42 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     }
   }
 
+  if (p.rail)
+    return (
+      <nav className="sidebar sidebar-rail" aria-label="Sidebar" inert={p.inert}>
+        {p.onToggleSidebar && (
+          <button
+            aria-label="Show sidebar"
+            title={`Show sidebar (${shortcutLabel('sidebar')})`}
+            onClick={p.onToggleSidebar}
+          >
+            <PanelLeft {...ICON} size={18} />
+          </button>
+        )}
+        {p.onNewTask && (
+          <button
+            className="sidebar-rail-new"
+            aria-label="New task"
+            title={`New task (${shortcutLabel('newTask')})`}
+            onClick={p.onNewTask}
+          >
+            <Plus {...ICON} size={16} strokeWidth={2.25} />
+          </button>
+        )}
+        <span className="sidebar-rail-spacer" />
+        <button
+          aria-label="Usage"
+          title={`Claude usage and estimated cost (${shortcutLabel('usage')})`}
+          onClick={p.onOpenUsage}
+        >
+          <ChartColumn {...ICON} size={18} />
+        </button>
+        <button aria-label="Settings" title={`Settings (${shortcutLabel('settings')})`} onClick={p.onOpenSettings}>
+          <Settings {...ICON} size={18} />
+        </button>
+      </nav>
+    )
+
   return (
     <nav
       ref={navRef}
@@ -411,6 +452,16 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
       <div className="sidebar-brand">
         <Spark />
         <span className="sidebar-brand-name">me-manager</span>
+        {p.onToggleSidebar && (
+          <button
+            className="sidebar-toggle"
+            aria-label="Hide sidebar"
+            title={`Hide sidebar (${shortcutLabel('sidebar')})`}
+            onClick={p.onToggleSidebar}
+          >
+            <PanelLeft {...ICON} size={18} />
+          </button>
+        )}
       </div>
       {p.onNewTask && (
         <button

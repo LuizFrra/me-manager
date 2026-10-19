@@ -139,6 +139,43 @@ button:disabled {
   grid-template-columns: 280px 1fr;
   height: 100%;
 }
+/* Collapsed: a rail of icons, as Claude's sidebar collapses. */
+.app.sidebar-collapsed {
+  grid-template-columns: 52px 1fr;
+}
+.sidebar-rail {
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0 10px;
+}
+.sidebar-rail button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--muted);
+  border-radius: var(--radius);
+}
+.sidebar-rail button:hover {
+  color: var(--text-strong);
+}
+.sidebar-rail .sidebar-rail-new {
+  width: 28px;
+  height: 28px;
+  margin-top: 4px;
+  color: white;
+  background: var(--primary-bg);
+  border-radius: 50%;
+}
+.sidebar-rail .sidebar-rail-new:hover {
+  color: white;
+  background: var(--primary-bg-hover);
+}
+.sidebar-rail-spacer {
+  flex: 1;
+}
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -157,6 +194,16 @@ button:disabled {
 }
 .sidebar-brand .spark {
   color: var(--accent);
+}
+.sidebar-toggle {
+  display: flex;
+  margin-left: auto;
+  padding: 4px;
+  color: var(--muted);
+  border-radius: var(--radius);
+}
+.sidebar-toggle:hover {
+  color: var(--text-strong);
 }
 .sidebar-brand-name {
   font-family: var(--font-serif);
@@ -1881,23 +1928,22 @@ body.resizing .side-panel {
 .segmented {
   display: flex;
   flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
+  gap: 2px;
+  padding: 2px;
+  background: var(--subtle-strong);
+  border-radius: var(--radius);
 }
 .segmented button {
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   padding: 1px 9px;
   color: var(--muted);
 }
-.segmented button + button {
-  border-left: 1px solid var(--border);
-}
 .segmented button[aria-pressed='true'] {
-  background: var(--accent-bg-strong);
-  color: var(--text);
+  background: var(--raised);
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px var(--shadow-color);
 }
 /* Lines selected in the code view or the diff: what they are, and Comment. */
 /* Floats over the bottom of the viewer: shown in the flow it would push the lines down between a click and a
@@ -2707,9 +2753,9 @@ kbd {
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   box-shadow: var(--overlay-shadow);
   outline: none;
   overflow: hidden;
@@ -2723,7 +2769,10 @@ kbd {
 }
 .help-header h2 {
   margin: 0;
-  font-size: 14px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 560;
+  color: var(--text-strong);
 }
 .help-close {
   color: var(--muted);
@@ -2958,9 +3007,9 @@ kbd {
   max-height: 88vh;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-xl);
   box-shadow: var(--overlay-shadow);
   outline: none;
   overflow: hidden;
@@ -2974,28 +3023,30 @@ kbd {
 }
 .usage-header h2 {
   margin: 0;
-  font-size: 14px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 560;
+  color: var(--text-strong);
 }
 .usage-periods {
   display: flex;
+  gap: 2px;
   margin-left: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  padding: 2px;
+  background: var(--subtle-strong);
+  border-radius: var(--radius);
 }
 .usage-periods button {
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   padding: 3px 12px;
   color: var(--muted);
   font-size: 12px;
 }
-.usage-periods button + button {
-  border-left: 1px solid var(--border);
-}
 .usage-periods button.active {
-  color: var(--text);
-  background: var(--selected);
+  color: var(--text-strong);
+  background: var(--raised);
+  box-shadow: 0 1px 2px var(--shadow-color);
 }
 .usage-body {
   flex: 1;

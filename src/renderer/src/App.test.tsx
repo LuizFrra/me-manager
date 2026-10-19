@@ -749,7 +749,13 @@ describe('App command palette', () => {
   it('leaves out target actions when nothing is selected', async () => {
     render(<App api={createMockApi()} />)
     const dialog = await openPalette()
-    expect(optionNames(dialog)).toEqual(['New theme', 'Show usage', 'Open settings', 'Show keyboard shortcuts'])
+    expect(optionNames(dialog)).toEqual([
+      'New theme',
+      'Show or hide the sidebar',
+      'Show usage',
+      'Open settings',
+      'Show keyboard shortcuts',
+    ])
   })
 })
 
@@ -3357,6 +3363,26 @@ describe('App welcome and home screens', () => {
     await screen.findByText('my-api › fix')
     await user.keyboard('{Control>}{Shift>}N{/Shift}{/Control}')
     expect(await screen.findByRole('region', { name: 'Home' })).toBeInTheDocument()
+  })
+
+  it('collapses the sidebar to a rail and back, from its toggle or Ctrl+Shift+B, and remembers it', async () => {
+    const api = createMockApi()
+    await api.createTheme('Work')
+    const saveUiState = vi.spyOn(api, 'saveUiState')
+    const user = userEvent.setup()
+    const { unmount } = render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: 'Hide sidebar' }))
+    const rail = screen.getByRole('navigation', { name: 'Sidebar' })
+    expect(rail).toHaveClass('sidebar-rail')
+    expect(within(rail).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove theme Work' })).not.toBeInTheDocument()
+    unmount() // saves the UI as it is
+    expect(saveUiState).toHaveBeenLastCalledWith(expect.objectContaining({ sidebarCollapsed: true }))
+
+    render(<App api={api} />)
+    expect(await screen.findByRole('button', { name: 'Show sidebar' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'B', ctrlKey: true, shiftKey: true })
+    expect(await screen.findByRole('button', { name: 'Remove theme Work' })).toBeInTheDocument()
   })
 
   it('offers no composer without a repository', async () => {

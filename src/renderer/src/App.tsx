@@ -159,6 +159,7 @@ type AppAction =
       type:
         | 'newTheme'
         | 'newTaskHome'
+        | 'toggleSidebar'
         | 'togglePanel'
         | 'searchFiles'
         | 'newTab'
@@ -331,6 +332,7 @@ function buildPaletteCommands(
   }
   if (repoChoices(state).length > 0) action('New task…', 'newTaskHome', shortcutLabel('newTask'))
   action('New theme', 'newTheme')
+  action('Show or hide the sidebar', 'toggleSidebar', shortcutLabel('sidebar'))
   if (multiSelected >= 2) {
     for (const bulk of ['push', 'update', 'archive', 'remove'] as const)
       commands.push({
@@ -469,6 +471,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   // Repos whose "Archived" group is expanded; each starts collapsed.
   const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+  // Whether the sidebar is collapsed to its rail; remembered in the UI state.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const toggleArchived = useCallback(
     (repoId: string) =>
       setArchivedOpen((prev) => {
@@ -744,6 +748,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     panelWidth: panelFraction,
     ...(sidebarFilter.trim() ? { sidebarFilter } : {}),
     ...(archivedOpen.size > 0 ? { archivedOpen: [...archivedOpen] } : {}),
+    ...(sidebarCollapsed ? { sidebarCollapsed: true as const } : {}),
     ...(Object.keys(lastTemplates).length > 0 ? { lastTemplates } : {}),
   }))
   const saveUiNow = useLatestCallback((): void => {
@@ -763,6 +768,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       const [ui, live] = await Promise.all([api.getUiState(), api.getStatus().catch(() => null)])
       setCollapsed(new Set(ui.collapsed))
       if (ui.archivedOpen) setArchivedOpen(new Set(ui.archivedOpen))
+      if (ui.sidebarCollapsed) setSidebarCollapsed(true)
       if (ui.lastTemplates) setLastTemplates((current) => ({ ...ui.lastTemplates, ...current }))
       if (ui.sidebarFilter) setSidebarFilter((current) => current || (ui.sidebarFilter ?? ''))
       for (const [key, entry] of Object.entries(ui.panels)) {
@@ -798,7 +804,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       uiSaveTimer.current = null
       api.saveUiState(uiSnapshot()).catch(() => {})
     }, UI_SAVE_MS)
-  }, [api, uiSnapshot, selected, collapsed, archivedOpen, sidebarFilter, panel, panelFraction, lastTemplates])
+  }, [
+    api,
+    uiSnapshot,
+    selected,
+    collapsed,
+    archivedOpen,
+    sidebarFilter,
+    panel,
+    panelFraction,
+    lastTemplates,
+    sidebarCollapsed,
+  ])
 
   // A save still waiting goes out when the window closes or reloads (and if the App unmounts).
   useEffect(() => {
@@ -1658,6 +1675,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         return openSettings()
       case 'newTask':
         return goHome()
+      case 'sidebar':
+        return setSidebarCollapsed((c) => !c)
       case 'openEditor':
         return openExternally('editor')
       case 'zoomIn':
@@ -1668,10 +1687,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         return togglePanel()
       case 'searchFiles':
         return searchInFiles()
-      case 'filterSidebar':
-        sidebarFilterRef.current?.focus()
-        sidebarFilterRef.current?.select()
+      case 'filterSidebar': {
+        const focusFilter = (): void => {
+          sidebarFilterRef.current?.focus()
+          sidebarFilterRef.current?.select()
+        }
+        // From the rail, the sidebar opens first; the filter is there on the next frame.
+        if (!sidebarCollapsed) return focusFilter()
+        setSidebarCollapsed(false)
+        requestAnimationFrame(focusFilter)
         return
+      }
       case 'target': {
         const target = visibleTargets(state, collapsed, filterSidebar(state, sidebarFilter))[shortcut.index]
         if (target && !sameTarget(selectedRef.current, target)) void open(target)
@@ -1832,6 +1858,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (action.type === 'open') void open(action.target)
     else if (action.type === 'newTheme') newTheme()
     else if (action.type === 'newTaskHome') goHome()
+    else if (action.type === 'toggleSidebar') setSidebarCollapsed((c) => !c)
     else if (action.type === 'togglePanel') togglePanel()
     else if (action.type === 'searchFiles') searchInFiles()
     else if (action.type === 'newTab') void tabAction((t) => api.newTab(t))
@@ -1893,8 +1920,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   // Everything below can read the resolved appearance (the terminal and Mermaid need it; CSS uses the root attribute).
   const content = (
-    <div className="app">
+    <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
+        rail={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
         state={state}
         status={status}
         gitStatus={gitStatus}

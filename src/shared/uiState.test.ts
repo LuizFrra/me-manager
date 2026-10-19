@@ -117,6 +117,12 @@ describe('normalizeUiState', () => {
     expect(normalizeUiState({ sidebarFilter: 'x'.repeat(500) }, app()).sidebarFilter).toHaveLength(200)
   })
 
+  it('keeps a collapsed sidebar, and nothing else for it', () => {
+    expect(normalizeUiState({ sidebarCollapsed: true }, app()).sidebarCollapsed).toBe(true)
+    for (const sidebarCollapsed of [false, 'true', 1])
+      expect('sidebarCollapsed' in normalizeUiState({ sidebarCollapsed }, app()), String(sidebarCollapsed)).toBe(false)
+  })
+
   it('keeps the expanded Archived groups of repos that exist, once each, and leaves out an empty list', () => {
     const ui = normalizeUiState({ archivedOpen: ['r1', 'gone', 'f1', 't1', 'r1', 7] }, app())
     expect(ui.archivedOpen).toEqual(['r1'])
