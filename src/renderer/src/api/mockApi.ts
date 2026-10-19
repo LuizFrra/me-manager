@@ -26,6 +26,7 @@ import {
 import { emptyUiState, normalizeUiState } from '../../../shared/uiState'
 import { checkCloneName, checkCloneUrl } from '../../../shared/clone'
 import { normalizeThemeStyle } from '../../../shared/themeStyle'
+import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -94,6 +95,22 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     const task = repo?.kind === 'repo' ? repo.tasks.find((k) => k.id === taskId) : undefined
     if (!task) throw new Error(`Task not found: ${taskId}`)
     return task
+  }
+
+  /** Makes the tab at `index` the active one, like selecting a tmux window. */
+  const activate = (index: number): void => {
+    for (const tab of tabs) tab.active = tab.index === index
+  }
+  /** The demo's run tab, opened (active) or shown; refuses like main without a run command. */
+  const run = (target: Target, restart: boolean): TabInfo[] => {
+    const item = state.themes.find((t) => t.id === target.themeId)?.items.find((i) => i.id === target.itemId)
+    if (!item?.runCommand) throw new Error(`Set a run command for “${item?.name ?? '?'}” first`)
+    let tab = tabs.find((t) => t.name === RUN_WINDOW)
+    if (!tab)
+      tabs.push((tab = { index: Math.max(-1, ...tabs.map((t) => t.index)) + 1, name: RUN_WINDOW, active: true }))
+    if (restart) delete tab.dead
+    activate(tab.index)
+    return clone(tabs)
   }
 
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
@@ -188,6 +205,14 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (item?.kind === 'repo' && item.tasks.length > 0) throw new Error(`Remove the tasks in "${item.name}" first`)
         t.items = t.items.filter((i) => i.id !== itemId)
       }),
+    setRunCommand: (themeId, itemId, command) =>
+      edit(themeId, (t) => {
+        const item = t.items.find((i) => i.id === itemId)
+        if (!item) throw new Error(`Item not found: ${itemId}`)
+        const runCommand = normalizeRunCommand(command)
+        if (runCommand) item.runCommand = runCommand
+        else delete item.runCommand
+      }),
     restoreItem: (themeId, item, index) =>
       edit(themeId, (t) => {
         if (t.items.some((i) => i.id === item.id || i.path === item.path))
@@ -252,13 +277,20 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (task.archivedAt === undefined) throw new Error(`"${task.name}" is not archived`)
         delete task.archivedAt
       }),
-    openTarget: async () => tabs,
+    openTarget: async () => clone(tabs),
     detachTerminal: async () => {},
-    listTabs: async () => tabs,
-    newTab: async () => tabs,
-    selectTab: async () => tabs,
-    closeTab: async () => tabs,
-    restartClaude: async () => tabs,
+    listTabs: async () => clone(tabs),
+    newTab: async () => clone(tabs),
+    selectTab: async () => clone(tabs),
+    closeTab: async () => clone(tabs),
+    restartClaude: async () => clone(tabs),
+    startRun: async (target) => run(target, false),
+    restartRun: async (target) => run(target, true),
+    stopRun: async () => {
+      const tab = tabs.find((t) => t.name === RUN_WINDOW)
+      if (tab) tab.dead = true
+      return clone(tabs)
+    },
     copyTranscript: async (_target, index) => transcriptOf(index).transcript,
     saveTranscript: async (_target, index) => {
       const { tab, transcript } = transcriptOf(index)
