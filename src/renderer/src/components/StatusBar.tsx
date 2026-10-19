@@ -22,7 +22,7 @@ export interface StatusBarProps {
   tabs: number
   /** Today's estimated Claude cost in USD, once the usage is loaded. */
   todayCost?: number
-  /** New Claude sessions start with --dangerously-skip-permissions. */
+  /** New Claude sessions skip permission prompts (see effectiveSessionFlags). */
   skipPermissions: boolean
   /** Copies the branch the bar shows. */
   onCopyBranch: (branch: string) => void
@@ -127,7 +127,7 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
         {p.skipPermissions && (
           <span
             className="status-seg status-warn"
-            title="New Claude sessions start with --dangerously-skip-permissions: Claude runs commands without asking"
+            title="New Claude sessions skip permission prompts (--dangerously-skip-permissions): Claude runs commands without asking"
           >
             ⚠ skip-perms
           </span>

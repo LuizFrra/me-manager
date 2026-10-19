@@ -5,10 +5,16 @@ import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
 import type { MeManagerApi, TabInfo, Target, TaskGitStatus, UsageReport, UsageSummary } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
+import { fuzzyFilter } from './lib/fuzzy'
 
 vi.mock('./components/TerminalView', () => ({
   TerminalView: ({ fontSize }: { fontSize: number }) => <div data-testid="terminal" data-font-size={fontSize} />,
 }))
+// The real matcher, spied on: the palette must not re-run it on App renders that change none of its inputs.
+vi.mock('./lib/fuzzy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/fuzzy')>()
+  return { ...actual, fuzzyFilter: vi.fn(actual.fuzzyFilter) }
+})
 vi.mock('./components/files/MarkdownView', () => ({
   MarkdownView: ({ source }: { source: string }) => <div data-testid="markdown">MD:{source}</div>,
 }))
@@ -459,6 +465,32 @@ describe('App command palette', () => {
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument()
   })
 
+  it('does not re-run the fuzzy matching when App re-renders for something else', async () => {
+    const user = userEvent.setup()
+    let ptyExit: (code: number) => void = () => {}
+    const api = repoApi({
+      onPtyExit: (cb) => {
+        ptyExit = cb
+        return () => {}
+      },
+    })
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'task A', 'task B')
+    await openPalette()
+    await user.type(search(), 'task')
+    await screen.findByRole('option', { name: 'Client X › my-api › task A' })
+    const matcher = vi.mocked(fuzzyFilter)
+    matcher.mockClear()
+    act(() => ptyExit(0)) // App re-renders: the session-ended overlay
+    expect(await screen.findByText('Session ended.')).toBeInTheDocument()
+    expect(matcher).not.toHaveBeenCalled()
+    await user.type(search(), ' B')
+    expect(matcher).toHaveBeenCalled() // a new query does match again
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')[0]).toHaveAccessibleName(
+      'Client X › my-api › task B',
+    )
+  })
+
   it('leaves Ctrl+K and Ctrl+/ to the terminal on Linux', async () => {
     render(<App api={repoApi()} />)
     const k = fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
@@ -547,29 +579,33 @@ describe('App keyboard shortcuts', () => {
   const press = (key: string, over: Partial<KeyboardEventInit> = {}, target: Element | Window = window): void => {
     fireEvent.keyDown(target, { key, ctrlKey: true, ...over })
   }
+  const alt = { ctrlKey: false, altKey: true }
   const twoTabs: TabInfo[] = [
     { index: 0, name: 'claude', active: true },
     { index: 1, name: 'bash', active: false },
   ]
 
-  it('selects the Nth visible task with Ctrl+1..9, skipping collapsed groups', async () => {
+  it('selects the Nth visible task with Alt+1..9, skipping collapsed groups', async () => {
     const user = userEvent.setup()
     const api = repoApi()
     const openTarget = vi.spyOn(api, 'openTarget')
     render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B') // task B is selected
-    press('1')
+    press('1', alt)
     expect(await screen.findByText('my-api › task A')).toBeInTheDocument()
-    press('2')
+    press('2', alt)
     expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
 
     openTarget.mockClear()
-    press('2') // already selected: nothing to do
-    press('3') // there is no third target
+    press('2', alt) // already selected: nothing to do
+    press('3', alt) // there is no third target
+    // Ctrl+digits stay with the terminal (Ctrl+3 is ESC, Ctrl+4 SIGQUIT, …): not handled, not prevented
+    expect(fireEvent.keyDown(window, { key: '1', code: 'Digit1', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(window, { key: '3', code: 'Digit3', ctrlKey: true })).toBe(true)
     expect(openTarget).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('button', { name: /📦 my-api$/ })) // collapse the repo
-    press('1')
+    press('1', alt)
     expect(openTarget).not.toHaveBeenCalled()
     expect(screen.getByText('my-api › task B')).toBeInTheDocument()
   })
@@ -608,7 +644,7 @@ describe('App keyboard shortcuts', () => {
     render(<App api={repoApi()} />)
     press('?', { shiftKey: true })
     const help = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
-    for (const keys of ['Ctrl+Shift+P', 'Ctrl+Shift+/', 'Ctrl+Shift+E', 'Ctrl+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
+    for (const keys of ['Ctrl+Shift+P', 'Ctrl+Shift+/', 'Ctrl+Shift+E', 'Alt+1…9', 'Ctrl+Shift+T', 'Ctrl+Shift+W'])
       expect(within(help).getByText(keys)).toBeInTheDocument()
     expect(within(help).getByText('New shell tab')).toBeInTheDocument()
     await user.keyboard('{Escape}')
@@ -635,7 +671,7 @@ describe('App keyboard shortcuts', () => {
     await user.click(screen.getByRole('button', { name: 'Toggle files panel' }))
     const filter = await screen.findByRole('textbox', { name: 'Filter files' })
     press('T', { shiftKey: true }, filter)
-    press('1', {}, filter)
+    press('1', alt, filter)
     expect(newTab).not.toHaveBeenCalled()
     expect(openTarget).not.toHaveBeenCalled()
 
@@ -708,7 +744,7 @@ describe('App sidebar filter', () => {
     expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument()
   })
 
-  it('is focused with Ctrl+Shift+F, and Ctrl+1 counts only the filtered entries', async () => {
+  it('is focused with Ctrl+Shift+F, and Alt+1 counts only the filtered entries', async () => {
     const user = userEvent.setup()
     await setup(user)
     await user.click(taskButton('fix login bug'))
@@ -716,9 +752,9 @@ describe('App sidebar filter', () => {
     fireEvent.keyDown(window, { key: 'F', ctrlKey: true, shiftKey: true })
     expect(filterBox()).toHaveFocus()
     await user.type(filterBox(), 'tests')
-    fireEvent.keyDown(filterBox(), { key: '1', ctrlKey: true }) // ignored while typing in the filter
+    fireEvent.keyDown(filterBox(), { key: '1', altKey: true }) // ignored while typing in the filter
     expect(screen.getByText('my-api › fix login bug')).toBeInTheDocument()
-    fireEvent.keyDown(window, { key: '1', ctrlKey: true })
+    fireEvent.keyDown(window, { key: '1', altKey: true })
     expect(await screen.findByText('my-api › add tests')).toBeInTheDocument()
   })
 
@@ -2178,6 +2214,59 @@ describe('App removing themes, repos and folders', () => {
     expect(removeItem).not.toHaveBeenCalled()
   })
 
+  it('puts removals back in their places whatever order they are undone in', async () => {
+    const user = userEvent.setup()
+    const paths = ['/home/me/code/my-api', '/home/me/docs/notes', '/home/me/docs/specs']
+    const api = createMockApi({ pickDirectory: async () => paths.shift() ?? null })
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await user.click(screen.getByRole('button', { name: 'Add folder to Client X' }))
+    await screen.findByRole('button', { name: 'Remove specs' })
+    const names = ['Client X/my-api', 'Client X/notes', 'Client X/specs']
+    expect(await itemNames(api)).toEqual(names)
+    const undo = (message: string): HTMLElement =>
+      within(screen.getAllByRole('status').find((t) => t.textContent?.includes(message))!).getByRole('button', {
+        name: 'Undo',
+      })
+
+    // [A, B, C]: remove A, then B; undo A, then B.
+    await user.click(screen.getByRole('button', { name: 'Remove my-api' }))
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove my-api' })).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Remove notes' }))
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove notes' })).not.toBeInTheDocument())
+    expect(await itemNames(api)).toEqual(['Client X/specs'])
+    await user.click(undo('Removed repository “my-api”'))
+    await screen.findByRole('button', { name: 'Remove my-api' })
+    await user.click(undo('Removed folder “notes”'))
+    await screen.findByRole('button', { name: 'Remove notes' })
+    expect(await itemNames(api)).toEqual(names)
+
+    // The same with themes: [Client X, Personal, Work], remove Client X then Personal, undo oldest first.
+    for (const name of ['Personal', 'Work']) {
+      await user.click(screen.getByRole('button', { name: 'New theme' }))
+      await user.type(screen.getByRole('textbox', { name: 'Name' }), name)
+      await user.click(screen.getByRole('button', { name: 'Create' }))
+      await screen.findByRole('button', { name: `Remove theme ${name}` })
+    }
+    const themeNames = async (): Promise<string[]> => (await api.getState()).themes.map((t) => t.name)
+    for (const name of ['Client X', 'Personal']) {
+      await user.click(screen.getByRole('button', { name: `Remove theme ${name}` }))
+      await user.click(screen.getByRole('button', { name: 'Remove' }))
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: `Remove theme ${name}` })).not.toBeInTheDocument(),
+      )
+    }
+    await user.click(undo('Removed theme “Client X”'))
+    await screen.findByRole('button', { name: 'Remove theme Client X' })
+    await user.click(undo('Removed theme “Personal”'))
+    await screen.findByRole('button', { name: 'Remove theme Personal' })
+    expect(await themeNames()).toEqual(['Client X', 'Personal', 'Work'])
+  })
+
   it('shows why an undo failed', async () => {
     const user = userEvent.setup()
     await setupTheme(user, {
@@ -2338,6 +2427,18 @@ describe('App status bar', () => {
     expect(bar.getByText('1 tab')).toBeInTheDocument()
     expect(await bar.findByRole('button', { name: /^Today's cost \$\d+\.\d\d: show usage$/ })).toBeInTheDocument()
     expect(bar.getByText('⚠ skip-perms')).toBeInTheDocument() // on by default
+  })
+
+  it("doesn't claim permissions are skipped when the claude arguments choose a permission mode", async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    await api.updateSettings({ claudeArgs: ['--permission-mode', 'plan'], skipPermissions: true })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('group', { name: 'Status bar' })
+    expect(screen.getByText('Remote')).toBeInTheDocument() // the other flag still shows
+    expect(screen.queryByText('⚠ permissions skipped')).not.toBeInTheDocument()
+    expect(screen.queryByText('⚠ skip-perms')).not.toBeInTheDocument()
   })
 
   it('copies the branch, opens the Changes tab and the usage view from its segments', async () => {
@@ -2637,5 +2738,154 @@ describe('App welcome and home screens', () => {
     expect(screen.queryByRole('region', { name: 'Home' })).not.toBeInTheDocument()
     await act(async () => resolve({ version: 1, themes: [] }))
     expect(await screen.findByRole('region', { name: /^Welcome/ })).toBeInTheDocument()
+  })
+})
+
+describe('App modal focus', () => {
+  const sidebar = (): Element => document.querySelector('.sidebar')!
+  const main = (): Element => document.querySelector('main')!
+  const statusBar = (): HTMLElement => screen.getByRole('group', { name: 'Status bar' })
+  const expectInert = (inert: boolean): void => {
+    for (const el of [sidebar(), main(), statusBar()]) {
+      if (inert) expect(el.closest('[inert]'), el.className).not.toBeNull()
+      else expect(el.closest('[inert]'), el.className).toBeNull()
+    }
+  }
+
+  it('makes the sidebar, the main area and the status bar inert while any dialog or overlay is open', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('group', { name: 'Status bar' })
+    expectInert(false)
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expectInert(true)
+    await user.keyboard('{Escape}')
+    expectInert(false)
+
+    fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true }) // palette
+    expectInert(true)
+    fireEvent.keyDown(window, { key: '?', ctrlKey: true, shiftKey: true }) // help replaces it
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    expectInert(true)
+    fireEvent.keyDown(window, { key: 'U', ctrlKey: true, shiftKey: true }) // usage
+    expectInert(true)
+    fireEvent.keyDown(window, { key: 'U', ctrlKey: true, shiftKey: true })
+    expectInert(false)
+
+    await user.click(screen.getByRole('button', { name: 'New task in my-api' }))
+    expectInert(true)
+    await user.keyboard('{Escape}')
+    expectInert(false)
+
+    await user.click(screen.getByRole('button', { name: 'Customize theme Client X' }))
+    expectInert(true)
+    await user.keyboard('{Escape}')
+    expectInert(false)
+  })
+})
+
+describe('App background actions and the dialog shown by then', () => {
+  /** An api whose createTask waits for `gate`. */
+  function slowApi(gate: Deferred): MeManagerApi {
+    const api = repoApi()
+    const createTask = api.createTask
+    api.createTask = async (...args) => {
+      await gate.promise
+      return createTask(...args)
+    }
+    return api
+  }
+
+  const startTask = async (user: UserEvent, name: string): Promise<void> => {
+    await user.click(await screen.findByRole('button', { name: 'New task in my-api' }))
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), name)
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+  }
+
+  it('keeps Settings, opened while a task was being created, and does not jump to the new task', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = slowApi(gate)
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await startTask(user, 'slow task')
+    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox', { name: 'Name' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+
+    gate.resolve()
+    expect(await screen.findByRole('button', { name: 'Remove task slow task' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(openTarget).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('terminal')).not.toBeInTheDocument()
+  })
+
+  it('still opens the new task when the dialog was only dismissed meanwhile', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = slowApi(gate)
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
+    await startTask(user, 'slow task')
+    await user.click(screen.getByRole('textbox', { name: 'Name' }))
+    await user.keyboard('{Escape}')
+    gate.resolve()
+    await waitFor(() => expect(openTarget).toHaveBeenCalled())
+    expect(await screen.findByText('my-api › slow task')).toBeInTheDocument()
+  })
+
+  it('keeps a dialog opened while a commit was running', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = repoApi()
+    const commitAll = api.commitAll
+    api.commitAll = async (...args) => {
+      await gate.promise
+      return commitAll(...args)
+    }
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(within(screen.getByRole('group', { name: 'Git' })).getByRole('button', { name: 'Commit all…' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Commit all in fix login bug' }))
+    await dialog.findByText('3 files will be committed')
+    await user.type(dialog.getByRole('textbox', { name: 'Commit message' }), 'wip')
+    await user.click(dialog.getByRole('button', { name: 'Commit' }))
+    await user.click(dialog.getByRole('textbox', { name: 'Commit message' }))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    gate.resolve()
+    expect(await screen.findByText('Committed 3 files')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+  })
+
+  it('reports conflicts in a toast instead of replacing a dialog opened while the update ran', async () => {
+    const user = userEvent.setup()
+    const gate = deferred()
+    const api = repoApi()
+    const updateFromBase = api.updateFromBase
+    api.updateFromBase = async (...args) => {
+      await gate.promise
+      return updateFromBase(...args)
+    }
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'conflict demo')
+    await user.click(
+      within(screen.getByRole('group', { name: 'Git' })).getByRole('button', { name: 'Update from base' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    gate.resolve()
+    expect(await screen.findByText(/stopped on conflicts in 2 files and was undone/)).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 })

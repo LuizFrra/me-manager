@@ -3,7 +3,7 @@ export const isMac = typeof navigator !== 'undefined' && navigator.userAgent.inc
 export interface KeyLike {
   type?: string
   key: string
-  /** The physical key; used as a fallback for punctuation whose `key` depends on the layout. */
+  /** The physical key; a fallback for keys whose `key` depends on the layout (see matchShortcut). */
   code?: string
   ctrlKey: boolean
   metaKey: boolean
@@ -16,8 +16,10 @@ export interface KeyLike {
  *
  * They avoid keys a terminal needs. On Linux, Ctrl+<letter> and Ctrl+/ reach the shell and Claude Code (Ctrl+K
  * kills to the end of the line, Ctrl+/ is undo, Ctrl+T and Ctrl+W mean something to shells and editors), so the
- * app uses Ctrl+Shift chords there. macOS terminals use Ctrl, not Cmd, so Cmd+K and Cmd+/ are free and work as
- * extra, familiar chords for the palette and the help overlay.
+ * app uses Ctrl+Shift chords there. Ctrl+digits are control codes in a terminal too (Ctrl+3 is ESC, Ctrl+4 is
+ * FS/SIGQUIT, then GS, RS, ^_ undo and DEL), so switching tasks is Alt+1..9 on Linux. macOS terminals use Ctrl,
+ * not Cmd, so Cmd+1..9, Cmd+K and Cmd+/ are free; the last two are extra, familiar chords for the palette and the
+ * help overlay.
  */
 export type ShortcutId =
   | 'palette'
@@ -37,7 +39,7 @@ export type ShortcutId =
   | 'zoomOut'
   | 'zoomReset'
 
-/** `target` carries the 0-based position of the task or folder to select (Mod+1 is index 0). */
+/** `target` carries the 0-based position of the task or folder to select (Alt+1 / Cmd+1 is index 0). */
 export type Shortcut = { id: Exclude<ShortcutId, 'target'> } | { id: 'target'; index: number }
 
 /** One key combination that triggers a shortcut, on top of Mod. */
@@ -54,6 +56,8 @@ interface Chord {
   macOnly?: true
   /** Shift is only how the layout types the key (Shift+= is '+'), so labels show "Mod++", not "Mod+Shift++". */
   shiftImplied?: true
+  /** Held with Alt instead of Ctrl on Linux (Cmd on macOS, as usual). */
+  linuxAlt?: true
 }
 
 interface ShortcutDef {
@@ -65,12 +69,20 @@ interface ShortcutDef {
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
-/** A Mod(+Shift)+letter chord, matched on `key` only so it follows the user's layout. */
-const letter = (shift: boolean, display: string): Chord => ({ shift, keys: [display.toLowerCase()], display })
+/**
+ * A Mod(+Shift)+letter chord. It matches on `key`, so it follows the user's Latin layout (Dvorak, AZERTY…), and on
+ * the physical key only when `key` isn't a Latin letter at all (Russian, Greek, Hebrew… layouts).
+ */
+const letter = (shift: boolean, display: string): Chord => ({
+  shift,
+  keys: [display.toLowerCase()],
+  codes: [`Key${display}`],
+  display,
+})
 
 // Digits and brackets also match on `code`, for layouts where those keys type something else (AZERTY digits,
-// brackets behind Shift on US: '{'). Mod+Shift+/ matches both '/' and '?': with Shift, US layouts report '?',
-// and layouts where '/' itself needs Shift (German: Shift+7) report '/'.
+// brackets behind Shift on US: '{'); see matchShortcut for when `code` counts. Mod+Shift+/ matches both '/' and
+// '?': with Shift, US layouts report '?', and layouts where '/' itself needs Shift (German: Shift+7) report '/'.
 const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'palette',
@@ -97,7 +109,7 @@ const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'target',
     description: 'Go to the 1st…9th task or folder in the sidebar',
-    chords: [{ shift: false, keys: DIGITS, codes: DIGITS.map((d) => `Digit${d}`), display: '1…9' }],
+    chords: [{ shift: false, keys: DIGITS, codes: DIGITS.map((d) => `Digit${d}`), display: '1…9', linuxAlt: true }],
   },
   { id: 'newTab', description: 'New shell tab', chords: [letter(true, 'T')] },
   { id: 'closeTab', description: 'Close the active tab', chords: [letter(true, 'W')] },
@@ -158,20 +170,55 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 
 const hasMod = (e: KeyLike, mac: boolean): boolean => (mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)
 
-/** The app shortcut `e` triggers, or null. Only keydowns count, and never with Alt (AltGr types characters). */
+/**
+ * Whether `e` holds exactly the chord's modifier: Cmd on macOS; Ctrl on Linux, or Alt for a `linuxAlt` chord.
+ * Alt never counts on top of Ctrl or Cmd (AltGr types characters).
+ */
+function holdsModifier(e: KeyLike, c: Chord, mac: boolean): boolean {
+  if (mac) return e.metaKey && !e.ctrlKey && !e.altKey
+  if (c.linuxAlt) return e.altKey && !e.ctrlKey && !e.metaKey
+  return e.ctrlKey && !e.metaKey && !e.altKey
+}
+
+/** Characters a zoom shortcut is typed with: on a digit key (AZERTY's '-' is on 6), they are not a digit. */
+const ZOOM_KEYS = new Set(['=', '+', '-'])
+
+/**
+ * Whether the physical key `code` may stand in for `key`, which no chord matched: a letter key only when `key`
+ * isn't a Latin letter (a non-Latin layout), a digit key only when `key` is neither a digit nor a zoom character.
+ * Punctuation keys (comma, brackets, the keypad) always may.
+ */
+function codeMayStandIn(code: string, key: string): boolean {
+  if (code.startsWith('Key')) return !/^[a-z]$/.test(key)
+  if (code.startsWith('Digit')) return !/^[0-9]$/.test(key) && !ZOOM_KEYS.has(key)
+  return true
+}
+
+const toShortcut = (def: ShortcutDef, index: number): Shortcut =>
+  def.id === 'target' ? { id: 'target', index } : { id: def.id }
+
+/**
+ * The app shortcut `e` triggers, or null. Only keydowns count. What the key types (`key`) is matched first, across
+ * every shortcut, so Mod+- on AZERTY (the 6 key) zooms out rather than going to the 6th task; the physical key
+ * (`code`) is a fallback, see codeMayStandIn.
+ */
 export function matchShortcut(e: KeyLike, mac = isMac): Shortcut | null {
   if (e.type !== undefined && e.type !== 'keydown') return null
-  if (!hasMod(e, mac) || e.altKey) return null
   const key = e.key.toLowerCase()
-  for (const def of SHORTCUTS) {
-    for (const c of chordsFor(def, mac)) {
-      if (c.shift !== e.shiftKey) continue
-      const byKey = c.keys.indexOf(key)
-      const byCode = e.code === undefined || !c.codes ? -1 : c.codes.indexOf(e.code)
-      if (byKey === -1 && byCode === -1) continue
-      if (def.id === 'target') return { id: 'target', index: byKey !== -1 ? byKey : byCode }
-      return { id: def.id as Exclude<ShortcutId, 'target'> }
-    }
+  const candidates = SHORTCUTS.flatMap((def) =>
+    chordsFor(def, mac)
+      .filter((c) => c.shift === e.shiftKey && holdsModifier(e, c, mac))
+      .map((c) => ({ def, c })),
+  )
+  for (const { def, c } of candidates) {
+    const index = c.keys.indexOf(key)
+    if (index !== -1) return toShortcut(def, index)
+  }
+  const { code } = e
+  if (code === undefined || !codeMayStandIn(code, key)) return null
+  for (const { def, c } of candidates) {
+    const index = c.codes?.indexOf(code) ?? -1
+    if (index !== -1) return toShortcut(def, index)
   }
   return null
 }
@@ -181,12 +228,13 @@ export function isPanelShortcut(e: KeyLike, mac = isMac): boolean {
   return matchShortcut(e, mac)?.id === 'panel'
 }
 
-/** "Ctrl+Shift+E" on Linux, "⌘⇧E" on macOS. */
-export function formatKeys(display: string, shift: boolean, mac = isMac): string {
-  return mac ? `⌘${shift ? '⇧' : ''}${display}` : `Ctrl+${shift ? 'Shift+' : ''}${display}`
+/** "Ctrl+Shift+E" (or "Alt+Shift+E" with `alt`) on Linux, "⌘⇧E" on macOS. */
+export function formatKeys(display: string, shift: boolean, mac = isMac, alt = false): string {
+  return mac ? `⌘${shift ? '⇧' : ''}${display}` : `${alt ? 'Alt' : 'Ctrl'}+${shift ? 'Shift+' : ''}${display}`
 }
 
-const chordLabel = (c: Chord, mac: boolean): string => formatKeys(c.display, c.shift && !c.shiftImplied, mac)
+const chordLabel = (c: Chord, mac: boolean): string =>
+  formatKeys(c.display, c.shift && !c.shiftImplied, mac, c.linuxAlt === true)
 
 /** The shortcut's main chord on this platform, for hints and tooltips. */
 export function shortcutLabel(id: ShortcutId, mac = isMac): string {

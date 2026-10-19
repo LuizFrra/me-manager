@@ -43,3 +43,43 @@ describe('SettingsDialog: update strategy', () => {
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ updateStrategy: 'merge' }))
   })
 })
+
+describe('SettingsDialog: claude arguments with a line break', () => {
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    skipPermissions: false,
+    claudeArgs: ['--append-system-prompt', 'Be brief.\nAnswer in English.', '--model', 'opus'],
+  }
+  const field = (): HTMLElement => screen.getByLabelText('Extra claude arguments')
+
+  it('warns that the field cannot show it, and saves the arguments untouched when the field was not edited', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={settings} onSave={onSave} onCancel={vi.fn()} />)
+    expect(field()).toHaveAccessibleDescription(/Edit settings\.json to change this argument/)
+    await user.click(screen.getByRole('checkbox', { name: /Desktop notifications/ })) // another field
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ claudeArgs: settings.claudeArgs }))
+  })
+
+  it('saves what was typed once the field is edited', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={settings} onSave={onSave} onCancel={vi.fn()} />)
+    await user.clear(field())
+    await user.type(field(), '--model sonnet')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ claudeArgs: ['--model', 'sonnet'] }))
+  })
+
+  it('shows no warning for ordinary arguments', () => {
+    render(
+      <SettingsDialog
+        settings={{ ...settings, claudeArgs: ['--model', 'opus'] }}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText(/settings\.json/)).not.toBeInTheDocument()
+  })
+})

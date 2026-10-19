@@ -14,6 +14,7 @@ import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
+import { useRestoreFocus } from '../lib/useRestoreFocus'
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
 export function NameDialog(props: {
@@ -28,6 +29,7 @@ export function NameDialog(props: {
   onSubmit: (name: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus() // closing gives focus back, usually to the terminal
   const [name, setName] = useState(props.initial ?? '')
   const [busy, setBusy] = useState(false)
   const unchanged = props.initial !== undefined && name.trim() === props.initial
@@ -84,6 +86,7 @@ export function RemoveTaskDialog(props: {
   onConfirm: (deleteBranch: boolean) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   const [deleteBranch, setDeleteBranch] = useState(false)
   const [busy, setBusy] = useState(false)
   // The ref blocks a second click that lands before React re-renders with the buttons disabled.
@@ -170,6 +173,7 @@ export function ConfirmRemoveDialog(props: {
   onConfirm: () => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const noun = REMOVAL_NOUN[props.kind]
@@ -253,6 +257,7 @@ export function CloneRepoDialog(props: {
   onClone: (url: string, parentDir: string, name: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   const [url, setUrl] = useState('')
   const [parent, setParent] = useState(props.initialParent)
   // null: follow the URL; a string once the user edits the name.
@@ -433,6 +438,7 @@ export function NotesDialog(props: {
   onSave: (notes: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   const [notes, setNotes] = useState(props.initial)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
@@ -510,6 +516,7 @@ export function NewTaskDialog(props: {
   onSubmit: (name: string, options: NewTaskOptions) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   // The loader the dialog opened with: App re-renders (and passes a new function) on every status poll.
   const [loadBranches] = useState(() => props.loadBranches)
   const [name, setName] = useState('')
@@ -658,6 +665,7 @@ export function CommitDialog(props: {
   onCommit: (message: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   // The loader the dialog opened with: App passes a new function on every render.
   const [loadChanges] = useState(() => props.loadChanges)
   const [changes, setChanges] = useState<ChangesLoad>({ kind: 'loading' })
@@ -794,6 +802,7 @@ export function ConflictDialog(props: {
   onAskClaude: () => Promise<void>
   onClose: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const ask = async (): Promise<void> => {
@@ -868,6 +877,7 @@ export function ChooseThemeDialog(props: {
   onChoose: (themeId: string) => void
   onCancel: () => void
 }): React.JSX.Element {
+  useRestoreFocus()
   return (
     <div className="overlay">
       <div

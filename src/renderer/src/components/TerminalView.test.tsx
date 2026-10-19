@@ -77,8 +77,8 @@ describe('TerminalView key handler', () => {
       key({ key: '-' }),
       key({ key: '0' }),
       key({ key: 'E', shiftKey: true }),
-      key({ key: '1' }),
-      key({ key: '9' }),
+      key({ key: '1', ctrlKey: false, altKey: true }),
+      key({ key: '9', ctrlKey: false, altKey: true }),
       key({ key: 'T', shiftKey: true }),
       key({ key: 'W', shiftKey: true }),
       key({ key: '{', shiftKey: true, code: 'BracketLeft' }),
@@ -97,8 +97,22 @@ describe('TerminalView key handler', () => {
       key({ key: 'u' }), // readline: kill to the start of the line
       key({ key: 's' }), // flow control / readline forward search
       key({ key: 'a', ctrlKey: false }),
+      // Ctrl+3…8 are control codes in a terminal (ESC, FS/SIGQUIT, GS, RS, ^_ undo, DEL)
+      ...['1', '3', '4', '5', '6', '7', '8', '9'].map((d) => key({ key: d, code: `Digit${d}` })),
     ]
     for (const e of terminalKeys) expect(handler?.(e), `${e.key} should reach tmux`).toBe(true)
+  })
+  it('swallows every key while a modal is open, and lets them through again after', () => {
+    const { rerender } = render(<TerminalView api={api} sessionKey="s" fontSize={13} modalOpen />)
+    const handler = handlers.at(-1)
+    const plain = new KeyboardEvent('keydown', { key: 'a' })
+    const escape = new KeyboardEvent('keydown', { key: 'Escape' })
+    expect(handler?.(plain)).toBe(false)
+    expect(handler?.(escape)).toBe(false)
+    rerender(<TerminalView api={api} sessionKey="s" fontSize={13} modalOpen={false} />)
+    expect(handlers.at(-1)).toBe(handler) // the same terminal
+    expect(handler?.(plain)).toBe(true)
+    expect(handler?.(escape)).toBe(true)
   })
 })
 
