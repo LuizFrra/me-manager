@@ -94,6 +94,12 @@ export interface Repo {
   slug: string
   path: string
   tasks: Task[]
+  /**
+   * A shell command line (e.g. `npm run dev`) that "Run" starts in a `run` tab of any of the repo's tasks, in its
+   * worktree. One line, trimmed, at most MAX_RUN_COMMAND characters (see shared/runCommand.ts); absent when unset,
+   * and in state files from before run commands existed.
+   */
+  runCommand?: string
 }
 
 export interface Folder {
@@ -102,6 +108,8 @@ export interface Folder {
   name: string
   slug: string
   path: string
+  /** Like Repo.runCommand, run in the folder. */
+  runCommand?: string
 }
 
 export type Item = Repo | Folder
