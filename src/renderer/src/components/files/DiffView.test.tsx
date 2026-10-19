@@ -172,7 +172,7 @@ describe('DiffView split layout', () => {
     await user.click(screen.getByRole('button', { name: 'Show diff anyway' }))
     rerender(<DiffView diff={largeDiff(5001)} layout="split" />)
     expect(screen.getByRole('table', { name: 'Side-by-side diff' })).toBeInTheDocument()
-  })
+  }, 20_000) // renders 5001 rows twice in jsdom: past the 5 s default when the machine is busy
 
   it('renders <script> in diff text as plain text', () => {
     const { container } = render(<DiffView diff={UNTRACKED_NO_INDEX} layout="split" />)

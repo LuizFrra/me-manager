@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   test: {
+    globalSetup: ['src/main/test/globalTmp.ts'],
     projects: [
       {
         test: {
