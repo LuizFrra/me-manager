@@ -935,6 +935,9 @@ export function NewTaskDialog(props: {
   taskNames?: string[]
   /** The template chosen when the dialog opens, by name; None when no template has that name. */
   initialTemplate?: string
+  /** The name and prompt it opens with (the home composer's), kept as typed when a template is chosen. */
+  initialName?: string
+  initialPrompt?: string
   /** `template`: the name of the template chosen when creating, if any. */
   onSubmit: (name: string, options: NewTaskOptions, template?: string) => Promise<void>
   onCancel: () => void
@@ -952,8 +955,8 @@ export function NewTaskDialog(props: {
   const prefill = useRef<Prefill>({ ...initial.prefill })
   // The chosen template's base, for when the branches arrive.
   const wantedBase = useRef(initial.template?.base)
-  const [name, setName] = useState(initial.prefill.name)
-  const [prompt, setPrompt] = useState(initial.prefill.prompt)
+  const [name, setName] = useState(props.initialName ?? initial.prefill.name)
+  const [prompt, setPrompt] = useState(props.initialPrompt ?? initial.prefill.prompt)
   const [branches, setBranches] = useState<BranchLoad>({ kind: 'loading' })
   const [baseRef, setBaseRef] = useState('')
   // A template's base that the repo doesn't have (the default was selected instead).

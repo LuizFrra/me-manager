@@ -114,7 +114,16 @@ type DialogBody =
   /** A review comment's note: a new one (no `initial`) or an edit. */
   | { kind: 'reviewComment'; location: string; initial?: string; onSave: (note: string) => void }
   /** `template`: the task template the dialog starts on, by name. */
-  | { kind: 'newTask'; themeId: string; repoId: string; repoName: string; template?: string }
+  | {
+      kind: 'newTask'
+      themeId: string
+      repoId: string
+      repoName: string
+      template?: string
+      /** From the home composer: what it held. */
+      name?: string
+      prompt?: string
+    }
   | { kind: 'commit'; target: Target; taskName: string; branch: string }
   | { kind: 'conflicts'; target: Target; branch: string; result: Extract<UpdateResult, { kind: 'conflict' }> }
   | {
@@ -1296,6 +1305,20 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     setComposerFocus((n) => n + 1)
   }
 
+  /** The composer's Options…: the New task dialog for the chosen repository, with the prompt and its name. */
+  const moreTaskOptions = (themeId: string, repoId: string, prompt: string): void => {
+    const repo = stateRef.current.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+    if (repo?.kind !== 'repo') return
+    const text = prompt.trim()
+    const name = text
+      ? taskNameFromPrompt(
+          text,
+          repo.tasks.map((t) => t.slug),
+        )
+      : undefined
+    openDialog({ kind: 'newTask', themeId, repoId, repoName: repo.name, name, prompt: text || undefined })
+  }
+
   /** The composer's Start: a task named from the prompt, which becomes Claude's first message; then opens it. */
   const startTaskFromHome = async (themeId: string, repoId: string, prompt: string): Promise<boolean> => {
     const repo = stateRef.current.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
@@ -2161,6 +2184,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             onCloneRepo={startClone}
             onOpenPalette={() => setPaletteOpen(true)}
             onStartTask={startTaskFromHome}
+            onMoreTaskOptions={moreTaskOptions}
             composerFocus={composerFocus}
           />
         )}
@@ -2183,6 +2207,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           templates={settings.taskTemplates}
           taskNames={repoTaskNames(state, dialog.themeId, dialog.repoId)}
           initialTemplate={dialog.template}
+          initialName={dialog.name}
+          initialPrompt={dialog.prompt}
           onSubmit={(name, options, template) =>
             createTask(dialog.id, dialog.themeId, dialog.repoId, name, options, template)
           }
