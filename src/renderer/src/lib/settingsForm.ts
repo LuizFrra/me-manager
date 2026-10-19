@@ -3,7 +3,7 @@ import { FONT_SIZE_LIMITS, POLL_INTERVAL_LIMITS } from '../../../shared/settings
 import { commandBasename, isTerminalEditor } from '../../../shared/editor'
 import { joinShellWords, splitShellWords } from '../../../shared/shell'
 import { templateListErrors, toTaskTemplate, type TemplateErrors, type TemplateFields } from '../../../shared/templates'
-import type { Settings, TaskTemplate, UpdateStrategy } from '../../../shared/types'
+import type { Appearance, Settings, TaskTemplate, UpdateStrategy } from '../../../shared/types'
 
 /** A task template as edited: its fields as typed, and a key that stays with it while the list is reordered. */
 export interface TemplateForm extends TemplateFields {
@@ -36,6 +36,7 @@ export interface SettingsForm {
   taskTemplates: TemplateForm[]
   dailyBudget: string
   taskBudget: string
+  appearance: Appearance
 }
 
 /** What the Settings dialog edits: everything but what the app remembers by itself (the last clone folder). */
@@ -62,6 +63,7 @@ export function toForm(s: Settings): SettingsForm {
     taskTemplates: s.taskTemplates.map(toTemplateForm),
     dailyBudget: budgetText(s.dailyBudgetUsd),
     taskBudget: budgetText(s.taskBudgetUsd),
+    appearance: s.appearance,
   }
 }
 
@@ -116,6 +118,7 @@ export function parseForm(
       taskTemplates: form.taskTemplates.map(toTaskTemplate),
       dailyBudgetUsd,
       taskBudgetUsd,
+      appearance: form.appearance,
     },
   }
 }
