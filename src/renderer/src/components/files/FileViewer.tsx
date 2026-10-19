@@ -203,7 +203,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
         )}
       </div>
       {p.onComment && (
-        <span className="sr-only" role="status">
+        <span className="sr-only viewer-selection-status" aria-live="polite">
           {label && `${label} selected`}
         </span>
       )}
