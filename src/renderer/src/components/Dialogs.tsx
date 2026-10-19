@@ -15,6 +15,7 @@ import { plural } from '../lib/gitStatus'
 import { cleanError } from '../lib/toasts'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
+import { MAX_REVIEW_NOTE } from '../lib/review'
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
 export function NameDialog(props: {
@@ -589,6 +590,74 @@ export function CloneRepoDialog(props: {
 }
 
 /** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
+/**
+ * Writes or edits a review comment's note on `location` (see reviewLocation). With `initial`, saving it unchanged is
+ * disabled.
+ */
+export function ReviewCommentDialog(props: {
+  location: string
+  initial?: string
+  onSave: (note: string) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus() // back to the line numbers, or the tray's Edit button
+  const [note, setNote] = useState(props.initial ?? '')
+  const counterId = useId()
+  const editing = props.initial !== undefined
+  const title = editing ? `Edit the comment on ${props.location}` : `Comment on ${props.location}`
+  const blocked = !note.trim() || (editing && note.trim() === props.initial?.trim())
+  const save = (): void => {
+    if (!blocked) props.onSave(note.trim())
+  }
+  return (
+    <div className="overlay">
+      <form
+        className="dialog notes-dialog"
+        role="dialog"
+        aria-label={title}
+        onSubmit={(e) => {
+          e.preventDefault()
+          save()
+        }}
+      >
+        <h2 className="review-dialog-title">{title}</h2>
+        <textarea
+          autoFocus
+          aria-label="Comment"
+          aria-describedby={counterId}
+          rows={6}
+          maxLength={MAX_REVIEW_NOTE}
+          placeholder="What should Claude change here?"
+          value={note}
+          onFocus={(e) => editing && e.currentTarget.select()}
+          onChange={(e) => setNote(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              props.onCancel()
+            } else if (isModEnter(e.nativeEvent)) {
+              e.preventDefault()
+              save()
+            }
+          }}
+        />
+        <div className="notes-meta">
+          <span>{MOD_ENTER_LABEL} to save</span>
+          <span id={counterId}>{`${note.length} / ${MAX_REVIEW_NOTE}`}</span>
+        </div>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={blocked}>
+            {editing ? 'Save' : 'Add comment'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 export function NotesDialog(props: {
   taskName: string
   initial: string

@@ -9,6 +9,8 @@ import { FileViewer, type FileViewerProps } from './FileViewer'
 
 const TARGET: Target = { themeId: 't', itemId: 'r', taskId: 'k' }
 const text = (content: string): FileContent => ({ kind: 'text', content, size: content.length, truncated: false })
+/** What a screen reader hears about the selection (a live region, not a status: toasts are those). */
+const status = (): HTMLElement => document.querySelector<HTMLElement>('.viewer-selection-status')!
 /** Line `n` of the code view's gutter (8px padding, 18px lines; jsdom has no layout). */
 const lineY = (n: number): number => 8 + (n - 1) * 18 + 5
 
@@ -38,7 +40,7 @@ describe('FileViewer review comments', () => {
     const gutter = screen.getByRole('group', { name: 'Line numbers' })
     fireEvent.click(gutter, { clientY: lineY(2) })
     fireEvent.click(gutter, { clientY: lineY(3), shiftKey: true })
-    expect(screen.getByRole('status')).toHaveTextContent('Lines 2–3 selected')
+    expect(status()).toHaveTextContent('Lines 2–3 selected')
     await user.click(screen.getByRole('button', { name: 'Comment' }))
     expect(onComment).toHaveBeenCalledWith(
       { path: 'src/app.ts', tab: 'files', lines: { start: 2, end: 3 } },
@@ -46,10 +48,10 @@ describe('FileViewer review comments', () => {
     )
     // Focus is on the line numbers, for the dialog to give it back to.
     expect(gutter).toHaveFocus()
-    expect(screen.getByRole('status')).toHaveTextContent('Lines 2–3 selected')
+    expect(status()).toHaveTextContent('Lines 2–3 selected')
     const done = onComment.mock.calls[0][1] as () => void
     act(() => done())
-    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+    expect(status()).toBeEmptyDOMElement()
     expect(screen.queryByRole('button', { name: 'Comment' })).toBeNull()
   })
 
@@ -76,7 +78,7 @@ describe('FileViewer review comments', () => {
     ]
     fireEvent.click(row('beta')[0])
     fireEvent.click(row('BETA')[1], { shiftKey: true })
-    expect(screen.getByRole('status')).toHaveTextContent('Line 2 and removed line 2 selected')
+    expect(status()).toHaveTextContent('Line 2 and removed line 2 selected')
     const props = {
       api: { readImage: async () => null, openExternal: async () => {} },
       target: TARGET,
@@ -93,7 +95,7 @@ describe('FileViewer review comments', () => {
       onComment,
     }
     rerender(<FileViewer {...props} diffLayout="split" />)
-    expect(screen.getByRole('status')).toHaveTextContent('Line 2 and removed line 2 selected')
+    expect(status()).toHaveTextContent('Line 2 and removed line 2 selected')
     await user.click(screen.getByRole('button', { name: 'Comment' }))
     expect(onComment).toHaveBeenCalledWith(
       { path: 'single.txt', tab: 'changes', lines: { start: 2, end: 2 }, removed: { start: 2, end: 2 } },

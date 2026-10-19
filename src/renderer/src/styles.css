@@ -436,6 +436,9 @@ button:disabled {
 .notes-dialog {
   width: min(560px, 92vw);
 }
+.review-dialog-title {
+  overflow-wrap: anywhere;
+}
 .notes-dialog textarea {
   min-height: 140px;
   padding: 8px;
