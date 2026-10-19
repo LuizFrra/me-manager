@@ -129,15 +129,15 @@ function ArchivedTasks(props: {
   )
 }
 
-/** A repo's or folder's row button for its run command; the tooltip shows the command. */
+/** A repo's or folder's row button that edits its run command; the tooltip shows the command. */
 function RunCommandButton({ item, onClick }: { item: Item; onClick: () => void }): React.JSX.Element {
   return (
     <button
       aria-label={`Run command for ${item.name}…`}
-      title={item.runCommand ? `Run command: ${item.runCommand}` : 'Set a run command…'}
+      title={item.runCommand ? `Edit the run command: ${item.runCommand}` : 'Set a run command…'}
       onClick={onClick}
     >
-      ▶
+      {/* Not ▶: it edits the command rather than running it, and ▶ is the tree's expand arrow. */}⚙
     </button>
   )
 }

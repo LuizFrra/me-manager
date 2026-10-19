@@ -96,7 +96,7 @@ describe('TaskHeader run controls', () => {
     const user = userEvent.setup()
     const props = run()
     render(<TaskHeader {...base} run={props} />)
-    const button = within(group()).getByRole('button', { name: 'Run npm run dev' })
+    const button = within(group()).getByRole('button', { name: 'Start npm run dev' })
     expect(button).toHaveAttribute('title', 'Run “npm run dev” in a “run” tab')
     await user.click(button)
     expect(props.onRun).toHaveBeenCalledTimes(1)
@@ -112,10 +112,7 @@ describe('TaskHeader run controls', () => {
     const props = run({ state: 'running' })
     render(<TaskHeader {...base} run={props} />)
     expect(screen.getByLabelText('Run: running')).toHaveClass('run-state', 'running')
-    expect(within(group()).getByRole('button', { name: 'Run npm run dev' })).toHaveAttribute(
-      'title',
-      'Show the “run” tab',
-    )
+    expect(within(group()).getByRole('button', { name: 'Show run tab' })).toHaveAttribute('title', 'Show the “run” tab')
     await user.click(within(group()).getByRole('button', { name: 'Restart run' }))
     await user.click(within(group()).getByRole('button', { name: 'Stop run' }))
     expect(props.onRestart).toHaveBeenCalledTimes(1)

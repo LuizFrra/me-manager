@@ -218,7 +218,7 @@ describe('Sidebar run commands', () => {
     )
     renderSidebar({ state: withCommand, onEditRunCommand })
     const repoButton = screen.getByRole('button', { name: 'Run command for api…' })
-    expect(repoButton).toHaveAttribute('title', 'Run command: npm run dev')
+    expect(repoButton).toHaveAttribute('title', 'Edit the run command: npm run dev')
     const folderButton = screen.getByRole('button', { name: 'Run command for notes…' })
     expect(folderButton).toHaveAttribute('title', 'Set a run command…')
     await user.click(repoButton)

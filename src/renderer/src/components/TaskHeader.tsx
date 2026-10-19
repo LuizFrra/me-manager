@@ -164,13 +164,16 @@ function RunControls(props: RunControlsProps): React.JSX.Element {
               <span aria-hidden="true">{RUN_STATE_INFO[state].glyph}</span> {RUN_STATE_INFO[state].label}
             </span>
           )}
-          <button
-            aria-label={`Run ${command}`}
-            title={state === 'none' ? `Run “${command}” in a “run” tab` : 'Show the “run” tab'}
-            onClick={props.onRun}
-          >
-            Run
-          </button>
+          {/* The group's label already says Run: the button says what a click does now. */}
+          {state === 'none' ? (
+            <button aria-label={`Start ${command}`} title={`Run “${command}” in a “run” tab`} onClick={props.onRun}>
+              Start
+            </button>
+          ) : (
+            <button aria-label="Show run tab" title="Show the “run” tab" onClick={props.onRun}>
+              Show
+            </button>
+          )}
           {state !== 'none' && (
             <button aria-label="Restart run" title={`Stop and run “${command}” again`} onClick={props.onRestart}>
               Restart
