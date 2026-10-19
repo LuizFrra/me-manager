@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  clickSelectMode,
   isEditableTarget,
   isModEnter,
   isPanelShortcut,
   matchShortcut,
   REVIEW_HELP,
+  rowExtendStep,
   rowMoveStep,
   shortcutHelp,
   shortcutLabel,
@@ -109,6 +111,9 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+-'], description: 'Terminal: smaller font' },
       { keys: ['Ctrl+0'], description: 'Terminal: reset the font size' },
       { keys: ['Alt+Shift+↑ ↓'], description: 'Sidebar: move the focused row up or down' },
+      { keys: ['Ctrl+click', 'Shift+click'], description: 'Sidebar: select several tasks, or a range in a repo' },
+      { keys: ['Space', 'Shift+↑ ↓'], description: 'Sidebar: add the focused task to the selection, or extend it' },
+      { keys: ['Esc'], description: 'Sidebar: clear the task selection' },
       ...REVIEW_HELP,
     ])
     expect(shortcutHelp(true).map((e) => e.keys)).toEqual([
@@ -129,6 +134,9 @@ describe('shortcut labels', () => {
       ['⌘-'],
       ['⌘0'],
       ['⌥⇧↑ ↓'],
+      ['⌘-click', '⇧-click'],
+      ['Space', '⇧↑ ↓'],
+      ['Esc'],
       ...REVIEW_HELP.map((e) => e.keys),
     ])
   })
@@ -353,5 +361,51 @@ describe('rowMoveStep', () => {
     expect(rowMoveStep(arrow({ altKey: false }))).toBe(0)
     expect(rowMoveStep(arrow({ ctrlKey: true }))).toBe(0)
     expect(rowMoveStep(arrow({ metaKey: true }))).toBe(0)
+  })
+})
+
+describe('rowExtendStep', () => {
+  const arrow = (over: Partial<Parameters<typeof rowExtendStep>[0]>): Parameters<typeof rowExtendStep>[0] =>
+    key({ key: 'ArrowUp', shiftKey: true, ...over })
+
+  it('is -1 for Shift+↑ and 1 for Shift+↓', () => {
+    expect(rowExtendStep(arrow({}))).toBe(-1)
+    expect(rowExtendStep(arrow({ key: 'ArrowDown' }))).toBe(1)
+  })
+
+  it('is 0 with Alt (that moves the row), another modifier, no Shift or another key', () => {
+    expect(rowExtendStep(arrow({ altKey: true }))).toBe(0)
+    expect(rowExtendStep(arrow({ ctrlKey: true }))).toBe(0)
+    expect(rowExtendStep(arrow({ metaKey: true }))).toBe(0)
+    expect(rowExtendStep(arrow({ shiftKey: false }))).toBe(0)
+    expect(rowExtendStep(arrow({ key: 'ArrowLeft' }))).toBe(0)
+  })
+})
+
+describe('clickSelectMode', () => {
+  const click = (over: Partial<Parameters<typeof clickSelectMode>[0]>): Parameters<typeof clickSelectMode>[0] => ({
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    ...over,
+  })
+
+  it('toggles with Ctrl on Linux and Cmd on macOS, where Ctrl+click is a right click', () => {
+    expect(clickSelectMode(click({ ctrlKey: true }), false)).toBe('toggle')
+    expect(clickSelectMode(click({ metaKey: true }), true)).toBe('toggle')
+    expect(clickSelectMode(click({ metaKey: true }), false)).toBeNull()
+    expect(clickSelectMode(click({ ctrlKey: true }), true)).toBeNull()
+  })
+
+  it('selects a range with Shift, and adds one with Mod+Shift', () => {
+    expect(clickSelectMode(click({ shiftKey: true }), false)).toBe('range')
+    expect(clickSelectMode(click({ shiftKey: true, ctrlKey: true }), false)).toBe('addRange')
+    expect(clickSelectMode(click({ shiftKey: true, metaKey: true }), true)).toBe('addRange')
+  })
+
+  it('is null for a plain click, or with Alt', () => {
+    expect(clickSelectMode(click({}), false)).toBeNull()
+    expect(clickSelectMode(click({ altKey: true, ctrlKey: true }), false)).toBeNull()
   })
 })
