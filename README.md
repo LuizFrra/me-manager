@@ -130,6 +130,9 @@ ME_MANAGER_HOME=/tmp/mm-test ME_MANAGER_TMUX_SOCKET=mm-test npm run dev
   The app has no menu bar, so Ctrl+C and Ctrl+R always reach the terminal.
 - **macOS:** copy and paste are Cmd+C and Cmd+V. Ctrl+C still reaches the
   terminal.
+- Selecting text in the terminal with the mouse doesn't change the clipboard;
+  copy it with the keys above. A program that copies on purpose (Claude Code's
+  `/copy`) still sets the clipboard.
 
 ## Known limitations
 

@@ -26,9 +26,6 @@ export interface TerminalViewProps {
   focusSeq?: number
 }
 
-// OSC 52 is write-only: programs in the pty may set the clipboard but never read it.
-const writeOnlyClipboard = createWriteOnlyClipboard((text) => navigator.clipboard.writeText(text))
-
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
 const RESIZE_SETTLE_MS = 100
 
@@ -47,6 +44,8 @@ export function TerminalView({
     modalOpenRef.current = modalOpen
   }, [modalOpen])
   const termRef = useRef<Terminal | null>(null)
+  // The last mouse selection tmux copied; it reaches the clipboard only on an explicit copy.
+  const heldRef = useRef('')
   const fitRef = useRef<FitAddon | null>(null)
   // The size and palette to create the terminal with; later changes are applied by the effects below, without
   // recreating it.
@@ -66,8 +65,25 @@ export function TerminalView({
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
-    term.loadAddon(new ClipboardAddon(undefined, writeOnlyClipboard)) // tmux copy-mode -> OSC 52 -> system clipboard
+    // OSC 52 is write-only: programs in the pty may set the clipboard but never read it. tmux's mouse selections
+    // are held for an explicit copy.
+    const clipboard = createWriteOnlyClipboard({
+      write: (text) => navigator.clipboard.writeText(text),
+      hold: (text) => {
+        heldRef.current = text
+      },
+    })
+    term.loadAddon(new ClipboardAddon(undefined, clipboard))
     term.open(host)
+    // What an explicit copy takes: xterm's own selection (Option/Shift+drag), else the last tmux mouse selection.
+    const copyText = (): string => (term.hasSelection() ? term.getSelection() : heldRef.current)
+    // macOS: the Edit menu's Copy (Cmd+C) fires a copy event; xterm handles it only for its own selection.
+    const onCopy = (e: ClipboardEvent): void => {
+      if (term.hasSelection() || !heldRef.current) return
+      e.clipboardData?.setData('text/plain', heldRef.current)
+      e.preventDefault()
+    }
+    host.addEventListener('copy', onCopy)
 
     // Linux has no app menu (it would steal Ctrl+C), so handle Ctrl+Shift+C/V here.
     // On macOS the Edit menu handles Cmd+C/V.
@@ -79,7 +95,8 @@ export function TerminalView({
       const key = e.key.toLowerCase()
       if (key === 'c') {
         e.preventDefault()
-        if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection())
+        const text = copyText()
+        if (text) void navigator.clipboard.writeText(text)
         return false
       }
       if (key === 'v') {
@@ -110,6 +127,7 @@ export function TerminalView({
 
     return () => {
       observer.disconnect()
+      host.removeEventListener('copy', onCopy)
       settled.cancel()
       offData()
       input.dispose()
@@ -123,6 +141,7 @@ export function TerminalView({
     const term = termRef.current
     if (!term) return
     term.reset() // the new tmux client redraws the whole screen on attach
+    heldRef.current = ''
     fitRef.current?.fit()
     api.ptyResize(term.cols, term.rows)
     term.focus()
