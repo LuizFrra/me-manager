@@ -1,5 +1,6 @@
+import type { IClipboardProvider } from '@xterm/addon-clipboard'
 import { render } from '@testing-library/react'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TERMINAL_THEMES } from '../lib/terminalTheme'
 import { TerminalView } from './TerminalView'
 
@@ -13,6 +14,8 @@ interface FakeTerm {
 }
 const terms = vi.hoisted(() => [] as FakeTerm[])
 const fits = vi.hoisted(() => ({ count: 0 }))
+const providers = vi.hoisted(() => [] as IClipboardProvider[])
+const xtermSelection = vi.hoisted(() => ({ text: '' }))
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -36,7 +39,10 @@ vi.mock('@xterm/xterm', () => ({
     focus = noop
     dispose = noop
     hasSelection(): boolean {
-      return false
+      return xtermSelection.text !== ''
+    }
+    getSelection(): string {
+      return xtermSelection.text
     }
   },
 }))
@@ -47,7 +53,13 @@ vi.mock('@xterm/addon-fit', () => ({
     }
   },
 }))
-vi.mock('@xterm/addon-clipboard', () => ({ ClipboardAddon: class {} }))
+vi.mock('@xterm/addon-clipboard', () => ({
+  ClipboardAddon: class {
+    constructor(_base64: unknown, provider: IClipboardProvider) {
+      providers.push(provider)
+    }
+  },
+}))
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {
@@ -114,6 +126,79 @@ describe('TerminalView key handler', () => {
     expect(handlers.at(-1)).toBe(handler) // the same terminal
     expect(handler?.(plain)).toBe(true)
     expect(handler?.(escape)).toBe(true)
+  })
+})
+
+describe('TerminalView clipboard', () => {
+  const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+  const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})
+  beforeEach(() => {
+    writeText.mockClear()
+    xtermSelection.text = ''
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText, readText: async () => '' },
+    })
+  })
+  // tmux sends a mouse selection (a drag, or a double-click on a word) as OSC 52 with an empty selection.
+  const tmuxSelects = (text: string): unknown => providers.at(-1)?.writeText('' as never, text)
+  const copyKeys = (): boolean | undefined =>
+    handlers.at(-1)?.(new KeyboardEvent('keydown', { key: 'C', ctrlKey: true, shiftKey: true }))
+  // The macOS Edit menu's Copy (Cmd+C) fires a copy event at the focused terminal.
+  const menuCopy = (target: Element): { setData: ReturnType<typeof vi.fn>; event: Event } => {
+    const setData = vi.fn()
+    const event = new Event('copy', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: { setData } })
+    target.dispatchEvent(event)
+    return { setData, event }
+  }
+
+  it('leaves the clipboard alone when text is selected with the mouse in tmux', async () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    await tmuxSelects('e')
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('copies the last mouse selection with Ctrl+Shift+C when xterm has no selection of its own', async () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    await tmuxSelects('world')
+    expect(copyKeys()).toBe(false)
+    expect(writeText).toHaveBeenCalledWith('world')
+    xtermSelection.text = 'forced'
+    copyKeys()
+    expect(writeText).toHaveBeenLastCalledWith('forced')
+  })
+
+  it('copies nothing with Ctrl+Shift+C when nothing was selected', () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    copyKeys()
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('gives the menu Copy the last mouse selection, and leaves an xterm selection to xterm', async () => {
+    const { container } = render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    const host = container.querySelector('.terminal-host') as Element
+    expect(menuCopy(host).setData).not.toHaveBeenCalled()
+    await tmuxSelects('world')
+    const copied = menuCopy(host)
+    expect(copied.setData).toHaveBeenCalledWith('text/plain', 'world')
+    expect(copied.event.defaultPrevented).toBe(true)
+    xtermSelection.text = 'forced'
+    expect(menuCopy(host).setData).not.toHaveBeenCalled()
+  })
+
+  it('forgets the mouse selection when another session is shown', async () => {
+    const { rerender } = render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    await tmuxSelects('world')
+    rerender(<TerminalView api={api} sessionKey="other" fontSize={13} />)
+    copyKeys()
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('writes the clipboard right away when a program asks for it', async () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    await providers.at(-1)?.writeText('c' as never, 'from claude')
+    expect(writeText).toHaveBeenCalledWith('from claude')
   })
 })
 
