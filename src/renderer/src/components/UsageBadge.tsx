@@ -1,16 +1,16 @@
 import { useId } from 'react'
 import { budgetPercent, budgetSummary } from '../../../shared/budget'
-import type { BudgetStatus, UsagePeriod, UsageSummary } from '../../../shared/types'
+import { USAGE_PERIODS, type BudgetStatus, type UsageSummary } from '../../../shared/types'
 import { usageTokens } from '../../../shared/usage'
 import { shortcutLabel } from '../lib/shortcuts'
-import { COST_LABEL, formatCost, formatTokens, formatUsageShort, SUBSCRIPTION_NOTE } from '../lib/usageFormat'
-
-const ROWS: [UsagePeriod, string][] = [
-  ['today', 'Today'],
-  ['week', 'Last 7 days'],
-  ['month', 'This month'],
-  ['all', 'All time'],
-]
+import {
+  COST_LABEL,
+  formatCost,
+  formatTokens,
+  formatUsageShort,
+  PERIOD_LABEL,
+  SUBSCRIPTION_NOTE,
+} from '../lib/usageFormat'
 
 /** What the badge's name adds for a budget at 80% or more. */
 const budgetNote = (budget: BudgetStatus): string =>
@@ -66,9 +66,9 @@ export function UsageBadge({
         )}
         <table className="usage-tip-periods">
           <tbody>
-            {ROWS.map(([period, label]) => (
+            {USAGE_PERIODS.map((period) => (
               <tr key={period}>
-                <th scope="row">{label}</th>
+                <th scope="row">{PERIOD_LABEL[period]}</th>
                 <td>{formatCost(usage[period].cost)}</td>
                 <td>{formatTokens(usageTokens(usage[period]))} tok</td>
               </tr>

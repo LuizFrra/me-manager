@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { budgetStatus } from '../../../shared/budget'
 import type { BudgetReport, MeManagerApi, UsageReport } from '../../../shared/types'
@@ -24,9 +25,9 @@ const report: UsageReport = {
   ],
 }
 
-function renderView(budgets: BudgetReport): void {
+function renderView(budgets: BudgetReport, usage: UsageReport = report): void {
   const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets'> = {
-    getUsageReport: async () => report,
+    getUsageReport: async () => usage,
     getBudgets: async () => budgets,
   }
   render(<UsageView api={api} onClose={vi.fn()} onOpenTarget={vi.fn()} onOpenSettings={vi.fn()} />)
@@ -80,5 +81,22 @@ describe('UsageView errors', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Could not read the usage: EACCES: permission denied, scandir '/home/u/.claude/projects'",
     )
+  })
+})
+
+describe('UsageView periods', () => {
+  it('names the rolling week as such, like the header badge, and shows its totals', async () => {
+    const user = userEvent.setup()
+    const total = emptyUsageSummary()
+    total.week = { ...total.week, cost: 1.71, messages: 3 }
+    total.month = { ...total.month, cost: 5, messages: 9 }
+    renderView({ daily: null, tasks: {} }, { ...report, total })
+    const periods = within(await screen.findByRole('group', { name: 'Period' })).getAllByRole('button')
+    expect(periods.map((b) => b.textContent)).toEqual(['Today', 'Last 7 days', 'This month', 'All time'])
+    expect(periods[1]).toHaveAttribute('title', 'The last 7 days, today included')
+    expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$5.00')
+    await user.click(periods[1])
+    expect(periods[1]).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$1.71')
   })
 })
