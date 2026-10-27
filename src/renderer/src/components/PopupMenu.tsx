@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export interface MenuItem {
@@ -37,6 +37,13 @@ export function PopupMenu({
   triggerToggles?: boolean
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  // Opened near the bottom of the window (a right click low in the terminal), the menu opens upwards instead of
+  // running off-screen.
+  const [top, setTop] = useState(y)
+  useLayoutEffect(() => {
+    const height = ref.current?.offsetHeight ?? 0
+    setTop(y + height > window.innerHeight ? Math.max(0, Math.min(y, window.innerHeight) - height) : y)
+  }, [y, items.length])
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
     const onDown = (e: MouseEvent): void => {
@@ -73,7 +80,7 @@ export function PopupMenu({
       className={className}
       role="menu"
       aria-label={label}
-      style={{ left: Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH)), top: y }}
+      style={{ left: Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH)), top }}
       onKeyDown={onKeyDown}
     >
       {items.map((item) => (
