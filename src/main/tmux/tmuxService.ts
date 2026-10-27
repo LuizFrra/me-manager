@@ -24,13 +24,17 @@ export const shellCommandArg = (command: string): string => (command.endsWith(';
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
 
+function checkEnvName(name: string): void {
+  if (!ENV_NAME.test(name)) throw new Error(`Invalid environment variable name: ${JSON.stringify(name)}`)
+}
+
 /**
  * `-e NAME=value` per variable. The value is one execFile argument, never seen by a shell, and tmux expands no
  * formats in it, so it needs no escaping. A name that isn't a shell variable name is refused.
  */
 function envArgs(env: Record<string, string> = {}): string[] {
   return Object.entries(env).flatMap(([name, value]) => {
-    if (!ENV_NAME.test(name)) throw new Error(`Invalid environment variable name: ${JSON.stringify(name)}`)
+    checkEnvName(name)
     return ['-e', `${name}=${value}`]
   })
 }
@@ -305,7 +309,13 @@ export class TmuxService implements TmuxApi {
     ])
   }
 
-  async respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void> {
+  async respawnWindow(
+    session: string,
+    windowName: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void> {
     await this.tmux([
       'respawn-window',
       '-k',
@@ -313,8 +323,15 @@ export class TmuxService implements TmuxApi {
       `=${session}:=${windowName}`,
       '-c',
       escapeFormat(cwd),
+      ...envArgs(env),
       shellCommandArg(command),
     ])
+  }
+
+  async setSessionEnv(session: string, name: string, value: string | null): Promise<void> {
+    checkEnvName(name)
+    // Without -F, set-environment expands no formats either.
+    await this.tmux(['set-environment', '-t', `=${session}`, ...(value === null ? ['-u', name] : [name, value])])
   }
 
   async sendInterrupt(session: string, windowName: string): Promise<void> {

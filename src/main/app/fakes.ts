@@ -224,13 +224,17 @@ export interface FakeWindow {
   name: string
   command?: string
   remainOnExit?: true
-  /** The window's own environment (NewWindowOptions.env), when it has one. */
+  /** The environment its process got: the session's, then its own (NewWindowOptions.env) over it. */
   env?: Record<string, string>
   /** Its command exited and remain-on-exit kept it: listWindows reports it `dead`. */
   dead?: true
 }
 
 /** ` env A=1 B=2` for a non-empty environment, '' otherwise: how FakeTmux.calls show one. */
+/** `{ env }`, or {} for an empty environment: FakeWindow.env and the session's are only there when set. */
+const withEnv = (env: Record<string, string>): { env?: Record<string, string> } =>
+  Object.keys(env).length > 0 ? { env } : {}
+
 function envNote(env: Record<string, string> = {}): string {
   const vars = Object.entries(env).map(([k, v]) => `${k}=${v}`)
   return vars.length > 0 ? ` env ${vars.join(' ')}` : ''
@@ -257,8 +261,13 @@ export class FakeTmux implements TmuxApi {
     this.calls.push(`newSession ${name} ${command}${envNote(env)}`)
     if (this.failNewSession) throw new Error('tmux failed')
     if (this.sessions.has(name)) throw new Error(`duplicate session: ${name}`) // as tmux refuses it
-    const own = env && Object.keys(env).length > 0 ? { env: { ...env } } : {}
-    this.sessions.set(name, { cwd, windows: [{ name: windowName, command }], active: 0, ...own })
+    const own = withEnv({ ...env })
+    this.sessions.set(name, {
+      cwd,
+      windows: [{ name: windowName, command, ...withEnv({ ...env }) }],
+      active: 0,
+      ...own,
+    })
   }
   async killSession(name: string): Promise<void> {
     this.calls.push(`killSession ${name}`)
@@ -286,7 +295,7 @@ export class FakeTmux implements TmuxApi {
   ): Promise<void> {
     const s = this.sessions.get(session)!
     const env = envNote(options.env)
-    const own = env ? { env: { ...options.env } } : {}
+    const own = withEnv({ ...s.env, ...options.env })
     if (options.remainOnExit) {
       this.calls.push(`newWindow ${session} ${windowName} [remain-on-exit] in ${cwd}: ${command}${env}`)
       s.windows.push({ name: windowName, command, remainOnExit: true, ...own })
@@ -302,11 +311,29 @@ export class FakeTmux implements TmuxApi {
     if (!w) throw new Error(`can't find window: ${windowName}`)
     return w
   }
-  async respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void> {
+  async respawnWindow(
+    session: string,
+    windowName: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void> {
     const w = this.window(session, windowName)
-    this.calls.push(`respawnWindow ${session} ${windowName} in ${cwd}: ${command}`)
+    this.calls.push(`respawnWindow ${session} ${windowName} in ${cwd}: ${command}${envNote(env)}`)
     w.command = command
+    delete w.env
+    Object.assign(w, withEnv({ ...this.sessions.get(session)!.env, ...env }))
     delete w.dead
+  }
+  /** Not in `calls`: what it changes shows in the env of the session and of the windows started after it. */
+  async setSessionEnv(session: string, name: string, value: string | null): Promise<void> {
+    const s = this.sessions.get(session)
+    if (!s) throw new Error(`can't find session: ${session}`)
+    const env = { ...s.env }
+    if (value === null) delete env[name]
+    else env[name] = value
+    delete s.env
+    Object.assign(s, withEnv(env))
   }
   /** Sessions whose active pane is in copy mode (the user scrolled back). */
   inCopyMode = new Set<string>()

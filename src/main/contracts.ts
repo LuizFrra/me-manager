@@ -131,9 +131,21 @@ export interface TmuxApi {
   /**
    * Restarts the window named `windowName` (exactly) with `command` in `cwd` (`respawn-window -k`): a command
    * still running is killed and the screen cleared (what scrolled off it stays in the scrollback), and the window's
-   * options (remain-on-exit) are kept.
+   * options (remain-on-exit) are kept. `env` as NewWindowOptions.env.
    */
-  respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void>
+  respawnWindow(
+    session: string,
+    windowName: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void>
+  /**
+   * Sets a variable of the session's environment (`set-environment`), or removes it for null, so windows opened or
+   * respawned from then on get it, or the server's own value; running processes keep theirs. Same name rules as
+   * newSession's `env`; the value is taken as it is.
+   */
+  setSessionEnv(session: string, name: string, value: string | null): Promise<void>
   /** Presses Ctrl-C in the window named `windowName` (exactly), after leaving copy mode if it is in it. */
   sendInterrupt(session: string, windowName: string): Promise<void>
   /** Leaves copy mode (or another mode) in the session's active pane, if it is in one. */

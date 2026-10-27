@@ -12,6 +12,7 @@ const hasTmux = await run('tmux', ['-V']).then(
   () => false,
 )
 const socket = `mm-test-${process.pid}-${Date.now()}`
+const savedClaudeDir = process.env.CLAUDE_CONFIG_DIR
 let svc: TmuxService
 let cwd: string
 
@@ -20,10 +21,13 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     cwd = await mkdtemp(join(tmpdir(), 'mm-tmux-'))
     // Set before the server starts so #() jobs (run by the server) see it; keeps the marker in our temp dir.
     process.env.MM_TEST_MARKER = join(cwd, 'PWNED')
+    // Nor in the server's global environment, so a session without one shows that it has none.
+    delete process.env.CLAUDE_CONFIG_DIR
     svc = new TmuxService(socket, join(cwd, 'tmux.conf'))
     await svc.ensureConfig()
   })
   afterAll(async () => {
+    if (savedClaudeDir !== undefined) process.env.CLAUDE_CONFIG_DIR = savedClaudeDir
     await run('tmux', ['-L', socket, 'kill-server']).catch(() => {})
     // tmux leaves the socket file behind when the server exits; remove it too.
     const uid = process.getuid?.()
@@ -494,6 +498,33 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession(session)
   })
 
+  it("changes a running session's environment for the windows it opens or respawns next", async () => {
+    const session = 'mmt_envsync_x_y'
+    const show = `printf '[%s]\\n' "\${CLAUDE_CONFIG_DIR-unset}"; exec cat`
+    const shown = (name: string, text: string): Promise<string | null> =>
+      until(
+        () => tailOf(session, name),
+        (t) => t?.includes(text) ?? false,
+      )
+    await svc.newSession(session, cwd, 'claude', show, { CLAUDE_CONFIG_DIR: '/p' })
+    expect(await shown('claude', '[/p]')).toContain('[/p]')
+    // Back to Default: no CLAUDE_CONFIG_DIR at all, not even an empty one.
+    await svc.setSessionEnv(session, 'CLAUDE_CONFIG_DIR', null)
+    await svc.newWindow(session, cwd, 'default', show)
+    expect(await shown('default', '[unset]')).toContain('[unset]')
+    // Another profile, taken literally like -e values.
+    await svc.setSessionEnv(session, 'CLAUDE_CONFIG_DIR', '/q r/#{session_name} #S')
+    await svc.newWindow(session, cwd, 'other', show)
+    expect(await shown('other', '[/q r/')).toContain('[/q r/#{session_name} #S]')
+    // A respawned window gets the session's too, and its own -e over it.
+    await svc.newWindow(session, cwd, 'run', 'true', { remainOnExit: true })
+    await svc.respawnWindow(session, 'run', cwd, show)
+    expect(await shown('run', '[/q r/')).toContain('[/q r/#{session_name} #S]')
+    await svc.respawnWindow(session, 'run', cwd, show, { CLAUDE_CONFIG_DIR: '/own' })
+    expect(await shown('run', '[/own]')).toContain('[/own]')
+    await svc.killSession(session)
+  })
+
   it('refuses an environment variable name that is not one', async () => {
     for (const key of ['A=B', 'lower', '1ST', '', 'A B']) {
       await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { [key]: 'x' })).rejects.toThrow(
@@ -502,6 +533,10 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
       await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { [key]: 'x' } })).rejects.toThrow(
         /environment variable/i,
       )
+      await expect(svc.respawnWindow('mmt_envbad_x_y', 'w', cwd, 'sh', { [key]: 'x' })).rejects.toThrow(
+        /environment variable/i,
+      )
+      await expect(svc.setSessionEnv('mmt_envbad_x_y', key, null)).rejects.toThrow(/environment variable/i)
     }
     await expect(svc.hasSession('mmt_envbad_x_y')).resolves.toBe(false)
   })
