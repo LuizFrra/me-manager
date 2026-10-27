@@ -2456,6 +2456,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             onStartTask={startTaskFromHome}
             onMoreTaskOptions={moreTaskOptions}
             composerFocus={composerFocus}
+            accountOf={multipleProfiles ? (themeId) => targetProfile(state, profiles, { themeId }) : undefined}
           />
         )}
       </main>

@@ -153,3 +153,42 @@ describe('Home tip', () => {
     }
   })
 })
+
+describe('Home composer account', () => {
+  it("shows the Claude account of the chosen repository's theme, when there are accounts", async () => {
+    const user = userEvent.setup()
+    const state = appState(theme('Client', [repo('api', [])]), theme('Side', [repo('blog', [])]))
+    const accountOf = vi.fn((themeId: string) =>
+      themeId === 'Client'
+        ? { name: 'Work', login: 'signedIn' as const }
+        : { name: 'Default', login: 'notSignedIn' as const },
+    )
+    render(
+      <Home
+        state={state}
+        status={NO_STATUS}
+        onOpen={vi.fn()}
+        onCreateTheme={vi.fn()}
+        onAddRepo={vi.fn()}
+        onCloneRepo={vi.fn()}
+        onOpenPalette={vi.fn()}
+        onStartTask={vi.fn(async () => true)}
+        onMoreTaskOptions={vi.fn()}
+        composerFocus={0}
+        accountOf={accountOf}
+      />,
+    )
+    const composer = screen.getByRole('form', { name: 'New task' })
+    expect(within(composer).getByText('Account: Work')).toBeInTheDocument()
+    await user.selectOptions(within(composer).getByRole('combobox', { name: 'Repository' }), 'Side/blog')
+    expect(within(composer).getByText('Account: Default')).toHaveAttribute(
+      'title',
+      'The new task starts in the Claude account Default (not signed in)',
+    )
+  })
+
+  it('shows no account without accounts to choose from', () => {
+    renderHome(appState(theme('Client', [repo('api', [])])))
+    expect(screen.queryByText(/^Account:/)).not.toBeInTheDocument()
+  })
+})

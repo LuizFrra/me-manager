@@ -4153,6 +4153,12 @@ button.status-seg:focus-visible {
   border: 1px solid var(--border);
   border-radius: 999px;
 }
+.composer-account {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .composer-repo:hover {
   background: var(--hover);
 }
