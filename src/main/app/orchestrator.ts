@@ -337,10 +337,13 @@ export class Orchestrator implements AppService {
    */
   private readonly clones = new Map<Promise<void>, AbortController>()
   /**
-   * The Claude profile (id) each session's `claude` window was last started in by this run, by session name: set
-   * wherever a Claude window starts, and reported by getStatus (LiveStatus.claudeProfiles) while that window runs.
+   * The Claude profile (id) each session's `claude` window was last started in by this run, by session name, with
+   * the claudeStarts count when it was recorded: set wherever a Claude window starts (see recordClaude), and
+   * reported by getStatus (LiveStatus.claudeProfiles) while that window runs.
    */
-  private readonly claudeProfiles = new Map<string, string>()
+  private readonly claudeProfiles = new Map<string, { profileId: string; seq: number }>()
+  /** Counts the Claude windows recorded in claudeProfiles, so getStatus can tell those started after it read tmux. */
+  private claudeStarts = 0
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -598,9 +601,20 @@ export class Orchestrator implements AppService {
    * their worktree is gone on purpose, and they have no session.
    */
   async getStatus(): Promise<LiveStatus> {
-    const { sessions: sessionList, activity: activityBySession } = await this.deps.tmux
-      .sessionActivity(CLAUDE_WINDOW)
-      .catch(async () => ({ sessions: await this.deps.tmux.listSessions().catch(() => []), activity: {} }))
+    // Claude windows recorded from here on started after tmux was read: its answer can't tell whether they run.
+    const startsBefore = this.claudeStarts
+    const {
+      sessions: sessionList,
+      activity: activityBySession,
+      answered,
+    } = await this.deps.tmux.sessionActivity(CLAUDE_WINDOW).then(
+      (read) => ({ ...read, answered: true }),
+      async () => {
+        const list = await this.deps.tmux.listSessions().catch(() => null)
+        return { sessions: list ?? [], activity: {}, answered: list !== null }
+      },
+    )
+    if (answered) this.forgetClaudes(new Set(sessionList), startsBefore)
     const sessions = new Set(sessionList)
     const running: string[] = []
     const missing: string[] = []
@@ -628,26 +642,39 @@ export class Orchestrator implements AppService {
       running,
       missing,
       activity: await this.claudeActivity(live, activityBySession),
-      claudeProfiles: this.runningClaudeProfiles(live, sessions, activityBySession),
+      claudeProfiles: this.runningClaudeProfiles(live, activityBySession),
     }
     this.lastStatus = { at: this.now(), status }
     return status
   }
 
+  /** Records that the session's `claude` window was just started in the profile (see claudeProfiles). */
+  private recordClaude(session: string, profileId: string): void {
+    this.claudeProfiles.set(session, { profileId, seq: ++this.claudeStarts })
+  }
+
+  /**
+   * Forgets the Claude windows of sessions gone: those not in `sessions`, as tmux listed them, recorded before it
+   * was read (`startsBefore`). One recorded since may have started after the list was made.
+   */
+  private forgetClaudes(sessions: ReadonlySet<string>, startsBefore: number): void {
+    for (const [session, { seq }] of this.claudeProfiles) {
+      if (seq <= startsBefore && !sessions.has(session)) this.claudeProfiles.delete(session)
+    }
+  }
+
   /**
    * LiveStatus.claudeProfiles: the profile of each running session's `claude` window this run started, while the
-   * window is there (it has an activity time). Sessions gone are forgotten.
+   * window is there (it has an activity time).
    */
   private runningClaudeProfiles(
     live: { id: string; session: string }[],
-    sessions: ReadonlySet<string>,
     activityBySession: Record<string, number>,
   ): Record<string, string> {
-    for (const session of this.claudeProfiles.keys()) if (!sessions.has(session)) this.claudeProfiles.delete(session)
     const out: Record<string, string> = {}
     for (const { id, session } of live) {
-      const profileId = this.claudeProfiles.get(session)
-      if (profileId !== undefined && activityBySession[session] !== undefined) out[id] = profileId
+      const recorded = this.claudeProfiles.get(session)
+      if (recorded && activityBySession[session] !== undefined) out[id] = recorded.profileId
     }
     return out
   }
@@ -914,7 +941,7 @@ export class Orchestrator implements AppService {
         await this.withPromptFile(prompt, (file) =>
           tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file), env),
         )
-        this.claudeProfiles.set(session, profile.id)
+        this.recordClaude(session, profile.id)
         const task: Task = {
           id: randomUUID(),
           name: name.trim(),
@@ -1209,7 +1236,7 @@ export class Orchestrator implements AppService {
       try {
         const command = claudeContinueCommand(this.claudeArgs(label))
         await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, command, env)
-        this.claudeProfiles.set(session, profile.id)
+        this.recordClaude(session, profile.id)
         started = true
       } catch (err) {
         // Another open of the same target (a double click) started it meanwhile, and tmux refused this one.
@@ -1318,7 +1345,7 @@ export class Orchestrator implements AppService {
         await this.deps.tmux.respawnWindow(session, CLAUDE_WINDOW, cwd, command, env)
         await this.deps.tmux.selectWindow(session, existing.index)
       } else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, command, { env })
-      this.claudeProfiles.set(session, profile.id)
+      this.recordClaude(session, profile.id)
     }
     return this.deps.tmux.listWindows(session)
   }
@@ -1555,7 +1582,7 @@ export class Orchestrator implements AppService {
       await this.withPromptFile(text, (file) =>
         this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file), { env }),
       )
-      this.claudeProfiles.set(session, profile.id)
+      this.recordClaude(session, profile.id)
     }
     return this.deps.tmux.listWindows(session)
   }

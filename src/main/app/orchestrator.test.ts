@@ -1401,6 +1401,35 @@ describe('Orchestrator: Claude profiles', () => {
     expect((await ctx.orch.getStatus()).claudeProfiles).toEqual({})
   })
 
+  it('keeps the account of a Claude started while the status is read, and all of them when tmux fails', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    ctx.tmux.activity.set(SESSION, 1)
+    const claudeProfiles = async (): Promise<LiveStatus['claudeProfiles']> =>
+      (await ctx.orch.getStatus()).claudeProfiles
+    const read = ctx.tmux.sessionActivity.bind(ctx.tmux)
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const slow = vi.spyOn(ctx.tmux, 'sessionActivity').mockImplementation(async (w) => {
+      const answer = await read(w) // the sessions as they are now: none
+      await gate
+      return answer
+    })
+    const reading = ctx.orch.getStatus()
+    await ctx.orch.openTarget(ctx.target) // meanwhile
+    release()
+    expect((await reading).claudeProfiles).toEqual({}) // not running when tmux answered
+    slow.mockRestore()
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+
+    // tmux doesn't answer: nothing is known this time, and nothing is forgotten.
+    const activity = vi.spyOn(ctx.tmux, 'sessionActivity').mockRejectedValue(new Error('no server'))
+    const sessions = vi.spyOn(ctx.tmux, 'listSessions').mockRejectedValue(new Error('no server'))
+    expect(await claudeProfiles()).toEqual({})
+    activity.mockRestore()
+    sessions.mockRestore()
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+  })
+
   it("refuses to restart the run command when the profile's folder is gone, leaving the running one alone", async () => {
     const missing: string[] = []
     const ctx = await withProfiles({ themeProfile: 'p-work', missing })
