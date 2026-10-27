@@ -122,6 +122,56 @@ describe('FileViewer images', () => {
     expect(img.compareDocumentPosition(screen.getByTestId('diff')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('reads a changed image again when its diff or its source changes', async () => {
+    const change: ChangedFile = { path: 'img/logo.png', status: 'M', added: 0, removed: 0, binary: true }
+    let n = 0
+    const readImage = vi.fn(async () => `data:image/png;base64,v${++n}`)
+    const api = { readImage, openExternal: async () => {} }
+    const at = (over: Partial<FileViewerProps>): React.JSX.Element => (
+      <FileViewer
+        api={api}
+        target={TARGET}
+        tab="changes"
+        path="img/logo.png"
+        change={change}
+        mdMode="view"
+        canGoBack={false}
+        onBack={() => {}}
+        onMdMode={() => {}}
+        onOpenLink={() => {}}
+        onOpenFile={() => {}}
+        onError={() => {}}
+        {...over}
+      />
+    )
+    const diff = (index: string): string =>
+      `diff --git a/img/logo.png b/img/logo.png\nindex ${index} 100644\nBinary files a/img/logo.png and b/img/logo.png differ\n`
+    // Not before the diff is in: it says which version the image is.
+    const { rerender } = render(at({ diff: undefined }))
+    expect(readImage).not.toHaveBeenCalled()
+    rerender(at({ diff: diff('f584f40..6bf43ff') }))
+    expect(await screen.findByRole('img', { name: 'logo.png' })).toHaveAttribute('src', 'data:image/png;base64,v1')
+    rerender(at({ diff: diff('f584f40..6bf43ff') }))
+    expect(readImage).toHaveBeenCalledTimes(1)
+    rerender(at({ diff: diff('f584f40..0aa0f34') }))
+    // The last version stays while the new one is read.
+    expect(screen.getByRole('img', { name: 'logo.png' })).toHaveAttribute('src', 'data:image/png;base64,v1')
+    await vi.waitFor(() =>
+      expect(screen.getByRole('img', { name: 'logo.png' })).toHaveAttribute('src', 'data:image/png;base64,v2'),
+    )
+
+    // An SVG edited without changing its size (a colour swapped) in the Files tab.
+    const svg = (fill: string): FileContent => {
+      const content = `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="${fill}"/></svg>`
+      return { kind: 'text', content, size: content.length, truncated: false }
+    }
+    rerender(at({ tab: 'files', path: 'icon.svg', change: undefined, diff: undefined, content: svg('#ff0000') }))
+    await vi.waitFor(() => expect(readImage).toHaveBeenCalledTimes(3))
+    rerender(at({ tab: 'files', path: 'icon.svg', change: undefined, diff: undefined, content: svg('#00ff00') }))
+    await vi.waitFor(() => expect(readImage).toHaveBeenCalledTimes(4))
+    expect(await screen.findByRole('img', { name: 'icon.svg' })).toHaveAttribute('src', 'data:image/png;base64,v4')
+  })
+
   it('shows no image for a deleted one', () => {
     const change: ChangedFile = { path: 'old.png', status: 'D', added: 0, removed: 0, binary: true }
     const { readImage } = renderViewer({ tab: 'changes', path: 'old.png', change, diff: 'Binary files differ' })

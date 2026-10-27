@@ -119,12 +119,13 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
       ) : (
         <DiffView diff={p.diff} layout={p.diffLayout} select={select} />
       )
-    // A changed image: its new version, when there is one, above the diff ("Binary file changed").
+    // A changed image: its new version, when there is one, above the diff ("Binary file changed"). The diff names
+    // the version (git's blob ids), so the image is read again when it changes.
     const current = p.change && (p.change.status !== 'D' || p.change.existsOnDisk)
     body =
-      image && current ? (
+      image && current && p.diff !== undefined ? (
         <>
-          <ImageView key={path} path={path} load={loadImage} compact label="New version" />
+          <ImageView key={path} path={path} load={loadImage} compact label="New version" version={p.diff} />
           {diff}
         </>
       ) : (
@@ -137,7 +138,9 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   } else if (p.content.kind === 'symlinkToFolder') {
     body = <p className="viewer-message">Symlink to a folder</p>
   } else if (image && (p.content.kind === 'binary' || (p.content.kind === 'text' && p.mdMode === 'view'))) {
-    body = <ImageView key={path} path={path} size={p.content.size} load={loadImage} />
+    // An SVG's text says which version it is (an edit may keep its size).
+    const version = p.content.kind === 'text' ? p.content.content : undefined
+    body = <ImageView key={path} path={path} size={p.content.size} load={loadImage} version={version} />
   } else if (p.content.kind === 'binary') {
     body = <p className="viewer-message">Binary file ({formatSize(p.content.size)})</p>
   } else {
