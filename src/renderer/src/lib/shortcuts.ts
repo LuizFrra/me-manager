@@ -282,6 +282,25 @@ export function rowMoveStep(e: KeyLike): -1 | 0 | 1 {
   return e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
 }
 
+/** The terminal's own keys (see lib/terminalKeys.ts and TerminalView), for the help overlay. */
+const terminalHelp = (mac: boolean): ShortcutHelpEntry[] => [
+  {
+    keys: mac ? ['⌘-click'] : ['Ctrl+click'],
+    description: 'Terminal: open a link, or a file:line in the files panel',
+  },
+  {
+    keys: mac ? ['⌘C', '⌘V'] : ['Ctrl+C', 'Ctrl+V'],
+    description: mac
+      ? 'Terminal: copy the selection, paste'
+      : 'Terminal: copy the selection (interrupts when nothing is selected), paste',
+  },
+  { keys: ['Shift+Enter'], description: "Terminal: new line in Claude's prompt" },
+  {
+    keys: mac ? ['⌘⌫'] : ['Ctrl+Backspace', 'Ctrl+Delete'],
+    description: mac ? 'Terminal: delete to the start of the line' : 'Terminal: delete a word',
+  },
+]
+
 /** The sidebar tree's own keys on a focused row (see Sidebar's navigate), for the help overlay. */
 const SIDEBAR_NAV_HELP: readonly ShortcutHelpEntry[] = [
   { keys: ['↑ ↓', 'Home End'], description: 'Sidebar: go to the row above or below, the first or the last' },
@@ -334,14 +353,15 @@ const selectionHelp = (mac: boolean): ShortcutHelpEntry[] => [
 ]
 
 /**
- * Every shortcut, as listed in the help overlay, then the sidebar rows' keys and the line numbers' (REVIEW_HELP).
+ * Every shortcut, as listed in the help overlay, then the terminal's own keys, the sidebar rows' and the line
+ * numbers' (REVIEW_HELP).
  */
 export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
   const app = SHORTCUTS.map((def) => ({
     keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
-  return [...app, ...SIDEBAR_NAV_HELP, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
+  return [...app, ...terminalHelp(mac), ...SIDEBAR_NAV_HELP, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
 }
 
 /** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */
