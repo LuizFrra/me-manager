@@ -711,7 +711,7 @@ export function CloneRepoDialog(props: {
 
 /**
  * Writes or edits a review comment's note on `location` (see reviewLocation). With `initial`, saving it unchanged is
- * disabled.
+ * disabled. Esc cancels, asking first when there is a new or changed comment.
  */
 export function ReviewCommentDialog(props: {
   location: string
@@ -725,6 +725,11 @@ export function ReviewCommentDialog(props: {
   const editing = props.initial !== undefined
   const title = editing ? `Edit the comment on ${props.location}` : `Comment on ${props.location}`
   const blocked = !note.trim() || (editing && note.trim() === props.initial?.trim())
+  const discard = useConfirmDiscard(
+    () => note.trim() !== (props.initial ?? '').trim(),
+    props.onCancel,
+    'Discard your comment? Esc again discards it.',
+  )
   const save = (): void => {
     if (!blocked) props.onSave(note.trim())
   }
@@ -735,7 +740,7 @@ export function ReviewCommentDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(discard.escape)}
         onSubmit={(e) => {
           e.preventDefault()
           save()
@@ -762,6 +767,7 @@ export function ReviewCommentDialog(props: {
           <span>{MOD_ENTER_LABEL} to save</span>
           <span id={counterId}>{`${note.length} / ${MAX_REVIEW_NOTE}`}</span>
         </div>
+        {discard.prompt}
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel}>
             Cancel

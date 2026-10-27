@@ -982,3 +982,22 @@ describe("Esc doesn't close a dialog while it saves, as Cancel doesn't", () => {
     expect(onCancel).not.toHaveBeenCalled()
   })
 })
+
+describe('ReviewCommentDialog: Esc with a typed comment', () => {
+  it('asks before discarding a new or edited comment, and closes at once when unchanged', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    const { unmount } = render(<ReviewCommentDialog location="a.ts:3" onSave={vi.fn()} onCancel={onCancel} />)
+    await user.type(screen.getByRole('textbox', { name: 'Comment' }), 'Rename this')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard your comment? Esc again discards it.')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    unmount()
+
+    render(<ReviewCommentDialog location="a.ts:3" initial="Rename this" onSave={vi.fn()} onCancel={onCancel} />)
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(2)
+  })
+})
