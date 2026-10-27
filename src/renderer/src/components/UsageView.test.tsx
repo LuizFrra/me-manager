@@ -65,3 +65,20 @@ describe('UsageView budgets', () => {
     expect(within(section).getByRole('button', { name: 'Set budgets in Settings' })).toBeInTheDocument()
   })
 })
+
+describe('UsageView errors', () => {
+  it("shows why the usage can't be read without the IPC wrapper's prefix", async () => {
+    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets'> = {
+      getUsageReport: async () => {
+        throw new Error(
+          "Error invoking remote method 'api:getUsageReport': Error: EACCES: permission denied, scandir '/home/u/.claude/projects'",
+        )
+      },
+      getBudgets: async () => ({ daily: null, tasks: {} }),
+    }
+    render(<UsageView api={api} onClose={vi.fn()} onOpenTarget={vi.fn()} onOpenSettings={vi.fn()} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Could not read the usage: EACCES: permission denied, scandir '/home/u/.claude/projects'",
+    )
+  })
+})

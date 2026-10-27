@@ -18,6 +18,7 @@ import type {
 import { USAGE_PERIODS } from '../../../shared/types'
 import { usageCacheTokens, usageTokens } from '../../../shared/usage'
 import { keepIfEqual } from '../lib/keepIfEqual'
+import { cleanError } from '../lib/toasts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { COST_LABEL, formatCost, formatTokens, SUBSCRIPTION_NOTE } from '../lib/usageFormat'
 import { startVisibleInterval } from '../lib/visibleInterval'
@@ -266,7 +267,7 @@ export function UsageView(props: {
             setReport((prev) => (prev ? keepIfEqual({ ...next, generatedAt: prev.generatedAt })(prev) : next))
             setError(null)
           },
-          (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+          (err: unknown) => setError(cleanError(err)),
         ),
         api.getBudgets().then(
           (next) => setBudgets((prev) => (prev ? keepIfEqual(next)(prev) : next)),
@@ -329,7 +330,11 @@ export function UsageView(props: {
           </button>
         </div>
         <div className="usage-body">
-          {error && <p className="usage-error">Could not read the usage: {error}</p>}
+          {error && (
+            <p className="usage-error" role="alert">
+              Could not read the usage: {error}
+            </p>
+          )}
           {!report && !error && <p className="usage-empty">Reading Claude Code transcripts…</p>}
           {report && total && (
             <>
