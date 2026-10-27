@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { run } from '../exec'
 import type { TabInfo } from '../../shared/types'
+import { TMUX_TITLE } from '../../shared/tmuxTitle'
 import { parseWindowActivity, shellCommandArg, tidyCapture, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
 
 const hasTmux = await run('tmux', ['-V']).then(
@@ -54,6 +55,9 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     expect(lines).toEqual(['terminal-features[90] xterm-256color:clipboard:hyperlinks'])
     const keys = await run('tmux', ['-L', socket, 'list-keys', '-T', 'root', 'MouseDown3Pane'])
     expect(keys).not.toContain('display-menu') // no pane menu with Kill on a right click
+    // The app's terminal learns copy mode from the title (see TMUX_TITLE).
+    expect(await run('tmux', ['-L', socket, 'show', '-gv', 'set-titles'])).toBe('on\n')
+    expect(await run('tmux', ['-L', socket, 'show', '-gv', 'set-titles-string'])).toBe(`${TMUX_TITLE}\n`)
     // Programs in new windows are told 24-bit colour works.
     expect(await run('tmux', ['-L', socket, 'show-environment', '-g', 'COLORTERM'])).toBe('COLORTERM=truecolor\n')
     await svc.killSession('mmt_conf')

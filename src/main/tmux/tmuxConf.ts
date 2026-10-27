@@ -1,3 +1,5 @@
+import { TMUX_TITLE } from '../../shared/tmuxTitle'
+
 /**
  * Written to ~/.me-manager/tmux.conf; only used by our own tmux socket.
  * screen-256color (not tmux-256color) because macOS ncurses lacks tmux-256color.
@@ -11,6 +13,8 @@
  * - A mouse selection is copied when the button is released (the app holds it for Ctrl+C and highlights it itself).
  *   Made on the live screen, it leaves copy mode at once: copy mode shows a still copy of the pane, so staying in it
  *   froze the screen until the next key. Made while scrolled back, it stays highlighted there, in copy mode.
+ * - The terminal's title says whether the pane is in copy mode and how far it is scrolled back (TMUX_TITLE), so the
+ *   app's terminal knows when keys would go to copy mode. (A terminal attached by hand shows it as its title.)
  * - COLORTERM tells programs (Claude Code among them) that 24-bit colour reaches the screen, which the RGB override
  *   and the app's terminal make true; without it they fall back to the nearest of 256 colours.
  */
@@ -26,6 +30,8 @@ set -g set-clipboard on
 set-environment -g COLORTERM truecolor
 set -s terminal-features[90] "xterm-256color:clipboard:hyperlinks"
 set -g allow-rename off
+set -g set-titles on
+set -g set-titles-string "${TMUX_TITLE}"
 set -g automatic-rename off
 set -g base-index 0
 bind -T copy-mode MouseDragEnd1Pane if -F "#{scroll_position}" { send -X copy-pipe-no-clear } { send -X copy-pipe-and-cancel }

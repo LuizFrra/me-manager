@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Prints src/renderer/src/lib/unicodeWidthTable.ts: the cell widths of the C library's wcwidth (glibc), as ranges.
+"""Prints src/shared/unicodeWidthTable.ts: the cell widths of the C library's wcwidth (glibc), as ranges.
 
 tmux measures characters with wcwidth (or utf8proc), so the app's terminal must agree with it on which characters
 take 0 or 2 cells, or every emoji shifts the rest of its line. Run on a recent glibc:
-    python3 scripts/unicode-widths.py > src/renderer/src/lib/unicodeWidthTable.ts && npx prettier --write <that file>
+    python3 scripts/unicode-widths.py > src/shared/unicodeWidthTable.ts && npx prettier --write <that file>
 """
 import ctypes
 import ctypes.util

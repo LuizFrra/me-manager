@@ -17,7 +17,7 @@ interface FakeTerm {
   input?: (data: string) => void
   selected: [number, number, number][]
   buffer: unknown
-  parsed?: () => void
+  title?: (title: string) => void
 }
 const terms = vi.hoisted(() => [] as FakeTerm[])
 const fits = vi.hoisted(() => ({ count: 0 }))
@@ -39,9 +39,9 @@ vi.mock('@xterm/xterm', () => ({
     textarea = undefined
     unicode = { register: noop, activeVersion: '6' }
     buffer: unknown = { active: { viewportY: 0, getLine: () => undefined } }
-    parsed?: () => void
-    onWriteParsed(cb: () => void): { dispose: () => void } {
-      this.parsed = cb
+    title?: (title: string) => void
+    onTitleChange(cb: (title: string) => void): { dispose: () => void } {
+      this.title = cb
       return { dispose: noop }
     }
     loadAddon = noop
@@ -520,24 +520,41 @@ describe('TerminalView after a scroll back', () => {
     expect(api.ptyWrite).toHaveBeenCalledWith('\x1b')
   })
 
-  it('sends keys straight on once the screen shows tmux is out of copy mode', () => {
+  it('sends keys straight on once tmux says it is out of copy mode', () => {
     const onLeaveCopyMode = vi.fn(async () => true)
     const { container } = render(
       <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
     )
     fireEvent.wheel(container.querySelector('.terminal-host') as Element, { deltaY: -120 })
-    const term = terms.at(-1) as FakeTerm & { parsed?: () => void }
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => (cb(0), 1))
-    act(() => term.parsed?.()) // the default fake screen has no copy-mode position
+    const term = terms.at(-1) as FakeTerm
+    act(() => term.title?.('me-manager:1:5'))
+    act(() => term.title?.('me-manager:0:')) // e.g. the wheel scrolled back down to the bottom
     term.input?.('\x1b')
     expect(onLeaveCopyMode).not.toHaveBeenCalled()
     expect(api.ptyWrite).toHaveBeenCalledWith('\x1b')
-    vi.restoreAllMocks()
+  })
+
+  it('leaves copy mode before a key when the session shown is already in it', async () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />)
+    act(() => terms.at(-1)?.title?.('me-manager:1:0')) // sent by tmux as the client attaches
+    await act(async () => terms.at(-1)?.input?.('a'))
+    expect(onLeaveCopyMode).toHaveBeenCalledTimes(1)
+    expect(api.ptyWrite).toHaveBeenCalledWith('a')
+  })
+
+  it("ignores titles that aren't tmux's copy-mode state", () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />)
+    act(() => terms.at(-1)?.title?.('✳ Claude Code'))
+    terms.at(-1)?.input?.('a')
+    expect(onLeaveCopyMode).not.toHaveBeenCalled()
   })
 
   it('leaves copy mode for arrow keys after a mouse selection, which scrolled nothing', async () => {
     const onLeaveCopyMode = vi.fn(async () => true)
     render(<TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />)
+    act(() => terms.at(-1)?.title?.('me-manager:1:0')) // the drag entered copy mode, at the bottom
     await act(async () => {
       await providers.at(-1)?.writeText('' as never, 'picked')
     })
@@ -549,6 +566,7 @@ describe('TerminalView after a scroll back', () => {
   it('keeps a selection copyable across focus reports from leaving and coming back to the window', async () => {
     const onLeaveCopyMode = vi.fn(async () => true)
     render(<TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />)
+    act(() => terms.at(-1)?.title?.('me-manager:1:0'))
     await act(async () => {
       await providers.at(-1)?.writeText('' as never, 'picked')
     })
@@ -618,24 +636,35 @@ describe('TerminalView mouse selection highlight', () => {
     expect(term.selected).toEqual([])
   })
 
+  it('highlights it once tmux has left copy mode, when the copy comes first', async () => {
+    const { host, term } = setup()
+    fireEvent.mouseDown(host, { button: 0, clientX: 5, clientY: 5 })
+    act(() => term.title?.('me-manager:1:0')) // the drag entered copy mode
+    fireEvent.mouseUp(window, { button: 0, clientX: 95, clientY: 5 })
+    await tmuxCopies('picked')
+    expect(term.selected).toEqual([])
+    act(() => term.title?.('me-manager:0:'))
+    expect(term.selected).toEqual([[0, 100, 10]])
+  })
+
   it('leaves the highlight to tmux when the drag ends scrolled back, in copy mode', async () => {
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => (cb(0), 1))
+    const { host, term } = setup()
+    fireEvent.mouseDown(host, { button: 0, clientX: 5, clientY: 5 })
+    act(() => term.title?.('me-manager:1:0'))
+    act(() => term.title?.('me-manager:1:4')) // dragged past the top: tmux scrolled
+    fireEvent.mouseUp(window, { button: 0, clientX: 95, clientY: 5 })
+    await tmuxCopies('picked')
+    expect(term.selected).toEqual([])
+    expect(xtermSelection.text).toBe('')
+  })
+
+  it('takes its highlight away when the wheel scrolls back (tmux shows another part then)', async () => {
     const { host, term } = setup()
     drag(host, [5, 5], [95, 5])
     await tmuxCopies('picked')
-    const chars = [...'out [3/90]'.padStart(20)]
-    term.buffer = {
-      active: {
-        viewportY: 100,
-        getLine: () => ({
-          length: 20,
-          getCell: (x: number) => ({ getChars: () => chars[x].trim(), isBgDefault: () => x < 14 }),
-        }),
-      },
-    }
-    act(() => term.parsed?.())
+    expect(xtermSelection.text).toBe('cells')
+    act(() => term.title?.('me-manager:1:5'))
     expect(xtermSelection.text).toBe('')
-    vi.restoreAllMocks()
   })
 })
 
@@ -687,26 +716,14 @@ describe('TerminalView jump to the bottom', () => {
         onLeaveCopyMode={onLeaveCopyMode}
       />,
     )
-    const term = terms.at(-1) as FakeTerm & { buffer: unknown; parsed?: () => void }
-    const top = (text: string, highlighted: number): void => {
-      const chars = [...text.padStart(20)]
-      term.buffer = {
-        active: {
-          viewportY: 0,
-          getLine: () => ({
-            length: 20,
-            getCell: (x: number) => ({ getChars: () => chars[x].trim(), isBgDefault: () => x < 20 - highlighted }),
-          }),
-        },
-      }
-    }
-    top('out [3/90]', 6)
-    act(() => term.parsed?.())
+    const term = terms.at(-1) as FakeTerm
+    act(() => term.title?.('me-manager:1:0')) // a selection at the bottom: nothing to jump to
+    expect(screen.queryByRole('button', { name: '↓ Jump to the bottom' })).toBeNull()
+    act(() => term.title?.('me-manager:1:3'))
     const jump = await screen.findByRole('button', { name: '↓ Jump to the bottom' })
     fireEvent.click(jump)
     expect(onLeaveCopyMode).toHaveBeenCalled()
-    top('out', 0)
-    act(() => term.parsed?.())
+    act(() => term.title?.('me-manager:0:'))
     await vi.waitFor(() => expect(screen.queryByRole('button', { name: '↓ Jump to the bottom' })).toBeNull())
   })
 })

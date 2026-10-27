@@ -11,8 +11,8 @@ import { TERMINAL_MIN_CONTRAST, TERMINAL_THEMES } from '../lib/terminalTheme'
 import { createLinkProvider, type LinkFiles } from '../lib/terminalLinkProvider'
 import type { TextLink } from '../lib/terminalLinks'
 import { editingKeySequence, NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
-import { SYSTEM_UNICODE } from '../lib/unicodeWidths'
-import { copyModePosition } from '../lib/copyMode'
+import { SYSTEM_UNICODE } from '../../../shared/unicodeWidths'
+import { parseTmuxTitle } from '../../../shared/tmuxTitle'
 import { cellAt, dragRange } from '../lib/dragSelection'
 import { PopupMenu, type MenuItem } from './PopupMenu'
 import { joinShellWords } from '../../../shared/shell'
@@ -89,14 +89,12 @@ export function TerminalView({
     claudeTabRef.current = claudeTab
     handlersRef.current = { onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode }
   }, [modalOpen, claudeTab, onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode])
-  // tmux may be in copy mode, where it would take keys itself: the wheel scrolled back, or a mouse selection (kept
-  // highlighted in copy mode) was made, since the last key. Cleared once the screen shows tmux isn't in it.
+  // The wheel scrolled back since the last key: tmux may be in copy mode before its title (below) says so.
   const wheelRef = useRef(false)
-  const selectedRef = useRef(false)
   // Input held while copy mode is left; it goes to the program once tmux is out of it.
   const pendingRef = useRef<string[] | null>(null)
-  // tmux shows its copy-mode position on the screen (see copyModePosition): keys would go to tmux. scrolledBack: the
-  // view is above the bottom, so "Jump to the bottom" is offered.
+  // tmux's title says whether it is in copy mode, where keys would go to tmux (see TMUX_TITLE). scrolledBack: the view
+  // is above the bottom, so "Jump to the bottom" is offered.
   const [scrolledBack, setScrolledBack] = useState(false)
   const inCopyModeRef = useRef(false)
   const viewScrolledRef = useRef(false)
@@ -185,19 +183,25 @@ export function TerminalView({
     term.loadAddon(fit)
     // OSC 52 is write-only: programs in the pty may set the clipboard but never read it. tmux's mouse selections
     // are held for an explicit copy.
+    // The last drag tmux copied, highlighted once tmux is out of copy mode (in it, tmux highlights it itself) while the
+    // selection is still fresh.
+    let toDraw: ReturnType<typeof dragRange> | null = null
+    const drawCopiedDrag = (): void => {
+      if (!toDraw || inCopyModeRef.current || !heldFreshRef.current) return
+      const { column, row, length } = toDraw
+      toDraw = null
+      term.select(column, term.buffer.active.viewportY + row, length)
+      drawnRef.current = true
+    }
     const clipboard = createWriteOnlyClipboard({
       write: (text) => navigator.clipboard.writeText(text),
       hold: (text) => {
         heldRef.current = text
         setFresh(text !== '')
-        if (text !== '') selectedRef.current = true
         const drag = dragRef.current
         dragRef.current = null
-        if (text !== '' && drag && Date.now() - drag.at < DRAG_COPY_MS) {
-          const { column, row, length } = drag.range
-          term.select(column, term.buffer.active.viewportY + row, length)
-          drawnRef.current = true
-        }
+        toDraw = text !== '' && drag && Date.now() - drag.at < DRAG_COPY_MS ? drag.range : null
+        drawCopiedDrag()
       },
     })
     term.loadAddon(new ClipboardAddon(undefined, clipboard))
@@ -264,11 +268,10 @@ export function TerminalView({
         return
       }
       const leave = handlersRef.current.onLeaveCopyMode
-      const maybeInMode = wheelRef.current || selectedRef.current || inCopyModeRef.current
+      const maybeInMode = wheelRef.current || inCopyModeRef.current
       const scrolling = (wheelRef.current || viewScrolledRef.current) && NAVIGATION_KEY.test(data)
       if (maybeInMode && !mouse && !focus && !scrolling && leave) {
         wheelRef.current = false
-        selectedRef.current = false
         const pending = [data]
         pendingRef.current = pending
         void leave()
@@ -401,26 +404,20 @@ export function TerminalView({
 
     const offData = api.onPtyData((data) => term.write(data))
     const input = term.onData(send)
-    // Once per frame with output: whether tmux shows its copy-mode position, for "Jump to the bottom".
-    let frame = 0
-    const checkCopyMode = (): void => {
-      frame = 0
-      const buffer = term.buffer.active
-      const top = buffer.getLine(buffer.viewportY)
-      const position = top ? copyModePosition(top) : null
-      inCopyModeRef.current = position !== null
-      viewScrolledRef.current = (position?.scrolledBack ?? 0) > 0
-      // Out of copy mode (e.g. the wheel scrolled back to the bottom, which leaves it): keys go straight on again.
-      if (!position) wheelRef.current = selectedRef.current = false
-      // Still in it (the drag scrolled back): tmux highlights the selection itself.
-      else if (drawnRef.current) {
+    const title = term.onTitleChange((text) => {
+      const mode = parseTmuxTitle(text)
+      if (!mode) return
+      inCopyModeRef.current = mode.inCopyMode
+      viewScrolledRef.current = mode.scrolledBack > 0
+      if (!mode.inCopyMode) {
+        wheelRef.current = false // e.g. the wheel scrolled back to the bottom, which leaves it: keys go straight on
+        drawCopiedDrag()
+      } else if (drawnRef.current) {
+        // tmux shows its own view now (scrolled back): the highlight would cover other text.
         drawnRef.current = false
         term.clearSelection()
       }
       setScrolledBack(viewScrolledRef.current)
-    }
-    const parsed = term.onWriteParsed(() => {
-      frame ||= requestAnimationFrame(checkCopyMode)
     })
     const doFit = (): void => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return
@@ -448,8 +445,7 @@ export function TerminalView({
       offData()
       input.dispose()
       pendingRef.current = null // a leave still on its way must not type into the next terminal
-      parsed.dispose()
-      cancelAnimationFrame(frame)
+      title.dispose()
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -464,7 +460,7 @@ export function TerminalView({
     setFresh(false)
     dragRef.current = null
     linkFilesCache.current = null
-    wheelRef.current = selectedRef.current = false
+    wheelRef.current = false
     pendingRef.current = null
     inCopyModeRef.current = viewScrolledRef.current = false
     setScrolledBack(false)
@@ -519,7 +515,7 @@ export function TerminalView({
         <button
           className="terminal-jump"
           onClick={() => {
-            wheelRef.current = selectedRef.current = false
+            wheelRef.current = false
             void handlersRef.current.onLeaveCopyMode?.().catch(() => false)
             termRef.current?.focus()
           }}
