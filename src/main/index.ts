@@ -14,6 +14,7 @@ import { APPEARANCE_BACKGROUND } from '../shared/appearance'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
+import { loadPage } from './pageLoad'
 import { BudgetWatcher } from './notify/budgetWatcher'
 import { NotificationWatcher } from './notify/watcher'
 import {
@@ -77,11 +78,15 @@ function createWindow(): BrowserWindow {
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppUrl(url, win.webContents.getURL())) event.preventDefault()
   })
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  const devUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+  // Without its page the window would never show: say why, and quit rather than linger as an invisible process.
+  void loadPage(
+    () => (devUrl ? win.loadURL(devUrl) : win.loadFile(join(__dirname, '../renderer/index.html'))),
+    (message) => {
+      dialog.showErrorBox('me-manager could not load its window', message)
+      app.quit()
+    },
+  )
   return win
 }
 
