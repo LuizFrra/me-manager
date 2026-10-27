@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppState, LiveStatus } from '../../../shared/types'
@@ -41,6 +41,14 @@ describe('Home tip', () => {
   })
   const tips = homeTips()
   const tipText = (): HTMLElement => document.querySelector('.home-tip-text') as HTMLElement
+  /** Home goes on with the tips where it left off: the tip `k` steps after the one shown first in this test. */
+  let first = 0
+  const tip = (k: number): string => tips[(first + k) % tips.length]
+  const start = (): void => {
+    renderHome(appState(theme('Client', [])))
+    first = tips.indexOf(tipText().textContent ?? '')
+    expect(first).not.toBe(-1)
+  }
   const wait = (ms: number): Promise<void> =>
     act(async () => {
       await vi.advanceTimersByTimeAsync(ms)
@@ -49,34 +57,62 @@ describe('Home tip', () => {
   it('changes on its own without a screen reader announcing each one, and pauses while hovered', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    renderHome(appState(theme('Client', [])))
-    expect(tipText()).toHaveTextContent(tips[0])
+    start()
     expect(tipText()).toHaveAttribute('aria-live', 'off')
     await wait(TIP_ROTATE_MS)
-    expect(tipText()).toHaveTextContent(tips[1])
+    expect(tipText()).toHaveTextContent(tip(1))
 
     await user.hover(tipText())
     await wait(TIP_ROTATE_MS * 3)
-    expect(tipText()).toHaveTextContent(tips[1]) // being read: it stays
+    expect(tipText()).toHaveTextContent(tip(1)) // being read: it stays
     await user.unhover(tipText())
     await wait(TIP_ROTATE_MS)
-    expect(tipText()).toHaveTextContent(tips[2])
+    expect(tipText()).toHaveTextContent(tip(2))
   })
 
   it('announces the tip "Next tip" shows, and holds it while the button has the focus', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    renderHome(appState(theme('Client', [])))
+    start()
     const next = screen.getByRole('button', { name: 'Next tip' })
     act(() => next.focus())
     expect(tipText()).toHaveAttribute('aria-live', 'polite')
     await user.keyboard('{Enter}')
-    expect(tipText()).toHaveTextContent(tips[1])
+    expect(tipText()).toHaveTextContent(tip(1))
     await wait(TIP_ROTATE_MS * 3)
-    expect(tipText()).toHaveTextContent(tips[1])
+    expect(tipText()).toHaveTextContent(tip(1))
     act(() => next.blur())
     expect(tipText()).toHaveAttribute('aria-live', 'off')
     await wait(TIP_ROTATE_MS)
-    expect(tipText()).toHaveTextContent(tips[2])
+    expect(tipText()).toHaveTextContent(tip(2))
+  })
+
+  it('goes on with the next tip when Home opens again, rather than the first', async () => {
+    const user = userEvent.setup()
+    start()
+    await user.click(screen.getByRole('button', { name: 'Next tip' }))
+    expect(tipText()).toHaveTextContent(tip(1))
+    cleanup()
+    renderHome(appState(theme('Client', [])))
+    expect(tipText()).toHaveTextContent(tip(2))
+  })
+
+  it('holds still while the window is hidden', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let hidden = false
+    const spy = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
+    try {
+      start()
+      hidden = true
+      act(() => void document.dispatchEvent(new Event('visibilitychange')))
+      await wait(TIP_ROTATE_MS * 3)
+      expect(tipText()).toHaveTextContent(tip(0))
+      hidden = false
+      act(() => void document.dispatchEvent(new Event('visibilitychange')))
+      await wait(TIP_ROTATE_MS)
+      expect(tipText()).not.toHaveTextContent(tip(0))
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

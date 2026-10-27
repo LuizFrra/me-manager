@@ -18,6 +18,7 @@ import type {
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { fuzzyFilter } from './lib/fuzzy'
+import { homeTips } from './lib/onboarding'
 import { mockColorScheme } from './test/matchMedia'
 
 vi.mock('./components/TerminalView', () => ({
@@ -3437,13 +3438,16 @@ describe('App welcome and home screens', () => {
       render(<App api={api} />)
       const tip = (): string => within(home()).getByText(/^Press |opens|searches|filters|shows|lists/).textContent ?? ''
       await screen.findByRole('region', { name: 'Home' })
-      expect(tip()).toBe('Press Ctrl+Shift+P to jump to any task, folder, file or action.')
+      // Home goes on from the tip it showed last, in earlier tests too.
+      const tips = homeTips()
+      const first = tips.indexOf(tip())
+      expect(first).not.toBe(-1)
       await act(async () => {
         await vi.advanceTimersByTimeAsync(8_000)
       })
-      expect(tip()).toContain('Ctrl+Shift+E')
+      expect(tip()).toBe(tips[(first + 1) % tips.length])
       await user.click(within(home()).getByRole('button', { name: 'Next tip' }))
-      expect(tip()).toContain('Ctrl+Shift+S')
+      expect(tip()).toBe(tips[(first + 2) % tips.length])
       await user.click(within(home()).getByRole('button', { name: /^Command palette/ }))
       expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
     } finally {
