@@ -2301,10 +2301,14 @@ describe('Orchestrator: usage', () => {
     expect(usage.calls[2]).toEqual(usage.calls[0])
   })
 
-  it('names the folder the usage is read from', async () => {
-    const { orch, usage } = await setup()
-    usage.projectsDir = '/custom/claude/projects'
-    expect(await orch.getUsageFolder()).toBe('/custom/claude/projects')
+  it('names the folder each profile’s usage is read from, Default first', async () => {
+    const { orch } = await setup()
+    await orch.addProfile({ name: 'Work', configDir: '/srv/claude-work', billing: 'company' })
+    const work = (await orch.listProfiles())[1].id
+    expect(await orch.getUsageFolders()).toEqual([
+      { profileId: 'default', name: 'Default', folder: '/home/me/.claude/projects' },
+      { profileId: work, name: 'Work', folder: '/srv/claude-work/projects' },
+    ])
   })
 
   it('works for a target whose folder is gone, but not for a repo without a task', async () => {
@@ -2335,6 +2339,54 @@ describe('Orchestrator: usage', () => {
       ['folder', 'notes', '/docs/notes'],
     ])
     expect(report.themes[1].targets[0].usage.all.cost).toBe(3)
+    expect(report.profiles).toEqual([
+      { id: 'default', name: 'Default', billing: 'own', report: { total: report.total, themes: report.themes } },
+    ])
+  })
+
+  /** Usage of `tokens` input tokens costing `cost`, in every period. */
+  const spent = (tokens: number, cost: number): ReturnType<typeof emptyUsageSummary> => {
+    const s = emptyUsageSummary()
+    for (const b of Object.values(s)) Object.assign(b, { input: tokens, cost, messages: 1, sessions: 1 })
+    return s
+  }
+
+  it('adds up every profile’s tokens, but only own-billed profiles’ cost, with a report per profile', async () => {
+    const { orch, usage, settings, themeId, taskTarget } = await withTargets()
+    await orch.addProfile({ name: 'Work', configDir: '/srv/claude-work', billing: 'company' })
+    const work = (await orch.listProfiles())[1].id
+    const task = '/wt/client-x/my-api/fix'
+    usage.byRoot[task] = spent(100, 2)
+    usage.byGroup.total = spent(100, 2)
+    usage.byProfile[work] = { byRoot: { [task]: spent(40, 0.5) }, byGroup: { total: spent(40, 0.5) } }
+
+    expect((await orch.getUsage(taskTarget)).all).toMatchObject({ input: 140, cost: 2, companyTokens: 40 })
+    const report = await orch.getUsageReport()
+    expect(report.total.today).toMatchObject({ input: 140, cost: 2, companyTokens: 40, messages: 2 })
+    expect(report.themes[0].targets[0].usage.all).toMatchObject({ input: 140, cost: 2, companyTokens: 40 })
+    expect(report.profiles.map((p) => [p.id, p.name, p.billing])).toEqual([
+      ['default', 'Default', 'own'],
+      [work, 'Work', 'company'],
+    ])
+    const [mine, theirs] = report.profiles.map((p) => p.report)
+    expect(mine.total.all).toMatchObject({ input: 100, cost: 2, companyTokens: 0 })
+    expect(theirs.total.all).toMatchObject({ input: 40, cost: 0, companyTokens: 40 })
+    expect(theirs.themes.find((t) => t.themeId === themeId)!.targets[0].usage.all.companyTokens).toBe(40)
+
+    // Billed to the company now: Default's tokens join the company's, and nothing has a cost.
+    await orch.updateProfile('default', { billing: 'company' })
+    expect((await orch.getUsageReport()).total.all).toMatchObject({ input: 140, cost: 0, companyTokens: 140 })
+    expect(settings.get().defaultProfileBilling).toBe('company')
+  })
+
+  it('counts a folder two profiles share once', async () => {
+    const { orch, usage, taskTarget } = await withTargets()
+    await orch.addProfile({ name: 'Alias', configDir: '/srv/alias', billing: 'own' })
+    const alias = (await orch.listProfiles())[1].id
+    usage.folders[alias] = '/home/me/.claude' // a link to Default's folder, made after it was added
+    usage.byRoot['/wt/client-x/my-api/fix'] = spent(100, 2)
+    usage.byProfile[alias] = { byRoot: { '/wt/client-x/my-api/fix': spent(100, 2) } }
+    expect((await orch.getUsage(taskTarget)).all).toMatchObject({ input: 100, cost: 2 })
   })
 })
 
@@ -2392,6 +2444,28 @@ describe('Orchestrator: budgets', () => {
     expect(await orch.getBudgets()).toEqual({
       daily: { level: 'warn', spent: 8.5, limit: 10, fraction: 0.85 },
       tasks: { [tasks[0].id]: { level: 'ok', spent: 3, limit: 10, fraction: 0.3 } },
+    })
+  })
+
+  it('counts own-billed profiles only: a company profile’s usage never reaches a budget', async () => {
+    const { orch, usage, settings, tasks } = await withTasks()
+    await orch.addProfile({ name: 'Work', configDir: '/srv/claude-work', billing: 'company' })
+    const work = (await orch.listProfiles())[1].id
+    const [a, b, c] = tasks
+    usage.byRoot[a.worktreePath] = summary(1)
+    usage.byGroup.total = summary(1, 1)
+    usage.byProfile[work] = {
+      byRoot: { [a.worktreePath]: summary(40), [b.worktreePath]: summary(40) },
+      byGroup: { total: summary(80, 80) },
+    }
+    await settings.update({ taskBudgetUsd: 5, dailyBudgetUsd: 10 })
+    expect(await orch.getBudgets()).toEqual({
+      daily: { level: 'ok', spent: 1, limit: 10, fraction: 0.1 },
+      tasks: {
+        [a.id]: { level: 'ok', spent: 1, limit: 5, fraction: 0.2 },
+        [b.id]: { level: 'ok', spent: 0, limit: 5, fraction: 0 },
+        [c.id]: { level: 'ok', spent: 0, limit: 5, fraction: 0 },
+      },
     })
   })
 })

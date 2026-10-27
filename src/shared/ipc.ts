@@ -76,7 +76,7 @@ export const INVOKE_METHODS = [
   'getUsage',
   'getUsageReport',
   'getBudgets',
-  'getUsageFolder',
+  'getUsageFolders',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

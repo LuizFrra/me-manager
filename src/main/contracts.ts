@@ -2,6 +2,7 @@ import type { UiStateStoreApi } from './store/uiState'
 import type {
   AppState,
   ChangeList,
+  ClaudeProfile,
   CommitResult,
   FileContent,
   FileList,
@@ -308,6 +309,27 @@ export interface UsageApi {
   summarize(roots: readonly string[], groups?: Readonly<Record<string, readonly string[]>>): Promise<UsageSummaries>
 }
 
+/** One Claude profile's usage (see ProfileUsageApi). */
+export interface ProfileUsageSummaries {
+  profile: ClaudeProfile
+  /**
+   * The profile's folder with every link resolved. Profiles on one folder share one reading of it, and these
+   * summaries: a merge counts the folder once.
+   */
+  folder: string
+  /** As read: priced tokens are in `cost`, whatever the profile's billing. */
+  usage: UsageSummaries
+}
+
+/** Claude Code usage of every Claude profile, each folder read by its own UsageApi. Read-only, as UsageApi. */
+export interface ProfileUsageApi {
+  /** UsageApi.summarize for each current profile, Default first. */
+  summarize(
+    roots: readonly string[],
+    groups?: Readonly<Record<string, readonly string[]>>,
+  ): Promise<ProfileUsageSummaries[]>
+}
+
 /** A tab's transcript and the file name saveTranscript suggests for it. */
 export interface CapturedTranscript {
   transcript: Transcript
@@ -348,7 +370,7 @@ export interface OrchestratorDeps {
   /** ui-state.json (see MeManagerApi.getUiState). */
   ui: UiStateStoreApi
   launcher: LauncherApi
-  usage: UsageApi
+  usage: ProfileUsageApi
   promptFiles: PromptFilesApi
   worktreesRoot: string
   pathExists: (path: string) => boolean

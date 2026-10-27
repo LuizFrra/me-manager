@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { budgetStatus } from '../../../shared/budget'
-import type { BudgetReport, MeManagerApi, UsageReport } from '../../../shared/types'
+import type { BudgetReport, MeManagerApi, UsageFolder, UsageReport } from '../../../shared/types'
 import { emptyUsageSummary } from '../../../shared/usage'
 import { UsageView } from './UsageView'
 
@@ -23,13 +23,16 @@ const report: UsageReport = {
       })),
     },
   ],
+  profiles: [],
 }
 
-function renderView(budgets: BudgetReport, usage: UsageReport = report, folder = '/home/u/.claude/projects'): void {
-  const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'> = {
+const defaultFolder: UsageFolder = { profileId: 'default', name: 'Default', folder: '/home/u/.claude/projects' }
+
+function renderView(budgets: BudgetReport, usage: UsageReport = report, folders = [defaultFolder]): void {
+  const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolders'> = {
     getUsageReport: async () => usage,
     getBudgets: async () => budgets,
-    getUsageFolder: async () => folder,
+    getUsageFolders: async () => folders,
   }
   render(<UsageView api={api} onClose={vi.fn()} onOpenTarget={vi.fn()} onOpenSettings={vi.fn()} />)
 }
@@ -70,8 +73,8 @@ describe('UsageView budgets', () => {
 
 describe('UsageView errors', () => {
   it("shows why the usage can't be read without the IPC wrapper's prefix", async () => {
-    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'> = {
-      getUsageFolder: async () => '/home/u/.claude/projects',
+    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolders'> = {
+      getUsageFolders: async () => [defaultFolder],
       getUsageReport: async () => {
         throw new Error(
           "Error invoking remote method 'api:getUsageReport': Error: EACCES: permission denied, scandir '/home/u/.claude/projects'",
@@ -105,8 +108,20 @@ describe('UsageView periods', () => {
 
 describe('UsageView footnote', () => {
   it('names the folder the transcripts are read from (CLAUDE_CONFIG_DIR when set)', async () => {
-    renderView({ daily: null, tasks: {} }, report, '/custom/claude/projects')
+    renderView({ daily: null, tasks: {} }, report, [{ ...defaultFolder, folder: '/custom/claude/projects' }])
     expect(await screen.findByText('/custom/claude/projects')).toBeInTheDocument()
     expect(screen.queryByText(/~\/\.claude/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Default/)).not.toBeInTheDocument()
+  })
+
+  it('names every Claude profile’s folder, with the profile, when there are several', async () => {
+    renderView({ daily: null, tasks: {} }, report, [
+      defaultFolder,
+      { profileId: 'w', name: 'Work', folder: '/srv/claude-work/projects' },
+    ])
+    const note = (await screen.findByText('/srv/claude-work/projects')).closest('p')!
+    expect(note).toHaveTextContent(
+      'in /home/u/.claude/projects (Default) and /srv/claude-work/projects (Work), which it prunes',
+    )
   })
 })

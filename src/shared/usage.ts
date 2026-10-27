@@ -9,6 +9,7 @@ export const emptyUsageTotals = (): UsageTotals => ({
   cacheWrite1h: 0,
   cost: 0,
   unpricedTokens: 0,
+  companyTokens: 0,
   messages: 0,
   sessions: 0,
   firstSeen: null,

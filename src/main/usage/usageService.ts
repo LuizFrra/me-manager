@@ -376,8 +376,8 @@ const periodStarts = (now: Date): Record<UsagePeriod, number> => ({
 /** A period's bit in a record's period mask; `all` has none, as every record is in it. */
 const PERIOD_BIT: Record<UsagePeriod, number> = { today: 1, week: 2, month: 4, all: 0 }
 
-/** Running totals for one bucket (a target or group in one period). */
-class Accumulator implements Omit<UsageTotals, 'sessions' | 'firstSeen' | 'lastSeen'> {
+/** Running totals for one bucket (a target or group in one period). Billing is not known here (see ProfileUsage). */
+class Accumulator implements Omit<UsageTotals, 'sessions' | 'firstSeen' | 'lastSeen' | 'companyTokens'> {
   input = 0
   output = 0
   cacheRead = 0
@@ -447,6 +447,7 @@ class Accumulator implements Omit<UsageTotals, 'sessions' | 'firstSeen' | 'lastS
       cacheWrite1h: this.cacheWrite1h,
       cost: this.cost,
       unpricedTokens: this.unpricedTokens,
+      companyTokens: 0,
       messages: this.messages,
       sessions: this.sessions.size,
       firstSeen: Number.isFinite(this.first) ? new Date(this.first).toISOString() : null,

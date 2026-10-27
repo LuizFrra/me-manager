@@ -684,19 +684,20 @@ export interface MeManagerApi {
   sendToClaude(target: Target, text: string): Promise<TabInfo[]>
 
   /**
-   * Claude usage of one task or folder, from Claude Code's transcripts (`~/.claude/projects`). A message counts
-   * for the most specific task or folder whose path contains its working directory.
+   * Claude usage of one task or folder, from Claude Code's transcripts (`projects` in every Claude profile's
+   * folder). A message counts for the most specific task or folder whose path contains its working directory. Cost
+   * counts own-billed profiles only (see UsageTotals.companyTokens).
    */
   getUsage(target: Target): Promise<UsageSummary>
   /** Usage of every task and folder, per theme, with totals. Cheap to call again: it is computed from a cache. */
   getUsageReport(): Promise<UsageReport>
   /**
-   * Where the daily budget and each active task's budget stand, from the same cached usage as getUsageReport.
-   * Reads no usage at all while no budget is set.
+   * Where the daily budget and each active task's budget stand, from the same cached usage as getUsageReport:
+   * own-billed profiles only. Reads no usage at all while no budget is set.
    */
   getBudgets(): Promise<BudgetReport>
-  /** The folder the usage is read from: `projects` in the Claude config folder (CLAUDE_CONFIG_DIR or ~/.claude). */
-  getUsageFolder(): Promise<string>
+  /** The folders the usage is read from: `projects` in each Claude profile's folder, Default first. */
+  getUsageFolders(): Promise<UsageFolder[]>
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
@@ -798,6 +799,11 @@ export interface UsageTotals {
   cost: number
   /** Tokens of models without a known price (see shared/pricing.ts); not in `cost`. */
   unpricedTokens: number
+  /**
+   * Tokens of priced models used through a Claude profile billed to a company (ProfileBilling `company`): not in
+   * `cost`, which counts own-billed profiles only. Unpriced ones stay in `unpricedTokens`.
+   */
+  companyTokens: number
   messages: number
   /** Distinct Claude Code sessions. */
   sessions: number
@@ -875,6 +881,25 @@ export interface BudgetAlert {
 export interface UsageReport {
   /** ISO time the report was computed. */
   generatedAt: string
+  /** Every Claude profile's usage together: tokens of all, cost of own-billed ones only (see companyTokens). */
   total: UsageSummary
   themes: UsageThemeReport[]
+  /** The same report for each Claude profile alone, Default first. */
+  profiles: UsageProfileReport[]
+}
+
+/** One Claude profile's usage (see UsageReport.profiles): a company-billed one's has tokens but no cost. */
+export interface UsageProfileReport {
+  id: string
+  name: string
+  billing: ProfileBilling
+  report: Omit<UsageReport, 'profiles' | 'generatedAt'>
+}
+
+/** Where one Claude profile's usage is read from (see MeManagerApi.getUsageFolders). */
+export interface UsageFolder {
+  profileId: string
+  name: string
+  /** `projects` in the profile's folder. */
+  folder: string
 }

@@ -49,6 +49,7 @@ import type {
   UpdateResult,
   UiState,
   UpdateStrategy,
+  UsageFolder,
   UsageReport,
   UsageSummary,
   UsageTargetReport,
@@ -71,6 +72,7 @@ import { RUN_WINDOW } from '../../shared/runCommand'
 import { findDevUrls, MAX_DEV_URLS } from '../../shared/devUrls'
 import { mapLimit } from '../concurrency'
 import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries, WindowActivity } from '../contracts'
+import { mergeProfileUsage } from '../usage/mergeUsage'
 import { baseBranchName } from '../git/gh'
 import { expandHome, taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
@@ -1678,16 +1680,20 @@ export class Orchestrator implements AppService {
   }
 
   /**
-   * Usage of every target and theme, and the total. getUsage asks for exactly this too, so the usage service's
-   * cached aggregation serves both instead of each evicting the other's. Every known root is passed along, so a
-   * message is counted for the most specific one only.
+   * Usage of every target and theme, and the total, of every profile together (see mergeProfileUsage) and of each
+   * alone. getUsage asks for exactly this too, so the usage services' cached aggregations serve both instead of each
+   * evicting the other's. Every known root is passed along, so a message is counted for the most specific one only.
    */
-  private async allUsage(): Promise<{ targets: Omit<UsageTargetReport, 'usage'>[]; usage: UsageSummaries }> {
+  private async allUsage(): Promise<{
+    targets: Omit<UsageTargetReport, 'usage'>[]
+    usage: UsageSummaries
+    profiles: { profile: ClaudeProfile; usage: UsageSummaries }[]
+  }> {
     const targets = this.usageTargets()
     const groups: Record<string, string[]> = { total: targets.map((t) => t.path) }
     for (const theme of this.state.themes) groups[themeGroup(theme.id)] = []
     for (const t of targets) groups[themeGroup(t.target.themeId)].push(t.path)
-    return { targets, usage: await this.deps.usage.summarize(groups.total, groups) }
+    return { targets, ...mergeProfileUsage(await this.deps.usage.summarize(groups.total, groups)) }
   }
 
   async getUsage(target: Target): Promise<UsageSummary> {
@@ -1716,22 +1722,33 @@ export class Orchestrator implements AppService {
     return { daily: budgetStatus(usage.groups.total?.today.cost ?? 0, settings.dailyBudgetUsd), tasks }
   }
 
-  async getUsageFolder(): Promise<string> {
-    return this.deps.usage.projectsDir
+  async getUsageFolders(): Promise<UsageFolder[]> {
+    return this.profiles().map((p) => ({ profileId: p.id, name: p.name, folder: join(p.configDir, 'projects') }))
   }
 
   async getUsageReport(): Promise<UsageReport> {
-    const { targets, usage } = await this.allUsage()
-    return {
-      generatedAt: new Date().toISOString(),
-      total: usage.groups.total ?? emptyUsageSummary(),
+    const { targets, usage, profiles } = await this.allUsage()
+    const reportOf = (u: UsageSummaries): Omit<UsageReport, 'profiles' | 'generatedAt'> => ({
+      total: u.groups.total ?? emptyUsageSummary(),
       themes: this.state.themes.map((theme) => ({
         themeId: theme.id,
         name: theme.name,
-        usage: usage.groups[themeGroup(theme.id)] ?? emptyUsageSummary(),
+        usage: u.groups[themeGroup(theme.id)] ?? emptyUsageSummary(),
         targets: targets
           .filter((t) => t.target.themeId === theme.id)
-          .map((t) => ({ ...t, usage: usage.roots[t.path] ?? emptyUsageSummary() })),
+          .map((t) => ({ ...t, usage: u.roots[t.path] ?? emptyUsageSummary() })),
+      })),
+    })
+    const total = reportOf(usage)
+    return {
+      generatedAt: new Date().toISOString(),
+      ...total,
+      profiles: profiles.map(({ profile, usage: u }) => ({
+        id: profile.id,
+        name: profile.name,
+        billing: profile.billing,
+        // A single own-billed profile's usage is the total itself: its report too (sent once over IPC).
+        report: u === usage ? total : reportOf(u),
       })),
     }
   }

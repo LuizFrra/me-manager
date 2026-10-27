@@ -1,6 +1,6 @@
 import { Folder, GitBranch } from 'lucide-react'
 import { ICON } from '../lib/icon'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { PRICING_SOURCE_DATE } from '../../../shared/pricing'
 import { budgetPercent, budgetSummary } from '../../../shared/budget'
 import { targetKey } from '../../../shared/naming'
@@ -10,6 +10,7 @@ import type {
   MeManagerApi,
   Target,
   UsageBucket,
+  UsageFolder,
   UsagePeriod,
   UsageReport,
   UsageThemeReport,
@@ -242,7 +243,7 @@ function Budgets(props: { budgets: BudgetReport; report: UsageReport; onOpenSett
  * a time, with the budgets. Costs are estimates at API prices. Esc, the ✕ button or a click outside closes it.
  */
 export function UsageView(props: {
-  api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'>
+  api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolders'>
   onClose: () => void
   onOpenTarget: (target: Target) => void
   /** Closes the view for the Settings dialog, where the budgets are set. */
@@ -253,8 +254,8 @@ export function UsageView(props: {
   const [report, setReport] = useState<UsageReport | null>(null)
   const [budgets, setBudgets] = useState<BudgetReport | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Where the transcripts are read from (CLAUDE_CONFIG_DIR moves it); asked once.
-  const [folder, setFolder] = useState<string | null>(null)
+  // Where the transcripts are read from, per Claude profile (CLAUDE_CONFIG_DIR moves Default's); asked once.
+  const [folders, setFolders] = useState<UsageFolder[]>([])
   const [period, setPeriod] = useState<UsagePeriod>('month')
   const [sort, setSort] = useState<Sort>({ key: 'cost', desc: true })
   useRestoreFocus()
@@ -284,7 +285,7 @@ export function UsageView(props: {
     return startVisibleInterval(load, USAGE_VIEW_POLL_MS)
   }, [load])
   useEffect(() => {
-    api.getUsageFolder().then(setFolder, () => {})
+    api.getUsageFolders().then(setFolders, () => {})
   }, [api])
 
   const onSort = (key: SortKey): void =>
@@ -440,12 +441,19 @@ export function UsageView(props: {
         <p className="usage-footnote">
           * {COST_LABEL}. {SUBSCRIPTION_NOTE} API prices as of {PRICING_SOURCE_DATE}. Counted from Claude Code&apos;s
           transcripts
-          {folder ? (
+          {folders.length > 0 && (
             <>
               {' '}
-              in <code>{folder}</code>
+              in{' '}
+              {folders.map((f, i) => (
+                <Fragment key={f.profileId}>
+                  {i === 0 ? '' : i === folders.length - 1 ? ' and ' : ', '}
+                  <code>{f.folder}</code>
+                  {folders.length > 1 && ` (${f.name})`}
+                </Fragment>
+              ))}
             </>
-          ) : null}
+          )}
           , which it prunes after a while (cleanupPeriodDays).
         </p>
       </div>

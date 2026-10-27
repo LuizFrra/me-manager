@@ -1842,7 +1842,7 @@ describe('App usage', () => {
                 input: 5000,
               },
             ]
-        return { generatedAt: new Date().toISOString(), total, themes }
+        return { generatedAt: new Date().toISOString(), total, themes, profiles: [] }
       },
       ...extra,
     })

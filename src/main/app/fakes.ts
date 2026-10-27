@@ -1,6 +1,7 @@
 import type {
   AppState,
   ChangeList,
+  ClaudeProfile,
   CommitResult,
   PullRequestResult,
   FileContent,
@@ -29,12 +30,13 @@ import type {
   SendTextOptions,
   StoreApi,
   TmuxApi,
-  UsageApi,
-  UsageSummaries,
+  ProfileUsageApi,
+  ProfileUsageSummaries,
   WindowActivity,
 } from '../contracts'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { emptyUsageSummary } from '../../shared/usage'
+import { allProfiles, DEFAULT_PROFILE_ID } from '../../shared/profiles'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
 import type { UiStateStoreApi } from '../store/uiState'
@@ -565,24 +567,34 @@ export class FakeProfileFolders implements ProfileFoldersApi {
   }
 }
 
-/** Returns `byRoot[root]` for each root and `byGroup[name]` for each group (empty usage otherwise). */
-export class FakeUsage implements UsageApi {
-  projectsDir = '/home/me/.claude/projects'
+/**
+ * Each current profile's usage (`profiles`, which makeDeps points at the settings), as read: Default's is
+ * `byRoot[root]` for each root and `byGroup[name]` for each group, another's that of `byProfile[id]` (empty usage
+ * otherwise). Each profile's folder is its own, or `folders[id]` when set.
+ */
+export class FakeUsage implements ProfileUsageApi {
   calls: { roots: string[]; groups: Record<string, string[]> }[] = []
   byRoot: Record<string, UsageSummary> = {}
   byGroup: Record<string, UsageSummary> = {}
+  byProfile: Record<string, { byRoot?: Record<string, UsageSummary>; byGroup?: Record<string, UsageSummary> }> = {}
+  folders: Record<string, string> = {}
+  profiles: () => readonly ClaudeProfile[] = () => []
   async summarize(
     roots: readonly string[],
     groups: Readonly<Record<string, readonly string[]>> = {},
-  ): Promise<UsageSummaries> {
+  ): Promise<ProfileUsageSummaries[]> {
     this.calls.push({
       roots: [...roots],
       groups: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, [...v]])),
     })
-    return {
-      roots: Object.fromEntries(roots.map((r) => [r, this.byRoot[r] ?? emptyUsageSummary()])),
-      groups: Object.fromEntries(Object.keys(groups).map((g) => [g, this.byGroup[g] ?? emptyUsageSummary()])),
-    }
+    return this.profiles().map((profile) => {
+      const data = profile.id === DEFAULT_PROFILE_ID ? this : (this.byProfile[profile.id] ?? {})
+      const usage = {
+        roots: Object.fromEntries(roots.map((r) => [r, data.byRoot?.[r] ?? emptyUsageSummary()])),
+        groups: Object.fromEntries(Object.keys(groups).map((g) => [g, data.byGroup?.[g] ?? emptyUsageSummary()])),
+      }
+      return { profile, folder: this.folders[profile.id] ?? profile.configDir, usage }
+    })
   }
 }
 
@@ -631,5 +643,6 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     profileFolders,
     ...overrides,
   }
+  usage.profiles = () => allProfiles(settings.get(), deps.defaultClaudeDir)
   return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles, profileFolders }
 }

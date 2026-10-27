@@ -112,13 +112,14 @@ Everything lives in `~/.me-manager`:
 - `ui-state.json`: what was open, selected and collapsed
 - `budget-alerts.json`: which budget notifications were already sent
 - `usage-cache.json`: the usage read from each Claude Code transcript, so a restart doesn't read them all
-  again (safe to delete)
+  again (safe to delete); `usage-cache-<hash>.json`: the same for each other Claude account's folder
 - `tmux.conf`: tmux config for the app's socket, regenerated on every start
 - `prompts/`: short-lived files that hand a new task's first prompt to Claude
 - `worktrees/`: the task worktrees
 
 Usage and cost are read (never written) from Claude Code's transcripts in `~/.claude/projects`, or
-`$CLAUDE_CONFIG_DIR/projects`.
+`$CLAUDE_CONFIG_DIR/projects`, and in `projects` of each other Claude account's folder. The cost and the budgets
+count only accounts you pay for; an account billed to your company counts its tokens only.
 
 ### Environment overrides
 
