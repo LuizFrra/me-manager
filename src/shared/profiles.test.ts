@@ -108,6 +108,14 @@ describe('profileError', () => {
     expect(profileError({ name: 'Home', configDir: '/home/me/a;b' }, others)).toBeNull()
   })
 
+  it('refuses a folder with . or .. in its path', () => {
+    const error = 'Choose a folder without . or .. in its path'
+    expect(profileError({ name: 'Home', configDir: '/home/me/../other' }, others)).toBe(error)
+    expect(profileError({ name: 'Home', configDir: '/home/./me' }, others)).toBe(error)
+    expect(profileError({ name: 'Home', configDir: '/home/me/..' }, others)).toBe(error)
+    expect(profileError({ name: 'Home', configDir: '/home/me/.claude..x' }, others)).toBeNull()
+  })
+
   it('accepts only what normalizeProfiles keeps, as the Settings dialog saves it', () => {
     const cases = [
       ['Home', '/home/me/.claude-home'],
@@ -123,11 +131,25 @@ describe('profileError', () => {
       ['Home', ' // '],
       ['Home', '/home/me/x;'],
       ['Home', '/home/me/x;/'],
+      ['Home', '/home/me/../x'],
+      ['Home', '/home/./me'],
     ]
     for (const [name, configDir] of cases) {
       const kept = normalizeProfiles([{ id: 'p', name, configDir, billing: 'own' }])
       expect([name, configDir, kept.length]).toEqual([name, configDir, profileError({ name, configDir }, []) ? 0 : 1])
       if (kept.length) expect(kept[0]).toMatchObject({ name: name.trim(), configDir: '/home/me/.claude-home' })
     }
+  })
+})
+
+describe('normalizeProfiles', () => {
+  it("drops a profile in Default's folder, which it would share Default's login and usage with", () => {
+    const raw = [
+      { id: 'p-same', name: 'Same', configDir: '/home/me/.claude/', billing: 'own' },
+      { id: 'p-work', name: 'Work', configDir: '/home/me/.claude-work', billing: 'own' },
+    ]
+    expect(normalizeProfiles(raw, '/home/me/.claude').map((p) => p.id)).toEqual(['p-work'])
+    expect(normalizeProfiles(raw, '/home/me//.claude/').map((p) => p.id)).toEqual(['p-work'])
+    expect(normalizeProfiles(raw).map((p) => p.id)).toEqual(['p-same', 'p-work']) // Default's folder unknown
   })
 })

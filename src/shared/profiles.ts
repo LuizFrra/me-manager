@@ -18,12 +18,15 @@ export const normalizeConfigDir = (dir: string): string => dir.replace(/\/+/g, '
 
 /**
  * A profile's folder as typed or loaded, trimmed and normalized, or why it can't be one: it must be absolute text,
- * not the root, and not end in `;` (as CLAUDE_CONFIG_DIR, it would end the tmux command it is passed in).
+ * not the root, without `.` or `..` segments (two spellings of one folder would pass for two), and not end in `;`
+ * (as CLAUDE_CONFIG_DIR, it would end the tmux command it is passed in).
  */
 function checkFolder(dir: unknown): { folder: string } | { error: string } {
   if (!isText(dir) || !dir.trim().startsWith('/')) return { error: 'Choose an absolute folder (starting with /)' }
   const folder = normalizeConfigDir(dir.trim())
   if (folder === '/') return { error: 'Choose a folder other than /' }
+  if (folder.split('/').some((segment) => segment === '.' || segment === '..'))
+    return { error: 'Choose a folder without . or .. in its path' }
   if (folder.endsWith(';')) return { error: 'A folder can’t end in ;' }
   return { folder }
 }
@@ -84,10 +87,12 @@ export function profileError(
 
 /**
  * Settings.profiles from untrusted input: entries with an id and a name (trimmed) and a folder checkFolder accepts
- * (trimmed and normalized), in order. Dropped: anything else, Default's id, and an id or folder an earlier entry has. A billing
- * that isn't one of PROFILE_BILLINGS is `own`. At most MAX_PROFILES.
+ * (trimmed and normalized), in order. Dropped: anything else, Default's id, an id or folder an earlier entry has,
+ * and Default's folder (`defaultDir`, when known). A billing that isn't one of PROFILE_BILLINGS is `own`. At most
+ * MAX_PROFILES.
  */
-export function normalizeProfiles(raw: readonly unknown[]): ClaudeProfile[] {
+export function normalizeProfiles(raw: readonly unknown[], defaultDir?: string): ClaudeProfile[] {
+  const defaultFolder = defaultDir === undefined ? null : normalizeConfigDir(defaultDir.trim())
   const profiles: ClaudeProfile[] = []
   for (const entry of raw) {
     if (profiles.length === MAX_PROFILES) break
@@ -96,6 +101,7 @@ export function normalizeProfiles(raw: readonly unknown[]): ClaudeProfile[] {
     const configDir = profileFolder(entry.configDir)
     if (
       configDir === null ||
+      configDir === defaultFolder ||
       id === DEFAULT_PROFILE_ID ||
       profiles.some((p) => p.id === id || p.configDir === configDir)
     )

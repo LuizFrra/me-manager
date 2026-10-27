@@ -87,6 +87,18 @@ describe('SettingsStore', () => {
     await expect(store.load()).resolves.toEqual({ ...DEFAULT_SETTINGS, claudeArgs: ['-v'], pollIntervalMs: 1000 })
   })
 
+  it("drops a profile in the Default profile's folder, or with . or .. in it, when it loads", async () => {
+    const store = new SettingsStore(file, '/home/me/.claude')
+    await store.save(DEFAULT_SETTINGS)
+    const profiles = [
+      { id: 'p1', name: 'Same', configDir: '/home/me/.claude', billing: 'own' },
+      { id: 'p2', name: 'Dots', configDir: '/home/me/../me/.claude-x', billing: 'own' },
+      { id: 'p3', name: 'Work', configDir: '/home/me/.claude-work', billing: 'own' },
+    ]
+    await writeFile(file, JSON.stringify({ profiles }), 'utf8')
+    expect((await store.load()).profiles.map((p) => p.id)).toEqual(['p3'])
+  })
+
   it('writes only known keys', async () => {
     await new SettingsStore(file).save({ ...custom, extra: true } as Settings)
     expect(Object.keys(JSON.parse(await readFile(file, 'utf8'))).sort()).toEqual(Object.keys(custom).sort())

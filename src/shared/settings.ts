@@ -84,7 +84,12 @@ const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Num
  * positive number, rounded to cents and clamped to BUDGET_LIMITS. Claude profiles are checked one by one too (see
  * normalizeProfiles).
  */
-export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAULT_SETTINGS): Settings {
+export function normalizeSettings(
+  raw: unknown,
+  base: Readonly<Settings> = DEFAULT_SETTINGS,
+  /** The Default profile's folder, when known: a saved profile with it is dropped (see normalizeProfiles). */
+  defaultProfileDir?: string,
+): Settings {
   const r = isRecord(raw) ? raw : {}
   const claudeArgs = Array.isArray(r.claudeArgs) && r.claudeArgs.every(isArgString) ? r.claudeArgs : base.claudeArgs
   const number = (v: unknown, fallback: number, limits: { min: number; max: number }): number =>
@@ -114,7 +119,7 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
     dailyBudgetUsd: budget(r.dailyBudgetUsd, base.dailyBudgetUsd),
     taskBudgetUsd: budget(r.taskBudgetUsd, base.taskBudgetUsd),
     appearance: APPEARANCES.includes(r.appearance as Appearance) ? (r.appearance as Appearance) : base.appearance,
-    profiles: normalizeProfiles(Array.isArray(r.profiles) ? r.profiles : base.profiles),
+    profiles: normalizeProfiles(Array.isArray(r.profiles) ? r.profiles : base.profiles, defaultProfileDir),
     defaultProfileBilling: PROFILE_BILLINGS.includes(r.defaultProfileBilling as ProfileBilling)
       ? (r.defaultProfileBilling as ProfileBilling)
       : base.defaultProfileBilling,

@@ -139,7 +139,7 @@ async function bootstrap(): Promise<void> {
   const promptFiles = new PromptFiles(promptsDir())
   await promptFiles.sweep()
   ptyService = new PtyService(nodePty.spawn)
-  const settings = new SettingsService(new SettingsStore(settingsFile()))
+  const settings = new SettingsService(new SettingsStore(settingsFile(), claudeConfigDir()))
   await settings.init()
   // Before the window exists, so its first frame and the page's prefers-color-scheme already match the setting.
   windowBackground = followAppearance({ theme: nativeTheme, settings, getWindow: () => mainWindow })
