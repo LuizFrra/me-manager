@@ -13,12 +13,18 @@ import {
 import type { LineRange } from '../../lib/review'
 import { MermaidBlock } from './MermaidBlock'
 import { useLatestCallback } from '../../lib/useLatestCallback'
+import { startVisibleInterval } from '../../lib/visibleInterval'
 
 export interface MarkdownViewProps {
   source: string
   /** Path of the .md file relative to the root, used to resolve relative links/images. */
   filePath: string
   loadImage: (relPath: string) => Promise<string | null>
+  /**
+   * Something that changes with an image file's contents (its size and modification time), checked every
+   * IMAGE_CHECK_MS while the image is shown: it is read again when that changes. Without it, an image is read once.
+   */
+  imageVersion?: (relPath: string) => Promise<string | null>
   /**
    * Called with a root-relative path for links to other files inside the root ('' for the root folder), and the
    * lines a `#L12` names or the heading (its anchor, lowercased) any other `#fragment` names.
@@ -98,6 +104,9 @@ function ActionLink(p: { title?: string; go: () => void; children: React.ReactNo
   )
 }
 
+/** How often a shown image's file is checked for changes (see MarkdownViewProps.imageVersion). */
+export const IMAGE_CHECK_MS = 3000
+
 /** The source of a ```mermaid fence, or null if this <pre> is something else. */
 function mermaidSource(pre: HastNode | undefined): string | null {
   const elements = pre?.children.filter((c) => c.type === 'element') ?? []
@@ -115,16 +124,20 @@ function MdImage({
   title,
   filePath,
   loadImage,
+  imageVersion,
 }: {
   src: string | undefined
   alt: string | undefined
   title: string | undefined
   filePath: string
   loadImage: MarkdownViewProps['loadImage']
+  imageVersion: MarkdownViewProps['imageVersion']
 }): React.JSX.Element {
   const external = !!src && isExternal(src)
   const path = src && !external ? resolveRelative(filePath, src) : null
   const [loaded, setLoaded] = useState<{ path: string; url: string | null } | null>(null)
+  // Bumped when the file changed on disk: the image is read again, the old picture showing until it arrives.
+  const [reads, setReads] = useState(0)
 
   useEffect(() => {
     if (!path) return
@@ -136,7 +149,25 @@ function MdImage({
     return () => {
       cancelled = true
     }
-  }, [path, loadImage])
+  }, [path, loadImage, reads])
+
+  useEffect(() => {
+    if (!path || !imageVersion) return
+    let alive = true
+    let last: string | null | undefined
+    const check = async (): Promise<void> => {
+      const version = await imageVersion(path).catch(() => last) // unknown: no change
+      if (!alive) return
+      if (last !== undefined && version !== last) setReads((n) => n + 1)
+      last = version
+    }
+    void check()
+    const stop = startVisibleInterval(check, IMAGE_CHECK_MS)
+    return () => {
+      alive = false
+      stop()
+    }
+  }, [path, imageVersion])
 
   const label = alt || src || 'image'
   if (path && loaded?.path === path && loaded.url) {
@@ -169,11 +200,14 @@ export const MarkdownView = memo(function MarkdownView({
   source,
   filePath,
   loadImage: loadImageProp,
+  imageVersion: imageVersionProp,
   onOpenLink: onOpenLinkProp,
   onOpenExternal: onOpenExternalProp,
   reveal,
 }: MarkdownViewProps): React.JSX.Element {
   const loadImage = useLatestCallback(loadImageProp)
+  const latestImageVersion = useLatestCallback((path: string) => imageVersionProp?.(path) ?? Promise.resolve(null))
+  const imageVersion = imageVersionProp ? latestImageVersion : undefined
   const onOpenLink = useLatestCallback(onOpenLinkProp)
   const onOpenExternal = useLatestCallback(onOpenExternalProp)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -232,6 +266,7 @@ export const MarkdownView = memo(function MarkdownView({
             title={title}
             filePath={filePath}
             loadImage={loadImage}
+            imageVersion={imageVersion}
           />
         )
       },
@@ -241,7 +276,7 @@ export const MarkdownView = memo(function MarkdownView({
         return <pre {...rest}>{children}</pre>
       },
     }),
-    [filePath, loadImage, onOpenLink, onOpenExternal],
+    [filePath, loadImage, imageVersion, onOpenLink, onOpenExternal],
   )
 
   // Once per request: a poll bringing a new version of the document doesn't scroll back to the heading.

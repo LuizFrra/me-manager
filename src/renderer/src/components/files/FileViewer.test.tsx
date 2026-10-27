@@ -6,7 +6,13 @@ import type { ChangedFile, FileContent, Target } from '../../../../shared/types'
 import { FileViewer, type FileViewerProps } from './FileViewer'
 
 vi.mock('./DiffView', () => ({ DiffView: (p: { diff: string }) => <pre data-testid="diff">DIFF:{p.diff}</pre> }))
-vi.mock('./MarkdownView', () => ({ MarkdownView: () => <div data-testid="markdown" /> }))
+const mdProps = vi.hoisted(() => [] as { imageVersion?: (path: string) => Promise<string | null> }[])
+vi.mock('./MarkdownView', () => ({
+  MarkdownView: (p: (typeof mdProps)[number]) => {
+    mdProps.push(p)
+    return <div data-testid="markdown" />
+  },
+}))
 
 const TARGET: Target = { themeId: 't', itemId: 'r', taskId: 'k' }
 const PNG_URL = 'data:image/png;base64,iVBORw0KGgo='
@@ -290,5 +296,37 @@ describe('FileViewer empty files', () => {
     renderViewer({ path: 'NOTES.md', content: empty })
     expect(screen.queryByTestId('markdown')).toBeNull()
     expect(screen.getAllByText('Empty file')).toHaveLength(2)
+  })
+})
+
+describe('FileViewer Markdown images', () => {
+  it("gives MarkdownView the version of an image's file: its size and modification time, an SVG's text", async () => {
+    const files: Record<string, FileContent> = {
+      'img/a.png': { kind: 'binary', size: 10, mtimeMs: 5 },
+      'img/b.svg': { kind: 'text', content: '<svg/>', size: 6, truncated: false },
+    }
+    const readFile = vi.fn(async (_t: Target, path: string): Promise<FileContent> => files[path] ?? { kind: 'missing' })
+    render(
+      <FileViewer
+        api={{ readImage: async () => null, openExternal: async () => {}, readFile }}
+        target={TARGET}
+        tab="files"
+        path="README.md"
+        content={{ kind: 'text', content: '# Hi', size: 4, truncated: false }}
+        mdMode="view"
+        canGoBack={false}
+        onBack={() => {}}
+        onMdMode={() => {}}
+        onOpenLink={() => {}}
+        onOpenFile={() => {}}
+        onError={() => {}}
+      />,
+    )
+    const version = mdProps.at(-1)?.imageVersion
+    expect(version).toBeDefined()
+    await expect(version!('img/a.png')).resolves.toBe('10:5')
+    await expect(version!('img/b.svg')).resolves.toBe('<svg/>')
+    await expect(version!('nope.png')).resolves.toBe('missing')
+    expect(readFile).toHaveBeenCalledWith(TARGET, 'img/a.png')
   })
 })
