@@ -3416,6 +3416,10 @@ kbd {
   background: var(--raised);
   box-shadow: 0 1px 2px var(--shadow-color);
 }
+.usage-filter {
+  display: flex;
+  margin-bottom: 12px;
+}
 .usage-body {
   flex: 1;
   min-height: 0;

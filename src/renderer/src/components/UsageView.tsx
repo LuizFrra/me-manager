@@ -75,8 +75,22 @@ function SortHeader(props: {
   )
 }
 
-/** Input, output, cache and total tokens, then the cost: the numeric cells every table row shares. */
-function NumberCells({ t, priced = true }: { t: UsageTotals; priced?: boolean }): React.JSX.Element {
+/** What a cost cell says for usage billed to a company (see UsageTotals.companyTokens), which has no cost. */
+const COMPANY_TITLE = 'Billed to your company: no cost estimate'
+
+/**
+ * Input, output, cache and total tokens, then the cost: the numeric cells every table row shares. `company`: the
+ * usage of an account billed to a company, whose cost cell says so.
+ */
+function NumberCells({
+  t,
+  priced = true,
+  company = false,
+}: {
+  t: UsageTotals
+  priced?: boolean
+  company?: boolean
+}): React.JSX.Element {
   return (
     <>
       <td className="num">{formatTokens(t.input)}</td>
@@ -89,7 +103,15 @@ function NumberCells({ t, priced = true }: { t: UsageTotals; priced?: boolean })
       </td>
       <td className="num">{formatTokens(usageTokens(t))}</td>
       <td className="num usage-cost-cell">
-        {priced ? formatCost(t.cost) : <span className="usage-unpriced">unpriced</span>}
+        {!priced ? (
+          <span className="usage-unpriced">unpriced</span>
+        ) : company ? (
+          <span className="usage-unpriced" title={COMPANY_TITLE}>
+            company
+          </span>
+        ) : (
+          formatCost(t.cost)
+        )}
       </td>
     </>
   )
@@ -99,6 +121,7 @@ function TargetRows(props: {
   theme: UsageThemeReport
   period: UsagePeriod
   sort: Sort
+  company: boolean
   onOpenTarget: (target: Target) => void
 }): React.JSX.Element {
   const { targets } = props.theme
@@ -133,7 +156,7 @@ function TargetRows(props: {
               {t.label}
             </button>
           </td>
-          <NumberCells t={t.usage[props.period]} />
+          <NumberCells t={t.usage[props.period]} company={props.company} />
         </tr>
       ))}
       {empty && (
@@ -145,7 +168,8 @@ function TargetRows(props: {
   )
 }
 
-function Totals({ bucket }: { bucket: UsageBucket }): React.JSX.Element {
+/** `company`: an account billed to a company, whose tokens take the cost's place. */
+function Totals({ bucket, company }: { bucket: UsageBucket; company: boolean }): React.JSX.Element {
   const stat = (label: string, value: string, title?: string): React.JSX.Element => (
     <div className="usage-stat" title={title}>
       <div className="usage-stat-value">{value}</div>
@@ -154,13 +178,20 @@ function Totals({ bucket }: { bucket: UsageBucket }): React.JSX.Element {
   )
   return (
     <section className="usage-totals" aria-label="Totals">
-      <div className="usage-stat usage-stat-main">
-        <div className="usage-stat-value">
-          {formatCost(bucket.cost)}
-          <sup aria-hidden="true">*</sup>
+      {company ? (
+        <div className="usage-stat usage-stat-main" title={usageTokens(bucket).toLocaleString('en-US')}>
+          <div className="usage-stat-value">{formatTokens(usageTokens(bucket))} tok</div>
+          <div className="usage-stat-label">Billed to your company</div>
         </div>
-        <div className="usage-stat-label">{COST_LABEL}</div>
-      </div>
+      ) : (
+        <div className="usage-stat usage-stat-main">
+          <div className="usage-stat-value">
+            {formatCost(bucket.cost)}
+            <sup aria-hidden="true">*</sup>
+          </div>
+          <div className="usage-stat-label">{COST_LABEL}</div>
+        </div>
+      )}
       {stat('Tokens', formatTokens(usageTokens(bucket)), usageTokens(bucket).toLocaleString('en-US'))}
       {stat('Input', formatTokens(bucket.input), bucket.input.toLocaleString('en-US'))}
       {stat('Output', formatTokens(bucket.output), bucket.output.toLocaleString('en-US'))}
@@ -257,6 +288,8 @@ export function UsageView(props: {
   // Where the transcripts are read from, per Claude profile (CLAUDE_CONFIG_DIR moves Default's); asked once.
   const [folders, setFolders] = useState<UsageFolder[]>([])
   const [period, setPeriod] = useState<UsagePeriod>('month')
+  // The Claude profile whose usage is shown (UsageReport.profiles), or all of them together.
+  const [profileId, setProfileId] = useState<string>('all')
   const [sort, setSort] = useState<Sort>({ key: 'cost', desc: true })
   useRestoreFocus()
   useEffect(() => ref.current?.focus(), [])
@@ -291,10 +324,16 @@ export function UsageView(props: {
   const onSort = (key: SortKey): void =>
     setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: key !== 'name' }))
 
-  const total = report?.total[period]
-  const themes = report
+  const profiles = report?.profiles ?? []
+  // A profile removed meanwhile shows them all again.
+  const shownProfile = profiles.find((p) => p.id === profileId)
+  const view = shownProfile?.report ?? report
+  const company = shownProfile?.billing === 'company'
+  const anyCompany = profiles.some((p) => p.billing === 'company')
+  const total = view?.total[period]
+  const themes = view
     ? sortBy(
-        report.themes,
+        view.themes,
         sort,
         (t) => t.name,
         (t) => t.usage[period],
@@ -345,8 +384,38 @@ export function UsageView(props: {
           {!report && !error && <p className="usage-empty">Reading Claude Code transcripts…</p>}
           {report && total && (
             <>
-              <Totals bucket={total} />
-              {budgets && (
+              {profiles.length > 1 && (
+                <div className="usage-filter">
+                  <div className="segmented" role="group" aria-label="Claude account">
+                    {[{ id: 'all', name: 'All', billing: 'own' }, ...profiles].map((p) => (
+                      <button
+                        key={p.id}
+                        aria-pressed={(shownProfile?.id ?? 'all') === p.id}
+                        title={
+                          p.id === 'all'
+                            ? 'Every Claude account together'
+                            : p.billing === 'company'
+                              ? `${p.name}: billed to your company, tokens only`
+                              : `${p.name}: billed to you`
+                        }
+                        onClick={() => setProfileId(p.id)}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <Totals bucket={total} company={company} />
+              {!shownProfile && anyCompany && (
+                <p className="usage-note" role="note" aria-label="Cost">
+                  The cost counts your own accounts only
+                  {total.companyTokens > 0
+                    ? `: ${formatTokens(total.companyTokens)} tokens billed to your company are not in it.`
+                    : '.'}
+                </p>
+              )}
+              {budgets && !company && (
                 <Budgets
                   budgets={budgets}
                   report={report}
@@ -385,12 +454,13 @@ export function UsageView(props: {
                     <tbody key={theme.themeId} aria-label={theme.name}>
                       <tr className="usage-theme-row">
                         <th scope="rowgroup">{theme.name}</th>
-                        <NumberCells t={theme.usage[period]} />
+                        <NumberCells t={theme.usage[period]} company={company} />
                       </tr>
                       <TargetRows
                         theme={theme}
                         period={period}
                         sort={sort}
+                        company={company}
                         onOpenTarget={(t) => {
                           props.onClose()
                           props.onOpenTarget(t)
@@ -428,7 +498,7 @@ export function UsageView(props: {
                       {total.models.map((m) => (
                         <tr key={m.model}>
                           <td className="usage-model">{m.model}</td>
-                          <NumberCells t={m} priced={m.priced} />
+                          <NumberCells t={m} priced={m.priced} company={company} />
                         </tr>
                       ))}
                     </tbody>

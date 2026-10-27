@@ -2253,6 +2253,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     selected && selectedTask && !isArchived(selectedTask) && usage?.key === targetKey(selected)
       ? budgetStatus(usage.summary.all.cost, effectiveTaskBudget(selectedTask, settings))
       : null
+  // The usage badge shows tokens only for a target billed to a company: its account is, or all its usage was.
+  const usageCompany =
+    selected !== null &&
+    (targetProfile(state, profiles, selected)?.billing === 'company' ||
+      (usage?.key === targetKey(selected) && usage.summary.all.companyTokens > 0 && usage.summary.all.cost === 0))
 
   // Everything below can read the resolved appearance (the terminal and Mermaid need it; CSS uses the root attribute).
   const content = (
@@ -2334,6 +2339,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               sessionFlags={sessionFlags}
               usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
               budget={taskBudget}
+              usageCompany={usageCompany}
               onOpenUsage={() => setUsageOpen(true)}
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
               baseRef={selectedTask?.baseRef}

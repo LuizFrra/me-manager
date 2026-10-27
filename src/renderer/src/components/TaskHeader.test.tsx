@@ -237,6 +237,15 @@ describe('TaskHeader usage badge and budget', () => {
     expect(badge).toHaveAccessibleName('Claude usage: $6.00 · 1k tok, over its budget')
     expect(badge).toHaveAccessibleDescription(/\$6\.00 of \$5\.00 task budget \(120%\)/)
   })
+
+  it('shows tokens only, billed to the company, for a task on a company account', () => {
+    render(<TaskHeader {...base} usage={usageOf(0)} usageCompany onOpenUsage={vi.fn()} />)
+    const badge = screen.getByRole('button', { name: /^Claude usage:/ })
+    expect(badge).toHaveAccessibleName('Claude usage: 1k tok, billed to your company')
+    expect(badge).not.toHaveTextContent('$')
+    expect(badge).toHaveAccessibleDescription(/Billed to your company/)
+    expect(badge).not.toHaveAccessibleDescription(/\$/)
+  })
 })
 
 describe('TaskHeader long names', () => {

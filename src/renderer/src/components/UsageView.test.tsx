@@ -125,3 +125,73 @@ describe('UsageView footnote', () => {
     )
   })
 })
+
+describe('UsageView Claude profiles', () => {
+  /** A report whose month has `cost` and `tokens` (input), with `companyTokens` of them billed to a company. */
+  const withMonth = (
+    cost: number,
+    tokens: number,
+    companyTokens = 0,
+  ): Omit<UsageReport, 'profiles' | 'generatedAt'> => {
+    const summary = emptyUsageSummary()
+    summary.month = {
+      ...summary.month,
+      cost,
+      input: tokens,
+      companyTokens,
+      messages: 2,
+      models: [
+        { ...emptyUsageSummary().month, model: 'claude-opus-4', priced: true, cost, input: tokens, companyTokens },
+      ],
+    }
+    return {
+      total: summary,
+      themes: [{ ...report.themes[0], usage: summary, targets: [{ ...report.themes[0].targets[0], usage: summary }] }],
+    }
+  }
+  const all = withMonth(3, 3_000_000, 2_000_000)
+  const twoProfiles: UsageReport = {
+    generatedAt: report.generatedAt,
+    ...all,
+    profiles: [
+      { id: 'default', name: 'Default', billing: 'own', report: withMonth(3, 1_000_000) },
+      { id: 'w', name: 'Work', billing: 'company', report: withMonth(0, 2_000_000, 2_000_000) },
+    ],
+  }
+
+  it('filters by account; a company one shows tokens, billed to the company, instead of a cost', async () => {
+    const user = userEvent.setup()
+    renderView({ daily: null, tasks: {} }, twoProfiles)
+    const filter = await screen.findByRole('group', { name: 'Claude account' })
+    const buttons = within(filter).getAllByRole('button')
+    expect(buttons.map((b) => b.textContent)).toEqual(['All', 'Default', 'Work'])
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$3.00')
+    expect(screen.getByRole('note', { name: 'Cost' })).toHaveTextContent(
+      'The cost counts your own accounts only: 2M tokens billed to your company are not in it.',
+    )
+
+    await user.click(buttons[2])
+    const totals = screen.getByRole('region', { name: 'Totals' })
+    expect(totals).toHaveTextContent('Billed to your company')
+    expect(totals).not.toHaveTextContent('$')
+    const table = screen.getByRole('table', { name: 'Usage by task and folder' })
+    expect(within(table).getAllByText('company')).not.toHaveLength(0)
+    expect(table).not.toHaveTextContent('$')
+    expect(screen.queryByRole('region', { name: 'Budgets' })).not.toBeInTheDocument()
+
+    await user.click(buttons[1])
+    expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$3.00')
+    expect(screen.getByRole('region', { name: 'Budgets' })).toBeInTheDocument()
+  })
+
+  it('has no filter, and no note on cost, with one account', async () => {
+    renderView(
+      { daily: null, tasks: {} },
+      { ...twoProfiles, ...withMonth(3, 1_000_000), profiles: twoProfiles.profiles.slice(0, 1) },
+    )
+    await screen.findByRole('region', { name: 'Totals' })
+    expect(screen.queryByRole('group', { name: 'Claude account' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('note', { name: 'Cost' })).not.toBeInTheDocument()
+  })
+})

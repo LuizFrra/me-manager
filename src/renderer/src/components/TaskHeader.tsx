@@ -281,6 +281,8 @@ export function TaskHeader(props: {
   usage?: UsageSummary
   /** The task's budget against its all-time cost (see UsageBadge); null or absent when it has none. */
   budget?: BudgetStatus | null
+  /** Its usage is billed to a company (see UsageBadge's `company`): tokens only. */
+  usageCompany?: boolean
   onOpenUsage?: () => void
   /** A task's git status, once loaded, and the base ref it is compared with. */
   git?: TaskGitStatus
@@ -371,7 +373,12 @@ export function TaskHeader(props: {
         <div className="task-header-actions">
           <div className="task-header-actions-row">
             {props.usage && props.onOpenUsage && (
-              <UsageBadge usage={props.usage} budget={props.budget} onOpen={props.onOpenUsage} />
+              <UsageBadge
+                usage={props.usage}
+                budget={props.budget}
+                company={props.usageCompany}
+                onOpen={props.onOpenUsage}
+              />
             )}
             <button
               className="header-btn"

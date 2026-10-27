@@ -4776,6 +4776,18 @@ describe('App Claude accounts', () => {
     expect(screen.getAllByText(/isn’t signed in/)).toHaveLength(1)
   })
 
+  it('shows only tokens in the usage badge of a task whose account is billed to a company', async () => {
+    const user = userEvent.setup()
+    const usage = emptyUsageSummary()
+    usage.all = { ...usage.all, output: 2000 } // none yet billed to the company: its account is
+    const api = repoApi({ getUsage: async () => usage })
+    await api.updateProfile('default', { billing: 'company' })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const badge = await within(screen.getByRole('banner')).findByRole('button', { name: /^Claude usage:/ })
+    expect(badge).toHaveAccessibleName('Claude usage: 2k tok, billed to your company')
+  })
+
   it('offers no choice of account while Default is the only one', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
