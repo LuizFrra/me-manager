@@ -168,6 +168,8 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     body = <ImageView key={path} path={path} size={p.content.size} load={loadImage} version={version} />
   } else if (p.content.kind === 'binary') {
     body = <p className="viewer-message">Binary file ({formatSize(p.content.size)})</p>
+  } else if (p.content.size === 0) {
+    body = <p className="viewer-message">Empty file</p>
   } else {
     const text = p.content
     body = (

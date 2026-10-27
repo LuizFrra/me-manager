@@ -211,3 +211,15 @@ describe('FileViewer scrolling', () => {
     expect(body.scrollTop).toBe(0)
   })
 })
+
+describe('FileViewer empty files', () => {
+  it('says a file is empty instead of showing a blank line 1, in code or Markdown', () => {
+    const empty: FileContent = { kind: 'text', content: '', size: 0, truncated: false }
+    const { container } = renderViewer({ path: 'src/empty.ts', content: empty })
+    expect(screen.getByText('Empty file')).toBeInTheDocument()
+    expect(container.querySelector('.code-view')).toBeNull()
+    renderViewer({ path: 'NOTES.md', content: empty })
+    expect(screen.queryByTestId('markdown')).toBeNull()
+    expect(screen.getAllByText('Empty file')).toHaveLength(2)
+  })
+})
