@@ -90,6 +90,19 @@ describe('fuzzyFilter', () => {
     expect(fuzzyFilter(items, '', (t) => t, 50)).toHaveLength(50)
   })
 
+  it('cuts to the same best matches a full ranking would, ties in their original order', () => {
+    const items = Array.from({ length: 300 }, (_, i) => `${['src', 'lib', 'a-b'][i % 3]}/file${i % 7}-${i}.ts`)
+    for (const query of ['f', 'ts', 'a', 'fi7', 'lb'])
+      expect(fuzzyFilter(items, query, (t) => t, 20)).toEqual(fuzzyFilter(items, query, (t) => t).slice(0, 20))
+  })
+
+  it('matches long texts, after short ones, with the right positions', () => {
+    expect(fuzzyMatch('ab', 'xaxb')?.positions).toEqual([1, 3])
+    const long = `${'x'.repeat(3000)}/alpha/beta.ts`
+    expect(fuzzyMatch('alpbeta', long)?.positions).toEqual([3001, 3002, 3003, 3007, 3008, 3009, 3010])
+    expect(fuzzyMatch('ab', 'xaxb')?.positions).toEqual([1, 3])
+  })
+
   it('returns the match positions with each item', () => {
     const [result] = fuzzyFilter([{ name: 'Toggle files panel' }], 'tfp', (i) => i.name)
     expect(result.item.name).toBe('Toggle files panel')
