@@ -261,6 +261,21 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     if (id === null || (document.activeElement !== null && document.activeElement !== document.body)) return
     focusRow(id)
   }, [p.state])
+  // What was focused last in the rows, and its row's place among them. When that row goes (a task removed or
+  // archived from its own buttons, after a dialog or not), the focus would drop to nothing: it goes to the row that
+  // took its place instead, or the last one. Not when the focus went somewhere else meanwhile.
+  const lastFocus = useRef<{ el: HTMLElement; at: number } | null>(null)
+  const rowLabels = (): HTMLElement[] => [
+    ...(navRef.current?.querySelectorAll<HTMLElement>('.row-label[data-key]') ?? []),
+  ]
+  useEffect(() => {
+    const last = lastFocus.current
+    if (!last || last.el.isConnected || (document.activeElement !== null && document.activeElement !== document.body))
+      return
+    lastFocus.current = null
+    const labels = rowLabels()
+    ;(labels[last.at] ?? labels.at(-1))?.focus()
+  }, [p.state])
 
   // Keyboard navigation, as in a tree: one row label is in the Tab order, and the arrows move between them (see
   // navigate). That one is the label focused last, unless the selection changed since; then the selected row's, or
@@ -559,6 +574,15 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           const key = e.target instanceof HTMLElement ? e.target.dataset.key : undefined
           if (key && (key !== lastFocused?.key || selectedKey !== lastFocused.selectedKey))
             setLastFocused({ key, selectedKey })
+          const label = e.target.closest('.row')?.querySelector<HTMLElement>('.row-label[data-key]')
+          const at = label ? rowLabels().indexOf(label) : -1
+          lastFocus.current = at === -1 ? null : { el: e.target, at }
+        }}
+        onBlur={(e) => {
+          // Into a dialog (a confirmation), the focus comes back here when it closes; anywhere else, it left.
+          const to = e.relatedTarget
+          if (to instanceof Element && !e.currentTarget.contains(to) && !to.closest('[aria-modal="true"]'))
+            lastFocus.current = null
         }}
         onDragOver={dragOver}
         onDrop={drop}
