@@ -2095,8 +2095,10 @@ describe('Orchestrator: update from base', () => {
 
   it("leaves copy mode in the task's session", async () => {
     const { orch, tmux, target, session } = await withTask()
-    await orch.leaveCopyMode(target)
-    expect(tmux.calls).toEqual([`leaveCopyMode ${session}`])
+    await expect(orch.leaveCopyMode(target)).resolves.toBe(false)
+    tmux.inCopyMode.add(session)
+    await expect(orch.leaveCopyMode(target)).resolves.toBe(true)
+    expect(tmux.calls).toEqual([`leaveCopyMode ${session}`, `leaveCopyMode ${session}`])
   })
 
   it('fetches, then rebases onto the base by default', async () => {

@@ -61,11 +61,14 @@ export interface TmuxServiceOptions {
   enterDelayMs?: number
   /** Overrides TMUX_TIMEOUT_MS (for tests). */
   timeoutMs?: number
+  /** Overrides TMUX_CONF (for tests). */
+  config?: string
 }
 
 export class TmuxService implements TmuxApi {
   private readonly enterDelayMs: number
   private readonly timeoutMs: number
+  private readonly config: string
 
   constructor(
     private readonly socket: string,
@@ -74,19 +77,22 @@ export class TmuxService implements TmuxApi {
   ) {
     this.enterDelayMs = options.enterDelayMs ?? SEND_ENTER_DELAY_MS
     this.timeoutMs = options.timeoutMs ?? TMUX_TIMEOUT_MS
+    this.config = options.config ?? TMUX_CONF
   }
 
   /**
    * Writes the config, and applies it to a server that is already running: `-f` is read only when the server
    * starts, and sessions outlive the app, so a new version's settings would otherwise wait for the next reboot.
+   * A line the running tmux refuses (an option an older tmux doesn't know) is reported, never fatal: tmux applies
+   * the other lines, as it does when it starts with the file.
    */
   async ensureConfig(): Promise<void> {
     await mkdir(dirname(this.configFile), { recursive: true })
-    await writeFile(this.configFile, TMUX_CONF, 'utf8')
+    await writeFile(this.configFile, this.config, 'utf8')
     try {
       await this.tmux(['source-file', this.configFile])
     } catch (err) {
-      if (!isNoServer(err)) throw err
+      if (!isNoServer(err)) console.warn('tmux refused part of its config:', err instanceof Error ? err.message : err)
     }
   }
 
@@ -173,10 +179,13 @@ export class TmuxService implements TmuxApi {
   }
 
   /** In copy mode (the user scrolled back) tmux, not the app, would get keys and pastes: leaves it first. */
-  private async leaveMode(target: string): Promise<void> {
+  /** Whether the pane was in a mode. */
+  private async leaveMode(target: string): Promise<boolean> {
     const inMode = (await this.tmux(['display-message', '-p', '-t', target, '#{pane_in_mode}'])).trim()
+    if (inMode === '0') return false
     // (Other modes, like choose-tree, may not take `cancel`; the keys still go to the app then.)
-    if (inMode !== '0') await this.tmux(['send-keys', '-t', target, '-X', 'cancel']).catch(() => {})
+    await this.tmux(['send-keys', '-t', target, '-X', 'cancel']).catch(() => {})
+    return true
   }
 
   async sendText(session: string, windowName: string, text: string, options: SendTextOptions = {}): Promise<void> {
@@ -277,8 +286,8 @@ export class TmuxService implements TmuxApi {
     await this.tmux(['send-keys', '-t', target, 'C-c'])
   }
 
-  async leaveCopyMode(session: string): Promise<void> {
-    await this.leaveMode(`=${session}:`) // the session's active window
+  leaveCopyMode(session: string): Promise<boolean> {
+    return this.leaveMode(`=${session}:`) // the session's active window
   }
 
   async listWindowActivity(session: string): Promise<WindowActivity[]> {

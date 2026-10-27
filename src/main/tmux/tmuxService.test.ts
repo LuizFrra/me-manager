@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { run } from '../exec'
 import type { TabInfo } from '../../shared/types'
 import { parseWindowActivity, shellCommandArg, tidyCapture, TMUX_TIMEOUT_MS, TmuxService } from './tmuxService'
@@ -63,11 +63,24 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
       (await run('tmux', ['-L', socket, 'display-message', '-p', '-t', '=mmt_mode:', '#{pane_in_mode}'])).trim()
     await run('tmux', ['-L', socket, 'copy-mode', '-t', '=mmt_mode:'])
     expect(await inMode()).toBe('1')
-    await svc.leaveCopyMode('mmt_mode')
+    await expect(svc.leaveCopyMode('mmt_mode')).resolves.toBe(true)
     expect(await inMode()).toBe('0')
-    await svc.leaveCopyMode('mmt_mode')
+    await expect(svc.leaveCopyMode('mmt_mode')).resolves.toBe(false)
     expect(await inMode()).toBe('0')
     await svc.killSession('mmt_mode')
+  })
+
+  it('keeps going when a running tmux refuses a config line (an option an older tmux lacks)', async () => {
+    await svc.newSession('mmt_badconf', cwd, 'claude', 'sh')
+    const bad = new TmuxService(socket, join(cwd, 'bad.conf'), {
+      config: 'set -g no-such-option on\nset -g status off\n',
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(bad.ensureConfig()).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+    await svc.ensureConfig()
+    await svc.killSession('mmt_badconf')
   })
 
   it('creates a session with a named first window', async () => {

@@ -40,7 +40,7 @@ export interface TerminalViewProps {
   /** The shown task's root and files, so paths to them in the output become links. */
   loadLinkFiles?: () => Promise<LinkFiles | null>
   /** Leaves tmux's copy mode in the shown session (see MeManagerApi.leaveCopyMode). */
-  onLeaveCopyMode?: () => Promise<void>
+  onLeaveCopyMode?: () => Promise<boolean>
 }
 
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
@@ -58,6 +58,8 @@ const COPY_KEY = isMac ? '⌘C' : 'Ctrl+C'
 const followsLink = (e: MouseEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
 const isHttp = (url: string): boolean => /^https?:\/\//i.test(url)
 /** One cursor or paging key (arrows, Page Up/Down, Home/End): in copy mode tmux scrolls with these. */
+// eslint-disable-next-line no-control-regex -- escape sequences are exactly what is matched
+const FOCUS_REPORT = /^\x1b\[[IO]$/
 // eslint-disable-next-line no-control-regex -- escape sequences are exactly what is matched
 const NAVIGATION_KEY = /^\x1b(?:\[[0-9;]*[A-Za-z~]|O[A-Za-z])$/
 
@@ -84,14 +86,17 @@ export function TerminalView({
     claudeTabRef.current = claudeTab
     handlersRef.current = { onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode }
   }, [modalOpen, claudeTab, onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode])
-  // The wheel scrolled back since the last keystroke, so tmux may be in copy mode, where it would take keys itself.
-  const scrolledBackRef = useRef(false)
+  // tmux may be in copy mode, where it would take keys itself: the wheel scrolled back, or a mouse selection (kept
+  // highlighted in copy mode) was made, since the last key. Cleared once the screen shows tmux isn't in it.
+  const wheelRef = useRef(false)
+  const selectedRef = useRef(false)
   // Input held while copy mode is left; it goes to the program once tmux is out of it.
   const pendingRef = useRef<string[] | null>(null)
   // tmux shows its copy-mode position on the screen (see copyModePosition): keys would go to tmux. scrolledBack: the
   // view is above the bottom, so "Jump to the bottom" is offered.
   const [scrolledBack, setScrolledBack] = useState(false)
   const inCopyModeRef = useRef(false)
+  const viewScrolledRef = useRef(false)
   const termRef = useRef<Terminal | null>(null)
   // The last mouse selection tmux copied; it reaches the clipboard only on an explicit copy.
   const heldRef = useRef('')
@@ -174,6 +179,7 @@ export function TerminalView({
       hold: (text) => {
         heldRef.current = text
         setFresh(text !== '')
+        if (text !== '') selectedRef.current = true
       },
     })
     term.loadAddon(new ClipboardAddon(undefined, clipboard))
@@ -222,28 +228,35 @@ export function TerminalView({
     }
     host.addEventListener('copy', onCopy)
     /**
-     * Input for the program. After a scroll back tmux is likely in copy mode, where typed text would be swallowed or
-     * read as copy-mode commands: the first key that isn't a scrolling one leaves copy mode, and it and what follows
-     * are held until tmux is out of it. Escape only leaves.
+     * Input for the program. In copy mode (after a scroll back or a mouse selection) tmux would swallow typed text or
+     * read it as copy-mode commands: the first key leaves copy mode, and it and what follows are held until tmux is
+     * out of it. Scrolling keys still scroll while the view is scrolled back. An Escape that left copy mode isn't
+     * also sent on (it would interrupt Claude).
      */
     const send = (data: string): void => {
       const mouse = data.startsWith('\x1b[<')
-      // Typing (not a mouse report) ends the moment when Ctrl+C copies the tmux selection.
-      if (!mouse) setFresh(false)
+      // Focus in/out reports (focus-events) are no keystroke.
+      const focus = FOCUS_REPORT.test(data)
+      // Typing ends the moment when Ctrl+C copies the tmux selection.
+      if (!mouse && !focus) setFresh(false)
       if (pendingRef.current) {
         pendingRef.current.push(data)
         return
       }
       const leave = handlersRef.current.onLeaveCopyMode
-      if ((scrolledBackRef.current || inCopyModeRef.current) && !mouse && !NAVIGATION_KEY.test(data) && leave) {
-        scrolledBackRef.current = false
-        const pending = data === '\x1b' ? [] : [data]
+      const maybeInMode = wheelRef.current || selectedRef.current || inCopyModeRef.current
+      const scrolling = (wheelRef.current || viewScrolledRef.current) && NAVIGATION_KEY.test(data)
+      if (maybeInMode && !mouse && !focus && !scrolling && leave) {
+        wheelRef.current = false
+        selectedRef.current = false
+        const pending = [data]
         pendingRef.current = pending
         void leave()
-          .catch(() => undefined)
-          .then(() => {
+          .catch(() => false)
+          .then((left) => {
             if (pendingRef.current !== pending) return // another session is shown now
             pendingRef.current = null
+            if (left && pending[0] === '\x1b') pending.shift()
             for (const queued of pending) api.ptyWrite(queued)
           })
         return
@@ -310,7 +323,7 @@ export function TerminalView({
     host.addEventListener('drop', onDrop)
     // Captured: in mouse mode xterm stops the wheel event once it has reported it to tmux.
     const onWheel = (e: WheelEvent): void => {
-      if (e.deltaY < 0) scrolledBackRef.current = true
+      if (e.deltaY < 0) wheelRef.current = true
     }
     host.addEventListener('wheel', onWheel, { capture: true, passive: true })
     // A new click or drag replaces the selection; tmux reports a drag's text once the button is released.
@@ -353,7 +366,10 @@ export function TerminalView({
       const top = buffer.getLine(buffer.viewportY)
       const position = top ? copyModePosition(top) : null
       inCopyModeRef.current = position !== null
-      setScrolledBack((position?.scrolledBack ?? 0) > 0)
+      viewScrolledRef.current = (position?.scrolledBack ?? 0) > 0
+      // Out of copy mode (e.g. the wheel scrolled back to the bottom, which leaves it): keys go straight on again.
+      if (!position) wheelRef.current = selectedRef.current = false
+      setScrolledBack(viewScrolledRef.current)
     }
     const parsed = term.onWriteParsed(() => {
       frame ||= requestAnimationFrame(checkCopyMode)
@@ -382,6 +398,7 @@ export function TerminalView({
       settled.cancel()
       offData()
       input.dispose()
+      pendingRef.current = null // a leave still on its way must not type into the next terminal
       parsed.dispose()
       cancelAnimationFrame(frame)
       term.dispose()
@@ -397,9 +414,9 @@ export function TerminalView({
     heldRef.current = ''
     setFresh(false)
     linkFilesCache.current = null
-    scrolledBackRef.current = false
+    wheelRef.current = selectedRef.current = false
     pendingRef.current = null
-    inCopyModeRef.current = false
+    inCopyModeRef.current = viewScrolledRef.current = false
     setScrolledBack(false)
     fitRef.current?.fit()
     api.ptyResize(term.cols, term.rows)
@@ -452,8 +469,8 @@ export function TerminalView({
         <button
           className="terminal-jump"
           onClick={() => {
-            scrolledBackRef.current = false
-            void handlersRef.current.onLeaveCopyMode?.().catch(() => undefined)
+            wheelRef.current = selectedRef.current = false
+            void handlersRef.current.onLeaveCopyMode?.().catch(() => false)
             termRef.current?.focus()
           }}
         >
