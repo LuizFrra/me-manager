@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BranchList, TaskTemplate } from '../../../shared/types'
@@ -1027,5 +1027,32 @@ describe('NameDialog while it works', () => {
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Client X')
     await user.keyboard('{Escape}')
     expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ConflictDialog while asking Claude', () => {
+  it("doesn't close on Esc, as Close doesn't", async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    let done = (): void => {}
+    render(
+      <ConflictDialog
+        branch="b"
+        baseRef="main"
+        strategy="rebase"
+        files={['a.ts']}
+        onAskClaude={() => new Promise<void>((resolve) => (done = resolve))}
+        onClose={onClose}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Ask Claude to resolve' }))
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled()
+    // From wherever focus went when the clicked button turned off.
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    done()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled())
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

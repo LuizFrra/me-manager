@@ -1482,11 +1482,7 @@ export function ConflictDialog(props: {
         role="alertdialog"
         aria-modal="true"
         aria-label="Update stopped on conflicts"
-        onKeyDown={(e) => {
-          if (e.key !== 'Escape') return
-          e.preventDefault()
-          props.onClose()
-        }}
+        onKeyDown={cancelOnEscape(props.onClose, busy)}
       >
         <h2>Update stopped on conflicts</h2>
         <p className="conflict-summary">
