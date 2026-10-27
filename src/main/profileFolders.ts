@@ -1,7 +1,11 @@
-import { access, mkdir, readFile, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, mkdir, open, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProfileLogin } from '../shared/types'
 import type { ProfileFoldersApi } from './contracts'
+
+/** The largest settings.json read; a bigger one counts as none. */
+export const MAX_SETTINGS_BYTES = 1024 * 1024
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -17,11 +21,27 @@ const exists = (path: string): Promise<boolean> =>
  */
 async function usesKeyOrGateway(dir: string): Promise<boolean> {
   try {
-    const settings: unknown = JSON.parse(await readFile(join(dir, 'settings.json'), 'utf8'))
+    const text = await readSettings(join(dir, 'settings.json'))
+    const settings: unknown = text === null ? null : JSON.parse(text)
     if (!isRecord(settings)) return false
     return 'apiKeyHelper' in settings || (isRecord(settings.env) && 'ANTHROPIC_BASE_URL' in settings.env)
   } catch {
     return false
+  }
+}
+
+/**
+ * The file's text when it is a regular file of at most MAX_SETTINGS_BYTES, else null. Opened without blocking
+ * and checked through what was opened, so a FIFO put there (even after a check) can't make the read wait forever.
+ */
+async function readSettings(path: string): Promise<string | null> {
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
+  try {
+    const info = await file.stat()
+    if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return null
+    return await file.readFile('utf8')
+  } finally {
+    await file.close()
   }
 }
 

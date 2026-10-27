@@ -1,8 +1,9 @@
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ProfileFolders } from './profileFolders'
+import { MAX_SETTINGS_BYTES, ProfileFolders } from './profileFolders'
 
 describe('ProfileFolders', () => {
   let root: string
@@ -58,6 +59,20 @@ describe('ProfileFolders', () => {
     }
     const empty = await folder('empty')
     await expect(new ProfileFolders('linux').loginState(empty)).resolves.toBe('notSignedIn')
+  })
+
+  it('reads only a settings.json that is a regular file of at most 1 MB', async () => {
+    const linux = new ProfileFolders('linux')
+    const fifo = await folder('fifo')
+    execFileSync('mkfifo', [join(fifo, 'settings.json')]) // reading it would wait for a writer forever
+    await expect(linux.loginState(fifo)).resolves.toBe('notSignedIn')
+    const dir = await folder('dir')
+    await mkdir(join(dir, 'settings.json'))
+    await expect(linux.loginState(dir)).resolves.toBe('notSignedIn')
+    const big = `{"apiKeyHelper": "x", "pad": "${'x'.repeat(MAX_SETTINGS_BYTES)}"}`
+    await expect(linux.loginState(await folder('big', { 'settings.json': big }))).resolves.toBe('notSignedIn')
+    const fits = `{"apiKeyHelper": "x", "pad": "${'x'.repeat(MAX_SETTINGS_BYTES - 40)}"}`
+    await expect(linux.loginState(await folder('fits', { 'settings.json': fits }))).resolves.toBe('keyOrGateway')
   })
 
   it('creates a folder and the ones above it, private and empty, and accepts one that is there', async () => {
