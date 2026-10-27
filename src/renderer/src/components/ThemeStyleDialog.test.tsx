@@ -26,4 +26,18 @@ describe('ThemeStyleDialog', () => {
     expect(screen.getByText('Use a single emoji')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   })
+
+  it("doesn't close on Esc while saving, as Cancel doesn't", async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(
+      <ThemeStyleDialog themeName="Home" initial={{}} onSave={() => new Promise<void>(() => {})} onCancel={onCancel} />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Icon 🚀' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox', { name: 'Emoji' }))
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+  })
 })

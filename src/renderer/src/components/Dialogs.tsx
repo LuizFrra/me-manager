@@ -27,13 +27,16 @@ import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
 import { newTaskNameError, type ExistingTask } from '../lib/names'
 
-/** A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. */
+/**
+ * A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. Not
+ * while `busy` (saving): Cancel is off then, and a failed save would find the dialog, and what was typed, gone.
+ */
 const cancelOnEscape =
-  (cancel: () => void) =>
+  (cancel: () => void, busy = false) =>
   (e: React.KeyboardEvent): void => {
     if (e.key !== 'Escape') return
     e.preventDefault()
-    cancel()
+    if (!busy) cancel()
   }
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
@@ -156,7 +159,7 @@ export function RunCommandDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Run command for ${props.itemName}`}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -807,7 +810,7 @@ export function NotesDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Notes for ${props.taskName}`}
-        onKeyDown={cancelOnEscape(discard.escape)}
+        onKeyDown={cancelOnEscape(discard.escape, busy)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -893,7 +896,7 @@ export function BudgetDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Budget for ${props.taskName}`}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()

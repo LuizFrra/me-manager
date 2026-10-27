@@ -947,3 +947,38 @@ describe('NewTaskDialog base branch filter', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("Esc doesn't close a dialog while it saves, as Cancel doesn't", () => {
+  const pending = (): (() => Promise<void>) => vi.fn(() => new Promise<void>(() => {}))
+  it.each([
+    [
+      'Notes',
+      (onCancel: () => void) => <NotesDialog taskName="t" initial="" onSave={pending()} onCancel={onCancel} />,
+      'notes',
+    ],
+    [
+      'Budget',
+      (onCancel: () => void) => (
+        <BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={pending()} onCancel={onCancel} />
+      ),
+      '5',
+    ],
+    [
+      'RunCommand',
+      (onCancel: () => void) => (
+        <RunCommandDialog itemName="api" kind="repo" initial="" onSave={pending()} onCancel={onCancel} />
+      ),
+      'npm run dev',
+    ],
+  ])('%s', async (_name, dialog, text) => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(dialog(onCancel))
+    await user.keyboard(text)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox'))
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+})

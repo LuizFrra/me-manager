@@ -353,7 +353,7 @@ export function SettingsDialog(props: {
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return
           e.preventDefault()
-          discard.escape()
+          if (!busyRef.current) discard.escape() // like Cancel: a failed save keeps the dialog and the edits
         }}
       >
         <h2>Settings</h2>

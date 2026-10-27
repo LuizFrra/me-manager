@@ -341,3 +341,21 @@ describe('SettingsDialog: number fields and the mouse wheel', () => {
     }
   })
 })
+
+describe('SettingsDialog: while saving', () => {
+  it("doesn't close on Esc, as Cancel doesn't", async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    const onSave = vi.fn(() => new Promise<void>(() => {}))
+    render(
+      <SettingsDialog settings={{ ...DEFAULT_SETTINGS, skipPermissions: false }} onSave={onSave} onCancel={onCancel} />,
+    )
+    await user.type(screen.getByLabelText('Editor command'), 'subl')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    await user.click(screen.getByLabelText('Editor command'))
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})

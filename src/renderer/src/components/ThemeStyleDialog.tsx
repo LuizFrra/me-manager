@@ -52,7 +52,7 @@ export function ThemeStyleDialog(props: {
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return
           e.preventDefault()
-          props.onCancel()
+          if (!busyRef.current) props.onCancel() // like Cancel: a failed save keeps the dialog
         }}
       >
         <h2>
