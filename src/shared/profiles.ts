@@ -44,14 +44,18 @@ export function effectiveProfileId(
 }
 
 /**
- * Why a new or edited profile is refused, or null: an empty name, a folder that isn't absolute, or one that another
- * profile (`others`, Default included and the edited one left out) already uses, once normalized.
+ * Why a new or edited profile is refused, or null: an empty name, a name another profile (`others`, Default
+ * included and the edited one left out) has, ignoring case and surrounding spaces, a folder that isn't absolute, or
+ * one another profile already uses, once normalized.
  */
 export function profileError(
   p: Pick<ClaudeProfile, 'name' | 'configDir'>,
   others: readonly ClaudeProfile[],
 ): string | null {
-  if (p.name.trim() === '') return 'Enter a name'
+  const name = p.name.trim().toLowerCase()
+  if (name === '') return 'Enter a name'
+  const namesake = others.find((o) => o.name.trim().toLowerCase() === name)
+  if (namesake) return `Another account is named “${namesake.name}”`
   if (!p.configDir.startsWith('/')) return 'Choose an absolute folder (starting with /)'
   const dir = normalizeConfigDir(p.configDir)
   const owner = others.find((o) => normalizeConfigDir(o.configDir) === dir)

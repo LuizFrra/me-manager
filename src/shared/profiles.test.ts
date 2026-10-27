@@ -67,6 +67,11 @@ describe('profileError', () => {
     expect(profileError({ name: 'Home', configDir: '' }, others)).toMatch(/absolute/i)
   })
 
+  it('refuses a name another profile has, ignoring case and spaces, Default’s included', () => {
+    expect(profileError({ name: ' work ', configDir: '/x' }, others)).toBe('Another account is named “Work”')
+    expect(profileError({ name: 'DEFAULT', configDir: '/x' }, others)).toBe('Another account is named “Default”')
+  })
+
   it('refuses a folder another profile has, Default’s included, also with a trailing slash', () => {
     expect(profileError({ name: 'Home', configDir: '/home/me/.claude-work' }, others)).toBe(
       '“Work” already uses this folder',
