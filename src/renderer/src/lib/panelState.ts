@@ -13,11 +13,14 @@ export interface SearchState {
 export const DEFAULT_SEARCH: SearchState = { query: '', caseSensitive: false, regex: false }
 
 /**
- * Lines to scroll to and mark (a search result's line, a review comment's lines), in the file `path`: shown only
- * while that file is. Each request is a new object, so opening the same lines again scrolls back to them.
+ * Lines to scroll to and mark (a search result's line, a review comment's lines), or a Markdown heading to scroll
+ * to, in the file `path`: shown only while that file is. Each request is a new object, so opening the same lines
+ * again scrolls back to them.
  */
 export interface PanelReveal extends SelectedLines {
   path: string
+  /** A heading's anchor (a link to `doc.md#usage`). */
+  heading?: string
 }
 
 /** What the side panel shows for one target. */

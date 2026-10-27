@@ -36,12 +36,15 @@ export interface FileViewerProps {
   diffLayout?: DiffLayout
   /** Changes tab: the user picked a layout with the header's Unified / Split toggle. */
   onDiffLayout?: (layout: DiffLayout) => void
-  /** Lines to scroll to and mark (see CodeView, DiffView); a new object scrolls to them again. */
-  reveal?: SelectedLines
+  /**
+   * Lines to scroll to and mark (see CodeView, DiffView), or a Markdown heading to scroll to; a new object scrolls
+   * to them again.
+   */
+  reveal?: SelectedLines & { heading?: string }
   canGoBack: boolean
   onBack: () => void
   onMdMode: (mode: PanelState['mdMode']) => void
-  onOpenLink: (path: string, lines?: LineRange) => void
+  onOpenLink: (path: string, lines?: LineRange, heading?: string) => void
   onOpenFile: (path: string) => void
   onError: (err: unknown) => void
   /**
@@ -185,6 +188,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
               loadImage={loadImage}
               onOpenLink={p.onOpenLink}
               onOpenExternal={openExternal}
+              reveal={p.reveal}
             />
           </div>
         ) : (

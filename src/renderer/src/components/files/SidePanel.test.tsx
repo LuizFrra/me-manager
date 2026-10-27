@@ -12,8 +12,9 @@ interface MdProps {
   source: string
   filePath: string
   loadImage: unknown
-  onOpenLink: (path: string, lines?: { start: number; end: number }) => void
+  onOpenLink: (path: string, lines?: { start: number; end: number }, heading?: string) => void
   onOpenExternal: unknown
+  reveal?: { heading?: string }
 }
 const mdRenders = vi.hoisted(() => [] as MdProps[])
 vi.mock('./MarkdownView', () => ({
@@ -25,6 +26,9 @@ vi.mock('./MarkdownView', () => ({
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('docs')}>folder link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('docs/guide.md', undefined, 'setup')}>
+          heading link from {p.filePath}
+        </button>
       </div>
     )
   },
@@ -223,6 +227,16 @@ describe('SidePanel', () => {
     expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+  })
+
+  it('opens a Markdown link to a heading of another document at that heading', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'heading link from README.md' }))
+    expect(await screen.findByText(/MD:# Guide/)).toBeInTheDocument()
+    expect(mdRenders.at(-1)?.reveal).toEqual({ path: 'docs/guide.md', heading: 'setup' })
+    // Rendered, not as its source.
+    expect(screen.getByRole('button', { name: 'View' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it("opens a Markdown link to a folder at the folder's README", async () => {
