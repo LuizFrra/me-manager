@@ -39,7 +39,13 @@ export interface PanelState {
   /** Lines to scroll to and mark, in the file or its diff; cleared when another file is picked. */
   reveal?: PanelReveal
   search: SearchState
+  /** How Markdown and SVG files are shown, as last picked with the viewer's toggle. */
   mdMode: 'view' | 'raw'
+  /**
+   * A Markdown or SVG file shown as its text whatever `mdMode` says, because it was opened at lines (a search
+   * result, a link or comment to lines): only that file, until another one is picked.
+   */
+  rawPath?: string
   /** Files visited before following Markdown links, most recent last. */
   history: PanelVisit[]
 }

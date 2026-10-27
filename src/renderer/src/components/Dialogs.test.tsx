@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BranchList, TaskTemplate } from '../../../shared/types'
@@ -1017,5 +1017,87 @@ describe('ReviewCommentDialog: Esc with a typed comment', () => {
     render(<ReviewCommentDialog location="a.ts:3" initial="Rename this" onSave={vi.fn()} onCancel={onCancel} />)
     await user.keyboard('{Escape}')
     expect(onCancel).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('NameDialog while it works', () => {
+  it('keeps Cancel off and Esc waiting, so a failed submit keeps the dialog and the name', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    // A failure is reported by the caller (a toast), which keeps the dialog: the promise just settles.
+    let fail = (): void => {}
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          fail = resolve
+        }),
+    )
+    render(<NameDialog title="New theme" placeholder="" onSubmit={onSubmit} onCancel={onCancel} />)
+    await user.keyboard('Client X{Enter}')
+    expect(screen.getByRole('button', { name: 'Working…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    await user.keyboard('{Enter}')
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    fail()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled())
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Client X')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ConflictDialog while asking Claude', () => {
+  it("doesn't close on Esc, as Close doesn't", async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    let done = (): void => {}
+    render(
+      <ConflictDialog
+        branch="b"
+        baseRef="main"
+        strategy="rebase"
+        files={['a.ts']}
+        onAskClaude={() => new Promise<void>((resolve) => (done = resolve))}
+        onClose={onClose}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Ask Claude to resolve' }))
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled()
+    // From wherever focus went when the clicked button turned off.
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    done()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled())
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NewTaskDialog while creating', () => {
+  it("doesn't close on Esc, as Cancel doesn't: a creation that fails keeps what was typed", async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    let done = (): void => {}
+    render(
+      <NewTaskDialog
+        repoName="my-api"
+        loadBranches={async () => ({ default: 'origin/main', branches: ['origin/main'] })}
+        onSubmit={() => new Promise<void>((resolve) => (done = resolve))}
+        onCancel={onCancel}
+      />,
+    )
+    await user.keyboard('fix it')
+    await user.type(screen.getByRole('textbox', { name: /Initial prompt/ }), 'Do the thing')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox', { name: 'Name' }))
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Discard the prompt/)).not.toBeInTheDocument()
+    done()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled())
+    expect(screen.getByRole('textbox', { name: /Initial prompt/ })).toHaveValue('Do the thing')
   })
 })

@@ -23,6 +23,12 @@ describe('ChangesList', () => {
     expect(screen.getByText('No changes yet.')).toBeInTheDocument()
   })
 
+  it('names each status in words for screen readers, not by its letter', () => {
+    render(<ChangesList changes={[change('src/a.ts'), change('n.ts', { status: 'U' })]} onSelect={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'src/a.ts, modified, +3 −1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'n.ts, untracked, +3 −1' })).toBeInTheDocument()
+  })
+
   it('lists a few changes in full, with status, rename and stats, and selects one', async () => {
     const onSelect = vi.fn()
     render(

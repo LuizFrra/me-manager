@@ -6,7 +6,13 @@ import type { ChangedFile, FileContent, Target } from '../../../../shared/types'
 import { FileViewer, type FileViewerProps } from './FileViewer'
 
 vi.mock('./DiffView', () => ({ DiffView: (p: { diff: string }) => <pre data-testid="diff">DIFF:{p.diff}</pre> }))
-vi.mock('./MarkdownView', () => ({ MarkdownView: () => <div data-testid="markdown" /> }))
+const mdProps = vi.hoisted(() => [] as { imageVersion?: (path: string) => Promise<string | null> }[])
+vi.mock('./MarkdownView', () => ({
+  MarkdownView: (p: (typeof mdProps)[number]) => {
+    mdProps.push(p)
+    return <div data-testid="markdown" />
+  },
+}))
 
 const TARGET: Target = { themeId: 't', itemId: 'r', taskId: 'k' }
 const PNG_URL = 'data:image/png;base64,iVBORw0KGgo='
@@ -290,5 +296,71 @@ describe('FileViewer empty files', () => {
     renderViewer({ path: 'NOTES.md', content: empty })
     expect(screen.queryByTestId('markdown')).toBeNull()
     expect(screen.getAllByText('Empty file')).toHaveLength(2)
+  })
+})
+
+describe('FileViewer Markdown images', () => {
+  it("gives MarkdownView the version of an image's file: its size and modification time, an SVG's text", async () => {
+    const files: Record<string, FileContent> = {
+      'img/a.png': { kind: 'binary', size: 10, mtimeMs: 5 },
+      'img/b.svg': { kind: 'text', content: '<svg/>', size: 6, truncated: false },
+    }
+    const readFile = vi.fn(async (_t: Target, path: string): Promise<FileContent> => files[path] ?? { kind: 'missing' })
+    render(
+      <FileViewer
+        api={{ readImage: async () => null, openExternal: async () => {}, readFile }}
+        target={TARGET}
+        tab="files"
+        path="README.md"
+        content={{ kind: 'text', content: '# Hi', size: 4, truncated: false }}
+        mdMode="view"
+        canGoBack={false}
+        onBack={() => {}}
+        onMdMode={() => {}}
+        onOpenLink={() => {}}
+        onOpenFile={() => {}}
+        onError={() => {}}
+      />,
+    )
+    const version = mdProps.at(-1)?.imageVersion
+    expect(version).toBeDefined()
+    await expect(version!('img/a.png')).resolves.toBe('10:5')
+    await expect(version!('img/b.svg')).resolves.toBe('<svg/>')
+    await expect(version!('nope.png')).resolves.toBe('missing')
+    expect(readFile).toHaveBeenCalledWith(TARGET, 'img/a.png')
+  })
+})
+
+describe('FileViewer missing files', () => {
+  it('says a deleted file no longer exists, and that a file never there is not found', () => {
+    const { unmount } = renderViewer({ path: 'docs/nope.md', content: { kind: 'missing' } })
+    expect(screen.getByText('File not found')).toBeInTheDocument()
+    unmount()
+    renderViewer({ path: 'docs/gone.md', content: { kind: 'missing' }, deleted: true })
+    expect(screen.getByText('File no longer exists')).toBeInTheDocument()
+  })
+})
+
+describe('FileViewer lines past the end', () => {
+  const text = (content: string, truncated = false): FileContent => ({
+    kind: 'text',
+    content,
+    size: truncated ? 2_000_000 : content.length,
+    truncated,
+  })
+
+  it('says when the lines to show are past the end of the file', () => {
+    renderViewer({ path: 'a.ts', content: text('one\ntwo\nthree\n'), reveal: { lines: { start: 12, end: 14 } } })
+    expect(screen.getByRole('status')).toHaveTextContent('Line 12 is past the end of the file (3 lines).')
+  })
+
+  it('says when they are past the beginning shown of a large file', () => {
+    renderViewer({ path: 'big.log', content: text('a\nb\n', true), reveal: { lines: { start: 50_000, end: 50_000 } } })
+    expect(screen.getByRole('status')).toHaveTextContent('Line 50,000 is past the part shown.')
+  })
+
+  it('says nothing for lines in the file', () => {
+    renderViewer({ path: 'a.ts', content: text('one\ntwo\nthree\n'), reveal: { lines: { start: 3, end: 3 } } })
+    expect(screen.queryByText(/past the/)).not.toBeInTheDocument()
   })
 })

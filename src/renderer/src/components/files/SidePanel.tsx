@@ -61,8 +61,14 @@ export const PANEL_POLL_MS = 3000
 const FILES_EVERY_N_POLLS = 5
 
 type Alive = () => boolean
-/** What the viewer shows for `key`: the file's content or diff, or why it couldn't be read. */
-type Loaded = { key: string; value: FileContent | string; error?: undefined } | { key: string; error: string }
+/**
+ * What the viewer shows for `key`: the file's content or diff, or why it couldn't be read. `deleted`: the file is
+ * missing but was listed or shown, so it was deleted (otherwise it never existed, e.g. a link to a wrong path).
+ */
+type Loaded =
+  { key: string; value: FileContent | string; error?: undefined; deleted?: boolean } | { key: string; error: string }
+
+const isMissing = (value: FileContent | string): boolean => typeof value === 'object' && value.kind === 'missing'
 
 /** Stores the JSON of `value` under `slot`; true if it differs from what was stored before. */
 function changed(cache: Map<string, string>, slot: string, value: unknown): boolean {
@@ -150,9 +156,14 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             ? await api.fileDiff(target, shownPath)
             : await api.fileDiff(target, shownPath, oldPath)
       if (!alive() || !changed(lastJson.current, 'view', { key: viewKey, value })) return
-      setView({ key: viewKey, value })
+      const listed = Boolean(shownPath && shownFiles.current?.paths.includes(shownPath))
+      setView((last) => {
+        if (!isMissing(value)) return { key: viewKey, value }
+        const shown = last?.key === viewKey && last.error === undefined && !isMissing(last.value)
+        return { key: viewKey, value, deleted: listed || shown }
+      })
       // Gone: the tree drops it now, not at the next file-list poll (once, not on every poll while it is shown).
-      if (typeof value === 'object' && value.kind === 'missing') await fetchFiles(alive)
+      if (isMissing(value)) await fetchFiles(alive)
     },
     [api, target, tab, shownPath, oldPath, viewKey, fetchFiles],
   )
@@ -237,7 +248,12 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   )
 
   const select = (nextTab: PanelTab, path: string): void =>
-    onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
+    onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [], rawPath: undefined })
+  /** How a Markdown or SVG file is shown: as its text when it was opened at lines, else as the toggle says. */
+  const modeOf = (path: string | undefined): PanelState['mdMode'] =>
+    path !== undefined && path === state.rawPath ? 'raw' : state.mdMode
+  /** `path`, opened at lines: shown as its text if it is Markdown or SVG, where lines can be shown. */
+  const rawAt = (path: string): string | undefined => (isMarkdown(path) || isSvgPath(path) ? path : undefined)
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
   // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown. A link
   // to a heading (`#usage`) opens the file there. A link to a folder (the root too) opens its README, as on GitHub.
@@ -251,9 +267,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: path,
       reveal: lines ? { path, lines: { ...lines } } : heading ? { path, heading } : undefined,
       history: state.selected
-        ? [...state.history, { path: state.selected, scrollTop, mdMode: state.mdMode }]
+        ? [...state.history, { path: state.selected, scrollTop, mdMode: modeOf(state.selected) }]
         : state.history,
-      mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
+      rawPath: lines ? rawAt(path) : undefined,
     })
   })
   // Back to the file where it was scrolled, as it was shown (a link to lines of a document showed that one raw).
@@ -268,7 +284,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: path,
       reveal: scrollTop > 0 ? { path, scrollTop } : undefined,
       history,
-      mdMode,
+      mdMode: mdMode === 'view' ? 'view' : state.mdMode,
+      rawPath: mdMode === 'raw' ? path : undefined,
     })
   })
   // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.
@@ -280,7 +297,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: m.path,
       reveal: { path: m.path, lines: { start: m.line, end: m.line } },
       history: [],
-      mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
+      rawPath: rawAt(m.path),
     })
   })
   // A comment opens at its lines, where it was made: the diff, or the file (Markdown and SVG as their text).
@@ -295,7 +312,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
         ? { path: c.path, lines: { ...((c.lines ?? c.removed) as LineRange) } }
         : { path: c.path, lines: c.lines && { ...c.lines }, removed: c.removed && { ...c.removed } },
       history: [],
-      mdMode: inFiles && (isMarkdown(c.path) || isSvgPath(c.path)) ? 'raw' : state.mdMode,
+      rawPath: inFiles ? rawAt(c.path) : undefined,
     })
   }
   const tabsRef = useRef<HTMLDivElement>(null)
@@ -317,7 +334,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     tabFocusPending.current = false
     return (takeSearchFocus?.() ?? false) || own
   }, [takeSearchFocus])
-  const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void => onState({ ...state, mdMode }))
+  const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void =>
+    onState({ ...state, mdMode, rawPath: undefined }),
+  )
   const openFile = useLatestCallback((path: string): void => select('files', path))
 
   const shown = view && view.key === viewKey ? view : undefined
@@ -475,7 +494,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             diff={tab === 'changes' && typeof loaded === 'string' ? loaded : undefined}
             change={change}
             error={shown?.error}
-            mdMode={state.mdMode}
+            deleted={shown?.error === undefined && shown?.deleted}
+            mdMode={modeOf(shownPath)}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}
             reveal={state.reveal?.path === shownPath ? state.reveal : undefined}

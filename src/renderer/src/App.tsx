@@ -1462,8 +1462,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
 
   /**
    * Creates the task and opens it, unless another dialog or overlay was opened while it was being created (the
-   * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). Dismissing the
-   * dialog alone doesn't count: the task they asked for still opens.
+   * user moved on: the selection doesn't jump under them, and the new task is in the sidebar). The dialog itself
+   * stays meanwhile (Esc and Cancel wait), so a failed creation keeps what was typed.
    */
   const createTask = async (
     dialogId: number,
@@ -1921,7 +1921,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         selected: path,
         history: [],
         reveal: line ? { path, lines: { start: line, end: line } } : undefined,
-        ...(line && (isMarkdown(path) || isSvgPath(path)) ? { mdMode: 'raw' as const } : {}),
+        rawPath: line && (isMarkdown(path) || isSvgPath(path)) ? path : undefined,
       }),
     [updatePanel],
   )

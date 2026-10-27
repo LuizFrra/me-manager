@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const mermaidMock = vi.hoisted(() => ({
   initialize: vi.fn(),
@@ -7,7 +7,7 @@ const mermaidMock = vi.hoisted(() => ({
 }))
 vi.mock('mermaid', () => ({ default: mermaidMock }))
 
-import { MarkdownView, type MarkdownViewProps } from './MarkdownView'
+import { IMAGE_CHECK_MS, MarkdownView, type MarkdownViewProps } from './MarkdownView'
 
 function setup(
   source: string,
@@ -277,6 +277,45 @@ describe('MarkdownView', () => {
       const placeholder = container.querySelector('.md-img-missing')
       expect(placeholder).toHaveTextContent('remote pic')
       expect(placeholder).toHaveAttribute('title')
+    })
+
+    it('reads an image again when its file changes on disk, keeping the old picture meanwhile', async () => {
+      vi.useFakeTimers()
+      try {
+        let version = 'v1'
+        let n = 0
+        const imageVersion = vi.fn(async () => version)
+        const loadImage = vi.fn(async () => `data:image/png;base64,P${++n}`)
+        const { container } = setup('![logo](img/logo.png)', { loadImage, imageVersion })
+        await act(() => vi.advanceTimersByTimeAsync(0))
+        expect(container.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,P1')
+        expect(imageVersion).toHaveBeenCalledWith('docs/img/logo.png')
+        // Unchanged: not read again.
+        await act(() => vi.advanceTimersByTimeAsync(IMAGE_CHECK_MS * 2))
+        expect(loadImage).toHaveBeenCalledTimes(1)
+        version = 'v2'
+        await act(() => vi.advanceTimersByTimeAsync(IMAGE_CHECK_MS))
+        expect(loadImage).toHaveBeenCalledTimes(2)
+        expect(container.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,P2')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('shows an image created after the document was opened', async () => {
+      vi.useFakeTimers()
+      try {
+        let version: string | null = 'missing'
+        const loadImage = vi.fn(async () => (version === 'missing' ? null : 'data:image/png;base64,NEW'))
+        const { container } = setup('![later](later.png)', { loadImage, imageVersion: async () => version })
+        await act(() => vi.advanceTimersByTimeAsync(0))
+        expect(container.querySelector('.md-img-missing')).not.toBeNull()
+        version = '10:5'
+        await act(() => vi.advanceTimersByTimeAsync(IMAGE_CHECK_MS))
+        expect(container.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,NEW')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('does not load images that escape the root', () => {

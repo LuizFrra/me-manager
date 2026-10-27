@@ -3,6 +3,7 @@ import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../..
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { isImagePath, isSvgPath } from '../../../../shared/images'
 import { formatSize, isMarkdown } from '../../lib/files'
+import { lineCount } from '../../lib/highlight'
 import type { DiffLayout } from '../../lib/diff/layout'
 import { CodeView } from './CodeView'
 import { DiffView } from './DiffView'
@@ -19,7 +20,8 @@ import {
 } from '../../lib/review'
 
 export interface FileViewerProps {
-  api: Pick<MeManagerApi, 'readImage' | 'openExternal'>
+  /** With readFile, a Markdown document's images are read again when their files change. */
+  api: Pick<MeManagerApi, 'readImage' | 'openExternal'> & Partial<Pick<MeManagerApi, 'readFile'>>
   target: Target
   tab: PanelTab
   path?: string
@@ -31,6 +33,8 @@ export interface FileViewerProps {
   change?: ChangedFile
   /** Why the file or diff couldn't be read (instead of `content` or `diff`). */
   error?: string
+  /** A missing file was there before (listed or shown): it was deleted, rather than never there. */
+  deleted?: boolean
   mdMode: PanelState['mdMode']
   /** Changes tab: how the diff is laid out; unified by default. */
   diffLayout?: DiffLayout
@@ -77,6 +81,15 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   const { api, target } = p
   const onError = useLatestCallback(p.onError)
   const loadImage = useCallback((rel: string) => api.readImage(target, rel), [api, target])
+  const imageVersion = useCallback(
+    async (rel: string): Promise<string | null> => {
+      const file = await api.readFile?.(target, rel)
+      if (!file) return null
+      // An SVG is text: its contents are its version.
+      return file.kind === 'binary' ? `${file.size}:${file.mtimeMs}` : file.kind === 'text' ? file.content : file.kind
+    },
+    [api, target],
+  )
   const openExternal = useCallback((url: string) => void api.openExternal(url).catch(onError), [api, onError])
   const sectionRef = useRef<HTMLElement>(null)
   const [viewSel, setViewSel] = useState<ViewSelection | null>(null)
@@ -189,7 +202,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   } else if (!p.content) {
     body = <p className="panel-hint">Loading…</p>
   } else if (p.content.kind === 'missing') {
-    body = <p className="viewer-message">File no longer exists</p>
+    body = <p className="viewer-message">{p.deleted ? 'File no longer exists' : 'File not found'}</p>
   } else if (p.content.kind === 'symlinkToFolder') {
     body = <p className="viewer-message">Symlink to a folder</p>
   } else if (image && (p.content.kind === 'binary' || (p.content.kind === 'text' && p.mdMode === 'view'))) {
@@ -202,10 +215,21 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     body = <p className="viewer-message">Empty file</p>
   } else {
     const text = p.content
+    const lines = lineCount(text.content)
+    // Lines asked for (a search result, a link to `#L120`) that aren't there would otherwise show nothing marked.
+    const past = p.reveal?.lines && p.reveal.lines.start > lines ? p.reveal.lines.start : undefined
     body = (
       <>
         {text.truncated && (
           <div className="panel-notice">Large file ({formatSize(text.size)}): only the beginning is shown.</div>
+        )}
+        {past !== undefined && (
+          <div className="panel-notice" role="status">
+            Line {past.toLocaleString('en-US')} is past{' '}
+            {text.truncated
+              ? 'the part shown.'
+              : `the end of the file (${lines.toLocaleString('en-US')} ${lines === 1 ? 'line' : 'lines'}).`}
+          </div>
         )}
         {md && p.mdMode === 'view' ? (
           <div className="viewer-md">
@@ -213,6 +237,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
               source={text.content}
               filePath={path}
               loadImage={loadImage}
+              imageVersion={api.readFile ? imageVersion : undefined}
               onOpenLink={p.onOpenLink}
               onOpenExternal={openExternal}
               reveal={p.reveal}

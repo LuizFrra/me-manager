@@ -57,6 +57,7 @@ export function NameDialog(props: {
   useRestoreFocus() // closing gives focus back, usually to the terminal
   const [name, setName] = useState(props.initial ?? '')
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const unchanged = props.initial !== undefined && name.trim() === props.initial
   const error = props.validate?.(name) ?? null
   const noteId = useId()
@@ -69,14 +70,16 @@ export function NameDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={props.title}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
         onSubmit={async (e) => {
           e.preventDefault()
-          if (!name.trim() || unchanged || error) return
+          if (busyRef.current || !name.trim() || unchanged || error) return
+          busyRef.current = true
           setBusy(true)
           try {
             await props.onSubmit(name.trim())
           } finally {
+            busyRef.current = false
             setBusy(false)
           }
         }}
@@ -103,7 +106,7 @@ export function NameDialog(props: {
           </p>
         )}
         <div className="dialog-actions">
-          <button type="button" onClick={props.onCancel}>
+          <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
           <button type="submit" disabled={busy || !name.trim() || unchanged || error !== null}>
@@ -967,7 +970,7 @@ interface Prefill {
  * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
  * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
  * default base. Mod+Enter creates from anywhere in the form, Esc cancels (asking first when a prompt was typed: the
- * composer's and a template's are not lost). A name main would refuse (no letters or numbers, or another task's
+ * composer's and a template's are not lost; not while creating, as Cancel). A name main would refuse (no letters or numbers, or another task's
  * name or branch) is explained under the field, with Create off; a valid one shows its branch.
  *
  * A repo with many branches gets a filter: typing lists only the matching ones (selecting the first when the
@@ -1131,7 +1134,7 @@ export function NewTaskDialog(props: {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
-            discard.escape()
+            if (!busyRef.current) discard.escape() // like Cancel: a failed creation keeps what was typed
           } else if (isModEnter(e.nativeEvent)) {
             e.preventDefault()
             void submit()
@@ -1483,11 +1486,7 @@ export function ConflictDialog(props: {
         role="alertdialog"
         aria-modal="true"
         aria-label="Update stopped on conflicts"
-        onKeyDown={(e) => {
-          if (e.key !== 'Escape') return
-          e.preventDefault()
-          props.onClose()
-        }}
+        onKeyDown={cancelOnEscape(props.onClose, busy)}
       >
         <h2>Update stopped on conflicts</h2>
         <p className="conflict-summary">
