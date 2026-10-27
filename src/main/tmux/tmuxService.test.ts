@@ -459,6 +459,42 @@ describe('TmuxService timeouts', () => {
   })
 })
 
+describe('TmuxService.killSession', () => {
+  const savedPath = process.env.PATH
+  let bin: string
+  beforeAll(async () => {
+    bin = await mkdtemp(join(tmpdir(), 'mm-tmux-race-'))
+    // A session that ends on its own just before the kill: has-session finds it until kill-session runs, which
+    // then can't find it any more.
+    const gone = join(bin, 'gone')
+    await writeFile(
+      join(bin, 'tmux'),
+      `#!/bin/sh
+case "$*" in
+  *kill-session*) touch '${gone}'; echo "can't find session: x" >&2; exit 1 ;;
+  *has-session*) [ -e '${gone}' ] && exit 1; exit 0 ;;
+esac
+exit 1
+`,
+      { mode: 0o755 },
+    )
+  })
+  afterAll(async () => {
+    process.env.PATH = savedPath
+    await rm(bin, { recursive: true, force: true })
+  })
+
+  it('succeeds when the session ends on its own while it is being killed', async () => {
+    const svc = new TmuxService('mm-never', join(bin, 'tmux.conf'))
+    process.env.PATH = `${bin}:${savedPath}`
+    try {
+      await expect(svc.killSession('x')).resolves.toBeUndefined()
+    } finally {
+      process.env.PATH = savedPath
+    }
+  })
+})
+
 describe('tidyCapture', () => {
   it('trims trailing spaces and trailing blank lines, and ends with one newline', () => {
     expect(tidyCapture('a  \n b\t\n\n  \n\n')).toBe('a\n b\n')

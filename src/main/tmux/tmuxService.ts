@@ -203,8 +203,15 @@ export class TmuxService implements TmuxApi {
     ])
   }
 
+  /** Resolves when the session is gone, including when it was never there or ended on its own meanwhile. */
   async killSession(name: string): Promise<void> {
-    if (await this.hasSession(name)) await this.tmux(['kill-session', '-t', `=${name}`])
+    try {
+      await this.tmux(['kill-session', '-t', `=${name}`])
+    } catch (err) {
+      // Checked after the kill, not before: the session may end between a check and the kill.
+      if (err instanceof CommandError && !(await this.hasSession(name))) return
+      throw err
+    }
   }
 
   async listWindows(session: string): Promise<TabInfo[]> {
