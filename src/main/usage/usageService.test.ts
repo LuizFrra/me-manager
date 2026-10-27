@@ -174,6 +174,23 @@ describe('streamLines', () => {
     expect(lines).toEqual([big, 'short'])
     expect(result.tail).toBeNull()
   })
+
+  it('passes on only the lines containing the filter, short or spanning several reads', async () => {
+    const big = (word: string): string => `${'é'.repeat(200_000)}${word}${'é'.repeat(200_000)}`
+    const content = ['a "usage" b', 'nothing', big('"usage"'), big('"usag'), 'last "usage"', 'x'].join('\n') + '\n'
+    const file = await put('/x', 'a.jsonl', content + 'tail without')
+    const lines: [string, number][] = []
+    const filter = Buffer.from('"usage"')
+    const result = await streamLines(file, 0, Buffer.byteLength(content) + 12, (l, at) => lines.push([l, at]), filter)
+    const at = (l: string): number => Buffer.byteLength(content.slice(0, content.indexOf(l)))
+    expect(lines).toEqual([
+      ['a "usage" b', 0],
+      [big('"usage"'), at(big('"usage"'))],
+      ['last "usage"', at('last "usage"')],
+    ])
+    // The tail is returned as it is: it may still be growing into a matching line.
+    expect(result).toEqual({ offset: Buffer.byteLength(content), tail: 'tail without' })
+  })
 })
 
 describe('UsageService', () => {

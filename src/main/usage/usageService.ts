@@ -63,6 +63,9 @@ export interface ParsedUsageLine {
   record: UsageRecord
 }
 
+/** Only lines with this key can count (see parseUsageLine). */
+const USAGE_KEY = Buffer.from('"usage"')
+
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
 
@@ -158,13 +161,15 @@ export function mergeRecords(a: UsageRecord, b: UsageRecord): UsageRecord {
 /**
  * Streams the lines of `path` from byte `start` to `end`, without ever holding more than one line (capped at
  * MAX_LINE_BYTES). Returns the offset just past the last complete line, and the unterminated rest (if any and
- * not too long), which may still be growing.
+ * not too long), which may still be growing. With `filter`, only complete lines containing those bytes are
+ * decoded and passed on: most of a transcript's bytes are tool output, never worth turning into strings.
  */
 export async function streamLines(
   path: string,
   start: number,
   end: number,
   onLine: (line: string, lineStart: number) => void,
+  filter?: Buffer,
 ): Promise<{ offset: number; tail: string | null }> {
   const fh = await open(path, 'r')
   try {
@@ -178,13 +183,20 @@ export async function streamLines(
       const { bytesRead } = await fh.read(buf, 0, Math.min(CHUNK_BYTES, end - pos), pos)
       if (bytesRead === 0) break
       const chunk = buf.subarray(0, bytesRead)
+      // The filter's next occurrence in the chunk (-1: none left), searched again only once a line passes it.
+      let hit = filter ? chunk.indexOf(filter) : 0
+      const wanted = (from: number, to: number): boolean => {
+        if (!filter) return true
+        if (hit !== -1 && hit < from) hit = chunk.indexOf(filter, from)
+        return hit !== -1 && hit + filter.length <= to
+      }
       let i = 0
       while (i < chunk.length) {
         const nl = chunk.indexOf(0x0a, i)
         const stop = nl === -1 ? chunk.length : nl
         if (nl !== -1 && parts.length === 0 && !skipping) {
           // The whole line is in this chunk: decode it in place.
-          if (stop - i <= MAX_LINE_BYTES) onLine(chunk.toString('utf8', i, stop), lineStart)
+          if (stop - i <= MAX_LINE_BYTES && wanted(i, stop)) onLine(chunk.toString('utf8', i, stop), lineStart)
         } else {
           if (!skipping && partLen + (stop - i) > MAX_LINE_BYTES) {
             skipping = true
@@ -196,7 +208,10 @@ export async function streamLines(
             partLen += stop - i
           }
           if (nl === -1) break
-          if (!skipping) onLine(Buffer.concat(parts, partLen).toString('utf8'), lineStart)
+          if (!skipping) {
+            const whole = Buffer.concat(parts, partLen)
+            if (!filter || whole.includes(filter)) onLine(whole.toString('utf8'), lineStart)
+          }
           parts = []
           partLen = 0
           skipping = false
@@ -592,7 +607,7 @@ export class UsageService implements UsageApi {
       }
     }
     try {
-      const { offset, tail } = await streamLines(path, current.offset, st.size, take)
+      const { offset, tail } = await streamLines(path, current.offset, st.size, take, USAGE_KEY)
       // An unterminated last line counts if it is already complete JSON; it is read again next time either way.
       if (tail !== null) take(tail, offset)
       current.offset = offset
