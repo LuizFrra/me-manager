@@ -1,13 +1,14 @@
-import { appendFile, mkdir, open, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTempDirs, makeTempDir } from '../files/testRepos'
 
 // Wraps the real open so tests can see how many transcripts are read at once.
-const openFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
+const openFlight = vi.hoisted(() => ({ now: 0, peak: 0, paths: [] as string[] }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
   const open = (async (...args: Parameters<typeof real.open>) => {
+    openFlight.paths.push(String(args[0]))
     openFlight.peak = Math.max(openFlight.peak, ++openFlight.now)
     try {
       return await real.open(...args)
@@ -63,6 +64,7 @@ import {
   READ_CONCURRENCY,
   STAT_SLICE,
   streamLines,
+  USAGE_CACHE_VERSION,
   UsageService,
 } from './usageService'
 
@@ -508,5 +510,160 @@ describe('UsageService', () => {
     const a = await svc.summarize(['/p/proj'])
     const b = await svc.summarize(['/p/proj'])
     expect(b).toBe(a)
+  })
+})
+
+describe('UsageService cache', () => {
+  let cacheFile: string
+  beforeEach(() => {
+    cacheFile = join(claudeDir, 'app-home', 'usage-cache.json')
+  })
+  /** A service that keeps its cache in cacheFile, written only when a test asks (saveCache). */
+  const cached = (now = NOW): UsageService =>
+    new UsageService({ claudeDir, now: () => now, minRefreshMs: 0, cacheFile, cacheSaveDelayMs: 3_600_000 })
+  /** The transcripts a call to `fn` opened. */
+  async function opened(fn: () => Promise<unknown>): Promise<string[]> {
+    openFlight.paths = []
+    await fn()
+    return openFlight.paths.filter((p) => p.endsWith('.jsonl'))
+  }
+
+  it('reads no unchanged transcript again after a restart, with the same result', async () => {
+    const at = (day: number): string => new Date(2026, 9, day, 12).toISOString()
+    await put('/p/a', 's1.jsonl', line({ cwd: '/p/a', ts: at(18), input: 1, model: 'claude-future-9' }))
+    await put('/p/a', 's1/subagents/agent-x.jsonl', line({ cwd: '/p/a/sub', ts: at(2), output: 2, speed: 'fast' }))
+    await put('/p/b', 's2.jsonl', line({ cwd: '/p/b', ts: 'nonsense', cacheWrite: 30, eph1: 30 }))
+    const groups = { both: ['/p/a', '/p/b'] }
+    const first = cached()
+    const before = await first.summarize(['/p/a', '/p/b'], groups)
+    await first.saveCache()
+
+    const restarted = cached()
+    let after: unknown
+    expect(await opened(async () => (after = await restarted.summarize(['/p/a', '/p/b'], groups)))).toEqual([])
+    expect(after).toEqual(before)
+  })
+
+  it('reads a transcript that grew since from where the cache left it', async () => {
+    const first = line({ input: 7 })
+    const file = await put('/p/proj', 's1.jsonl', first)
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+
+    // Overwrite the first line in place and append: only a read resumed at the cached offset still counts it.
+    const fh = await open(file, 'r+')
+    await fh.write(Buffer.from('x'.repeat(first.length - 1)), 0, first.length - 1, 0)
+    await fh.close()
+    await appendFile(file, line({ input: 3 }))
+    expect((await usageOf(cached(), '/p/proj')).all).toMatchObject({ messages: 2, input: 10 })
+  })
+
+  it('reads a transcript again from the start when it was replaced, shrank or was deleted since', async () => {
+    const replaced = await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const shrunk = await put('/p/proj', 's2.jsonl', line({ input: 2 }) + line({ input: 4 }))
+    const deleted = await put('/p/proj', 's3.jsonl', line({ input: 8 }))
+    const svc = cached()
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(15)
+    await svc.saveCache()
+
+    const other = join(claudeDir, 'replacement.jsonl')
+    await writeFile(other, line({ input: 16 }))
+    await rename(other, replaced)
+    await writeFile(shrunk, line({ input: 32 }))
+    await rm(deleted)
+    expect((await usageOf(cached(), '/p/proj')).all).toMatchObject({ messages: 2, input: 48 })
+  })
+
+  it('ignores a corrupt cache, or one from another version or folder, and writes a good one', async () => {
+    await put('/p/proj', 's1.jsonl', line({ input: 5 }))
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    const good = JSON.parse(await readFile(cacheFile, 'utf8'))
+    expect(good.v).toBe(USAGE_CACHE_VERSION)
+
+    const entry = Object.values(good.files)[0] as { r: unknown[] }
+    const bad = [
+      '{"v":',
+      JSON.stringify({ ...good, v: USAGE_CACHE_VERSION + 1 }),
+      JSON.stringify({ ...good, dir: '/elsewhere' }),
+      JSON.stringify({ ...good, files: { x: { ...entry, r: ['k', -1] } } }),
+      JSON.stringify({
+        ...good,
+        files: Object.fromEntries(Object.keys(good.files).map((k) => [k, { ...entry, r: [1] }])),
+      }),
+    ]
+    for (const content of bad) {
+      await writeFile(cacheFile, content)
+      const fresh = cached()
+      expect(await opened(() => usageOf(fresh, '/p/proj'))).toHaveLength(1)
+      expect((await usageOf(fresh, '/p/proj')).all).toMatchObject({ messages: 1, input: 5 })
+      await fresh.saveCache()
+      expect(JSON.parse(await readFile(cacheFile, 'utf8'))).toEqual(good)
+    }
+  })
+
+  it('keeps the cached transcripts of folders a call did not ask about', async () => {
+    await put('/p/a', 's1.jsonl', line({ cwd: '/p/a', input: 1 }))
+    await put('/p/b', 's2.jsonl', line({ cwd: '/p/b', input: 2 }))
+    const svc = cached()
+    await svc.summarize(['/p/a', '/p/b'])
+    await svc.saveCache()
+
+    const onlyA = cached()
+    await usageOf(onlyA, '/p/a')
+    await appendFile(join(projects, encodeProjectPath('/p/a'), 's1.jsonl'), line({ cwd: '/p/a', input: 4 }))
+    await usageOf(onlyA, '/p/a')
+    await onlyA.saveCache()
+
+    const both = cached()
+    let result: Awaited<ReturnType<UsageService['summarize']>> | undefined
+    const reads = await opened(async () => (result = await both.summarize(['/p/a', '/p/b'])))
+    expect(reads).toEqual([]) // /p/a's growth was saved too
+    expect(result!.roots['/p/a'].all.input).toBe(5)
+    expect(result!.roots['/p/b'].all.input).toBe(2)
+  })
+
+  it('writes the cache atomically, soon after a scan changed it and then at most once per interval', async () => {
+    const file = await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const svc = new UsageService({
+      claudeDir,
+      now: () => NOW,
+      minRefreshMs: 0,
+      cacheFile,
+      cacheSaveDelayMs: 10,
+      cacheSaveIntervalMs: 3_600_000,
+    })
+    await usageOf(svc, '/p/proj')
+    await vi.waitFor(async () => expect((await stat(cacheFile)).isFile()).toBe(true))
+    await new Promise((r) => setTimeout(r, 50))
+    const written = (await stat(cacheFile)).mtimeMs
+    await appendFile(file, line({ input: 2 }))
+    await usageOf(svc, '/p/proj')
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await stat(cacheFile)).mtimeMs).toBe(written) // not again within the interval
+    expect(await readdir(dirname(cacheFile))).toEqual(['usage-cache.json']) // no temp file left behind
+
+    await svc.saveCache() // now
+    const restarted = cached()
+    expect(await opened(() => usageOf(restarted, '/p/proj'))).toEqual([])
+    expect((await usageOf(restarted, '/p/proj')).all.input).toBe(3)
+  })
+
+  it('writes nothing while nothing changed, and nothing without a cache file', async () => {
+    await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    await rm(cacheFile)
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    await expect(stat(cacheFile)).rejects.toThrow()
+
+    const plain = service()
+    await usageOf(plain, '/p/proj')
+    await plain.saveCache()
+    expect(await readdir(dirname(cacheFile))).toEqual([])
   })
 })

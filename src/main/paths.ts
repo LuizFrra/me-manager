@@ -10,6 +10,8 @@ export function appHome(): string {
 export const stateFile = (): string => join(appHome(), 'state.json')
 export const settingsFile = (): string => join(appHome(), 'settings.json')
 export const uiStateFile = (): string => join(appHome(), 'ui-state.json')
+/** What was read from each of Claude Code's transcripts, so that a restart doesn't parse them all again. */
+export const usageCacheFile = (): string => join(appHome(), 'usage-cache.json')
 /** The budget notifications already sent (see BudgetAlertStore). */
 export const budgetAlertsFile = (): string => join(appHome(), 'budget-alerts.json')
 export const tmuxConfFile = (): string => join(appHome(), 'tmux.conf')

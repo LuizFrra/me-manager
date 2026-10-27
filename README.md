@@ -111,6 +111,8 @@ Everything lives in `~/.me-manager`:
 - `settings.json`: settings (Claude arguments, appearance, budgets, task templates, …)
 - `ui-state.json`: what was open, selected and collapsed
 - `budget-alerts.json`: which budget notifications were already sent
+- `usage-cache.json`: the usage read from each Claude Code transcript, so a restart doesn't read them all
+  again (safe to delete)
 - `tmux.conf`: tmux config for the app's socket, regenerated on every start
 - `prompts/`: short-lived files that hand a new task's first prompt to Claude
 - `worktrees/`: the task worktrees

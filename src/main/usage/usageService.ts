@@ -1,7 +1,7 @@
 import { readdirSync, statSync, type Dirent, type Stats } from 'node:fs'
-import { open, readdir } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { messageCost, totalTokens, type TokenCounts } from '../../shared/pricing'
 import type { UsageBucket, UsageModelTotals, UsagePeriod, UsageSummary, UsageTotals } from '../../shared/types'
 import { USAGE_PERIODS } from '../../shared/types'
@@ -29,6 +29,20 @@ export const DIR_SLICE = 32
 export const READ_CONCURRENCY = 16
 /** Lets the event loop run (IPC, the terminal's output) between slices of synchronous file system calls. */
 const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+/**
+ * The cache file's format: bumped whenever its layout or what a transcript line counts for changes, so that a cache
+ * written by another version is ignored (and rebuilt) instead of misread.
+ */
+export const USAGE_CACHE_VERSION = 1
+/** The cache is written this long after a scan changed it, so that a burst of changes is written once. */
+const DEFAULT_CACHE_SAVE_DELAY_MS = 2_000
+/**
+ * And then at most this often: a transcript that grew since is read on from its cached offset, so a cache a few
+ * minutes old costs only the bytes appended since.
+ */
+const DEFAULT_CACHE_SAVE_INTERVAL_MS = 5 * 60_000
+/** Messages serialized by a cache write before it lets other work run. */
+const CACHE_SLICE = 5_000
 /** Claude Code shortens project folder names longer than this and appends a hash. */
 const MAX_ENCODED_LENGTH = 200
 
@@ -257,9 +271,75 @@ interface FileState {
   records: Map<string, UsageRecord>
 }
 
+/**
+ * Values per message in a cache entry's `r`: its key, the five token counts, its time (null: none), the indexes of
+ * its cwd, session and model in the entry's `s`, and 1 for fast mode (else 0).
+ */
+const RECORD_FIELDS = 11
+
+/** One transcript's cache entry, as JSON: its strings once each, its messages flattened (see RECORD_FIELDS). */
+function serializeFile(state: FileState): string {
+  const strings = new Map<string, number>()
+  const index = (s: string): number => {
+    let i = strings.get(s)
+    if (i === undefined) strings.set(s, (i = strings.size))
+    return i
+  }
+  const r: (string | number | null)[] = []
+  for (const [key, x] of state.records) {
+    const ts = Number.isNaN(x.ts) ? null : x.ts
+    r.push(key, x.input, x.output, x.cacheRead, x.cacheWrite5m, x.cacheWrite1h, ts)
+    r.push(index(x.cwd), index(x.session), index(x.model), x.fast ? 1 : 0)
+  }
+  const { ino, size, mtimeMs, offset } = state
+  return JSON.stringify({ ino, size, mtimeMs, offset, s: [...strings.keys()], r })
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+
+/** A cache entry back as a file's state; null when anything in it is off (the transcript is then read again). */
+function parseCachedFile(entry: unknown, intern: (s: string) => string): FileState | null {
+  if (!entry || typeof entry !== 'object') return null
+  const { ino, size, mtimeMs, offset, s, r } = entry as Record<string, unknown>
+  if (!isCount(ino) || !isCount(size) || !isCount(mtimeMs) || !isCount(offset) || offset > size) return null
+  if (!Array.isArray(s) || !Array.isArray(r) || r.length % RECORD_FIELDS !== 0) return null
+  if (!s.every((x) => typeof x === 'string')) return null
+  const strings = (s as string[]).map(intern)
+  const str = (v: unknown): string | undefined => (Number.isInteger(v) ? strings[v as number] : undefined)
+  const records = new Map<string, UsageRecord>()
+  for (let i = 0; i < r.length; i += RECORD_FIELDS) {
+    const key = r[i]
+    const ts = r[i + 6]
+    const fast = r[i + 10]
+    const [cwd, session, model] = [str(r[i + 7]), str(r[i + 8]), str(r[i + 9])]
+    if (typeof key !== 'string' || key === '' || (ts !== null && typeof ts !== 'number')) return null
+    if (!cwd || session === undefined || !model || (fast !== 0 && fast !== 1)) return null
+    for (let j = i + 1; j <= i + 5; j++) if (!isCount(r[j])) return null
+    const tokens: TokenCounts = {
+      input: r[i + 1],
+      output: r[i + 2],
+      cacheRead: r[i + 3],
+      cacheWrite5m: r[i + 4],
+      cacheWrite1h: r[i + 5],
+    }
+    // The cost is worked out again: prices may have changed since.
+    records.set(key, usageRecord(tokens, ts ?? NaN, cwd, session, model, fast === 1))
+  }
+  return { ino, size, mtimeMs, offset, records }
+}
+
 export interface UsageServiceOptions {
   /** The Claude config folder; transcripts are read from `<claudeDir>/projects`. Default: claudeConfigDir(). */
   claudeDir?: string
+  /**
+   * Where to keep what was read from each transcript across restarts, so that one unchanged since is not parsed
+   * again. Default: none (nothing is written).
+   */
+  cacheFile?: string
+  /** How long after a change the cache is written. Default 2 s. */
+  cacheSaveDelayMs?: number
+  /** The least time between two writes of the cache. Default 5 minutes. */
+  cacheSaveIntervalMs?: number
   /** The clock for today / this week / this month. */
   now?: () => Date
   /** Calls closer together than this reuse the last scan. Default 1 s; 0 always rescans. */
@@ -444,6 +524,9 @@ export function aggregateUsage(
  * usage. Only project folders whose names match a requested root (or a folder inside one) are read. Each file
  * is parsed once and then only for the bytes appended since; a file that shrank or was replaced is parsed again
  * from the start. Results are cached until a transcript changes (or the day does).
+ *
+ * With a cache file, what was read from each transcript survives a restart: one unchanged since (same inode, size
+ * and mtime) is not read at all, and one that grew is read on from where the cache left it.
  */
 export class UsageService implements UsageApi {
   private readonly projectsDir: string
@@ -465,11 +548,27 @@ export class UsageService implements UsageApi {
   private lastScan: { at: number; dirsKey: string } | null = null
   private scanning: Promise<void> | null = null
   private warnedCap = false
+  private readonly cacheFile: string | null
+  private readonly cacheSaveDelayMs: number
+  private readonly cacheSaveIntervalMs: number
+  /**
+   * Transcripts in the cache file that no scan has found yet (their folders were not asked about), taken into
+   * `files` as scans find them; null until the cache file is read, on the first scan.
+   */
+  private cachedFiles: Map<string, FileState> | null = null
+  /** Set when what the cache file should hold changed since it was last written. */
+  private cacheDirty = false
+  private saveTimer: NodeJS.Timeout | null = null
+  private saving: Promise<void> | null = null
+  private lastSaveAt = -Infinity
 
   constructor(options: UsageServiceOptions = {}) {
     this.projectsDir = join(options.claudeDir ?? claudeConfigDir(), 'projects')
     this.now = options.now ?? (() => new Date())
     this.minRefreshMs = options.minRefreshMs ?? DEFAULT_MIN_REFRESH_MS
+    this.cacheFile = options.cacheFile ?? null
+    this.cacheSaveDelayMs = options.cacheSaveDelayMs ?? DEFAULT_CACHE_SAVE_DELAY_MS
+    this.cacheSaveIntervalMs = options.cacheSaveIntervalMs ?? DEFAULT_CACHE_SAVE_INTERVAL_MS
   }
 
   async summarize(
@@ -521,6 +620,7 @@ export class UsageService implements UsageApi {
     this.scanning = this.scan(encoded)
       .then(() => {
         this.lastScan = { at: Date.now(), dirsKey }
+        this.scheduleSave()
       })
       .finally(() => {
         this.scanning = null
@@ -529,6 +629,7 @@ export class UsageService implements UsageApi {
   }
 
   private async scan(encodedRoots: string[]): Promise<void> {
+    this.cachedFiles ??= await this.loadCache()
     let entries: Dirent[] = []
     try {
       entries = await readdir(this.projectsDir, { withFileTypes: true })
@@ -550,6 +651,15 @@ export class UsageService implements UsageApi {
       this.files.delete(path) // deleted, or no longer under a requested root
       this.generation++
       this.mergedStale = true
+      this.cacheDirty = true
+    }
+    // Cached transcripts of the folders just listed that are not there any more were deleted since.
+    const listed = new Set(dirs)
+    for (const path of this.cachedFiles.keys()) {
+      if (seen.has(path) || !listed.has(join(this.projectsDir, path.slice(this.projectsDir.length + 1).split(sep)[0])))
+        continue
+      this.cachedFiles.delete(path)
+      this.cacheDirty = true
     }
     const changed: { path: string; st: Stats }[] = []
     for (let i = 0; i < found.length; i += STAT_SLICE) {
@@ -561,7 +671,7 @@ export class UsageService implements UsageApi {
         } catch {
           // Unreadable: keep what was read before, try again next time.
         }
-        const known = this.files.get(path)
+        const known = this.files.get(path) ?? this.adopt(path)
         if (!st || (known && st.ino === known.ino && st.size === known.size && st.mtimeMs === known.mtimeMs)) continue
         changed.push({ path, st })
       }
@@ -574,6 +684,92 @@ export class UsageService implements UsageApi {
         // Unreadable or vanished mid-scan: keep what was read before, try again next time.
       }
     })
+  }
+
+  /** A transcript's state from the cache file, now tracked, its messages merged in; undefined when it has none. */
+  private adopt(path: string): FileState | undefined {
+    const state = this.cachedFiles?.get(path)
+    if (!state) return undefined
+    this.cachedFiles!.delete(path)
+    this.files.set(path, state)
+    for (const [key, record] of state.records) this.mergeIn(path, key, record)
+    this.generation++
+    return state
+  }
+
+  /** The cache file's transcripts; none when it is missing, unreadable, corrupt or from another version or folder. */
+  private async loadCache(): Promise<Map<string, FileState>> {
+    const files = new Map<string, FileState>()
+    if (!this.cacheFile) return files
+    let data: unknown
+    try {
+      data = JSON.parse(await readFile(this.cacheFile, 'utf8'))
+    } catch {
+      return files // none yet, or unusable: rebuilt by reading the transcripts
+    }
+    const d = data as Record<string, unknown> | null
+    if (!d || typeof d !== 'object' || d.v !== USAGE_CACHE_VERSION || d.dir !== this.projectsDir) return files
+    if (!d.files || typeof d.files !== 'object') return files
+    for (const [path, entry] of Object.entries(d.files)) {
+      const state = path.startsWith(this.projectsDir + sep) ? parseCachedFile(entry, (s) => this.intern(s)) : null
+      if (state) files.set(path, state)
+      else this.cacheDirty = true // left out of the next write; the transcript is read again if found
+    }
+    return files
+  }
+
+  private scheduleSave(): void {
+    if (!this.cacheFile || !this.cacheDirty || this.saveTimer) return
+    const wait = Math.max(this.cacheSaveDelayMs, this.lastSaveAt + this.cacheSaveIntervalMs - Date.now())
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      void this.saveCache()
+    }, wait)
+    this.saveTimer.unref()
+  }
+
+  /** Writes the cache file now, if what it should hold changed since the last write. One write at a time. */
+  async saveCache(): Promise<void> {
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    while (this.saving) await this.saving
+    const file = this.cacheFile
+    if (!file || !this.cacheDirty) return
+    this.cacheDirty = false
+    this.saving = this.writeCache(file)
+      .catch((err) => {
+        this.cacheDirty = true
+        console.warn(`usage: could not write ${file}: ${(err as Error).message}`)
+      })
+      .finally(() => {
+        this.saving = null
+        this.lastSaveAt = Date.now()
+      })
+    await this.saving
+  }
+
+  /**
+   * Written whole to a temporary file renamed over the old one, so a crash never leaves half a cache. Each entry is
+   * serialized in one go, so it is consistent even while a scan runs between slices (re-reading lines a cache
+   * already has changes nothing: merging takes the larger counts).
+   */
+  private async writeCache(file: string): Promise<void> {
+    const entries = [...this.files, ...(this.cachedFiles ?? [])]
+    const parts: string[] = []
+    let slice = 0
+    for (const [path, state] of entries) {
+      parts.push(`${JSON.stringify(path)}:${serializeFile(state)}`)
+      slice += state.records.size
+      if (slice >= CACHE_SLICE) {
+        slice = 0
+        await turn()
+      }
+    }
+    const head = JSON.stringify({ v: USAGE_CACHE_VERSION, dir: this.projectsDir }).slice(0, -1)
+    await mkdir(dirname(file), { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    await writeFile(tmp, `${head},"files":{${parts.join(',')}}}\n`)
+    await rename(tmp, file)
   }
 
   /** The transcripts in `dirs` and their subfolders, level by level (each session's subagents have a folder). */
@@ -613,6 +809,7 @@ export class UsageService implements UsageApi {
       st.mtimeMs < known.mtimeMs ||
       (st.size === known.size && st.mtimeMs !== known.mtimeMs) // rewritten in place
     let current = known!
+    this.cacheDirty = true
     if (replaced) {
       if (known) this.mergedStale = true // its old records are merged in
       current = { ino: st.ino, size: 0, mtimeMs: 0, offset: 0, records: new Map() }
