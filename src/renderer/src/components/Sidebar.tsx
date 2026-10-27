@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Archive,
   ChartColumn,
   Folder,
   FolderDown,
@@ -28,8 +27,10 @@ import {
 } from '../../../shared/types'
 import type { BulkAction } from '../lib/bulk'
 import { waitingTargets } from '../lib/attention'
-import { gitBadges, plural } from '../lib/gitStatus'
-import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
+import { plural } from '../lib/gitStatus'
+import { sessionState } from '../lib/sessionState'
+import { withStableCallbacks } from '../lib/stableCallbacks'
+import { rowTitle } from '../lib/rowTitle'
 import { filterSidebar } from '../lib/sidebarFilter'
 import { clickSelectMode, rowExtendStep, rowMoveStep, shortcutLabel } from '../lib/shortcuts'
 import { neighbourTask, rangeOf, selectedTasks, taskRows, toggleTask } from '../lib/taskSelection'
@@ -46,6 +47,7 @@ import {
 import { themeColorCss } from '../../../shared/themeStyle'
 import { ICON } from '../lib/icon'
 import { Chevron, Spark } from './icons'
+import { SessionDot, StateNote, TaskRow, UnreadMark } from './SidebarTaskRow'
 
 export interface SidebarProps {
   state: AppState
@@ -115,6 +117,9 @@ export interface SidebarProps {
   onOpenUsage: () => void
 }
 
+/** Task rows re-render only when what they show changed: a repo can have many, and polls change one at a time. */
+const StableTaskRow = withStableCallbacks(TaskRow)
+
 /** The type of the sidebar's own drags, so a drop of anything else (a file) is never taken for a move. */
 const DRAG_TYPE = 'application/x-me-manager-row'
 
@@ -128,40 +133,16 @@ interface RowNavProps {
   'data-level': number
 }
 
-/** ↑ ahead, ↓ behind, ● uncommitted; one accessible label for the group, a tooltip on each badge. */
-function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string }): React.JSX.Element | null {
-  const badges = gitBadges(status, baseRef)
-  if (badges.length === 0) return null
-  return (
-    <span className="git-badges" role="img" aria-label={badges.map((b) => b.title).join(', ')}>
-      {badges.map((b) => (
-        <span key={b.kind} className={`git-badge git-${b.kind}`} title={b.title} aria-hidden="true">
-          {b.text}
-        </span>
-      ))}
-    </span>
-  )
-}
-
 /** The theme row's colour stripe, as a CSS variable; none for no colour or one not in the palette. */
-/** A small "$" after the name of a task over its budget, explained by its tooltip; nothing otherwise. */
-function OverBudget({ status }: { status?: BudgetStatus }): React.JSX.Element | null {
-  if (status?.level !== 'over') return null
-  const text = `Over budget: ${budgetSummary(status, 'task budget')}`
-  return (
-    <span className="budget-badge" role="img" aria-label={text} title={text}>
-      $
-    </span>
-  )
+/** The over-budget badge's text for a task with this budget status; none when it isn't over. */
+function overBudget(status?: BudgetStatus): string | undefined {
+  return status?.level === 'over' ? `Over budget: ${budgetSummary(status, 'task budget')}` : undefined
 }
 
 function themeStripe(color: unknown): React.CSSProperties | undefined {
   const css = themeColorCss(color)
   return css ? ({ '--theme-color': css } as React.CSSProperties) : undefined
 }
-
-/** A row's tooltip: its full name (a narrow sidebar cuts it short), then what else there is to say. */
-const rowTitle = (name: string, more?: string): string => (more ? `${name}\n${more}` : name)
 
 /**
  * A repo's archived tasks, under a "▶ Archived (N)" toggle; nothing when it has none. They have no session, so no
@@ -227,15 +208,6 @@ function ArchivedTasks(props: {
   )
 }
 
-/** A target whose Claude finished while it wasn't shown, as an unread chat is marked. */
-function UnreadMark(): React.JSX.Element {
-  return (
-    <span className="unread-mark" title="Claude finished here since you last looked">
-      <span className="sr-only">, new</span>
-    </span>
-  )
-}
-
 /** A repo's or folder's row button that edits its run command; the tooltip shows the command. */
 function RunCommandButton({ item, onClick }: { item: Item; onClick: () => void }): React.JSX.Element {
   return (
@@ -262,24 +234,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
   const shown = (set: keyof NonNullable<typeof filter>, id: string): boolean => !filter || filter[set].has(id)
   const missing = new Set(p.status.missing)
   const arrow = (id: string): React.JSX.Element => <Chevron open={expanded(id)} />
-  // ○ no session, ⚠ path missing, ● running: pulsing accent while Claude works, amber while it waits for the
-  // user, green when idle (or when the claude window is gone).
-  const dot = (id: string): React.JSX.Element => {
-    const state = sessionState(p.status, id)
-    const info = SESSION_STATE_INFO[state]
-    const cls = state === 'none' || state === 'missing' || state === 'running' ? state : `running ${state}`
-    return (
-      <span className={`dot ${cls}`} title={info.title}>
-        {info.glyph}
-      </span>
-    )
-  }
-  /** The session state after the name, for screen readers: the dot's glyph is the same for several states. */
-  const stateNote = (id: string): React.JSX.Element | null => {
-    const state = sessionState(p.status, id)
-    if (state === 'none' || state === 'running') return null
-    return <span className="sr-only">, {SESSION_STATE_INFO[state].label.toLowerCase()}</span>
-  }
+  const dot = (id: string): React.JSX.Element => <SessionDot state={sessionState(p.status, id)} />
+  const stateNote = (id: string): React.JSX.Element => <StateNote state={sessionState(p.status, id)} />
   const isSelected = (itemId: string, taskId?: string): boolean =>
     p.selected?.itemId === itemId && p.selected?.taskId === taskId
   // A repo's "Archived" group: collapsed unless opened, and open (like every group) while filtering.
@@ -794,58 +750,28 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                           item.tasks
                             .filter((task) => !isArchived(task) && shown('tasks', task.id))
                             .map((task) => (
-                              <div
+                              <StableTaskRow
                                 key={task.id}
-                                {...dropZone(
-                                  { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id },
-                                  `row task-row${isSelected(item.id, task.id) ? ' selected' : ''}${p.multiSelection.has(task.id) ? ' multi-selected' : ''}`,
-                                )}
-                                {...movable({ kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })}
-                                onKeyDown={(e) =>
-                                  taskKeys(e, { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })
-                                }
-                              >
-                                <button
-                                  className="row-label"
-                                  title={rowTitle(task.name, task.notes)}
-                                  aria-current={isSelected(item.id, task.id) ? 'true' : undefined}
-                                  onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
-                                  {...rowNav(`task:${task.id}`, 3)}
-                                >
-                                  {dot(task.id)} <span className="row-name">{task.name}</span>
-                                  {stateNote(task.id)}
-                                  {p.unread?.has(task.id) && <UnreadMark />}
-                                  {/* In the multi-selection: said with the name, as the row is not a selectable role. */}
-                                  {p.multiSelection.has(task.id) && <span className="sr-only">, selected</span>}
-                                </button>
-                                <OverBudget status={p.budgets?.[task.id]} />
-                                {p.gitStatus?.[task.id] && (
-                                  <GitBadges status={p.gitStatus[task.id]} baseRef={task.baseRef} />
-                                )}
-                                <span className="row-actions">
-                                  <button
-                                    aria-label={`Rename task ${task.name}`}
-                                    title="Rename task"
-                                    onClick={() => p.onRenameTask(theme.id, item.id, task.id, task.name)}
-                                  >
-                                    <Pencil {...ICON} />
-                                  </button>
-                                  <button
-                                    aria-label={`Archive task ${task.name}`}
-                                    title="Archive task (removes the worktree, keeps the branch)"
-                                    onClick={() => p.onArchiveTask(theme.id, item.id, task.id, task.name)}
-                                  >
-                                    <Archive {...ICON} />{' '}
-                                  </button>
-                                  <button
-                                    aria-label={`Remove task ${task.name}`}
-                                    title="Remove task"
-                                    onClick={() => p.onRemoveTask(theme.id, item.id, task.id, task.name)}
-                                  >
-                                    <X {...ICON} />
-                                  </button>
-                                </span>
-                              </div>
+                                themeId={theme.id}
+                                repoId={item.id}
+                                task={task}
+                                state={sessionState(p.status, task.id)}
+                                selected={isSelected(item.id, task.id)}
+                                multiSelected={p.multiSelection.has(task.id)}
+                                unread={p.unread?.has(task.id) ?? false}
+                                tabbable={tabStop === `task:${task.id}`}
+                                git={p.gitStatus?.[task.id]}
+                                overBudget={overBudget(p.budgets?.[task.id])}
+                                draggable={reorderable}
+                                dragging={dragged?.kind === 'task' && dragged.taskId === task.id}
+                                dropSide={dropAt?.id === task.id ? dropAt.side : undefined}
+                                onClick={clickTask}
+                                onKeyDown={taskKeys}
+                                onDragStart={startDrag}
+                                onRename={p.onRenameTask}
+                                onArchive={p.onArchiveTask}
+                                onRemove={p.onRemoveTask}
+                              />
                             ))}
                         {expanded(item.id) && (
                           <ArchivedTasks

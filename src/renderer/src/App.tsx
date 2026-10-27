@@ -692,7 +692,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           const merged: Record<string, TaskGitStatus> = {}
           for (const [k, v] of Object.entries(prev)) if (!kept || kept.has(k)) merged[k] = v
           for (const k of fresh) {
-            if (next[k]) merged[k] = next[k]
+            // An unchanged entry keeps its object, so the task's memoized sidebar row isn't rendered again.
+            if (next[k]) merged[k] = keepIfEqual(next[k])(prev[k])
             else delete merged[k]
           }
           return keepIfEqual(merged)(prev)
