@@ -8,7 +8,7 @@ import type {
   SearchMatch,
   Target,
 } from '../../../../shared/types'
-import { ancestorDirs, buildTree, filterPaths, memoByIdentity, sameFileList } from '../../lib/fileTree'
+import { ancestorDirs, buildTree, filterPaths, flattenTree, memoByIdentity, sameFileList } from '../../lib/fileTree'
 import { isSvgPath } from '../../../../shared/images'
 import { isMarkdown } from '../../lib/files'
 import { autoDiffLayout, loadDiffLayout, saveDiffLayout, type DiffLayout } from '../../lib/diff/layout'
@@ -394,6 +394,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
                   onChange={(e) => setFilter(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') setFilter('')
+                    else if (e.key === 'ArrowDown') {
+                      const row = panelRef.current?.querySelector<HTMLElement>('.file-tree [data-row]')
+                      if (row) {
+                        e.preventDefault()
+                        row.focus()
+                      }
+                    } else if (e.key === 'Enter' && filtering) {
+                      // The first file the narrowed tree shows.
+                      const first = flattenTree(tree, isOpen).find((r) => !r.node.dir)
+                      if (first) select('files', first.node.path)
+                    }
                   }}
                 />
                 <div className="panel-list-scroll">

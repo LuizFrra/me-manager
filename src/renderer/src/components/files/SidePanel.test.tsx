@@ -109,6 +109,19 @@ describe('SidePanel', () => {
     expect(fileButton('notes\\.txt')).toHaveTextContent('U')
   })
 
+  it('opens the first matching file with Enter in the filter, and moves into the tree with ↓', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} />)
+    await screen.findByRole('button', { name: 'README.md' })
+    const filter = screen.getByRole('textbox', { name: 'Filter files' })
+    await user.type(filter, 'format{ArrowDown}')
+    expect(screen.getByRole('button', { name: 'src' })).toHaveFocus()
+    await user.click(filter)
+    await user.keyboard('{Enter}')
+    expect(fileButton('format\\.ts')).toHaveAttribute('aria-current', 'true')
+    await vi.waitFor(() => expect(codeText()).toContain('formatName'))
+  })
+
   it('narrows the tree with the filter, showing matching directories expanded', async () => {
     const user = userEvent.setup()
     render(<Harness api={createMockApi()} />)
