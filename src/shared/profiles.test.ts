@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { allProfiles, DEFAULT_PROFILE_ID, effectiveProfileId, normalizeConfigDir, profileError } from './profiles'
+import {
+  allProfiles,
+  DEFAULT_PROFILE_ID,
+  effectiveProfileId,
+  normalizeConfigDir,
+  normalizeProfiles,
+  profileError,
+} from './profiles'
 import type { ClaudeProfile } from './types'
 
 const work: ClaudeProfile = { id: 'p-work', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }
@@ -82,5 +89,33 @@ describe('profileError', () => {
     expect(profileError({ name: 'Home', configDir: '/home/me//.claude' }, others)).toBe(
       '“Default” already uses this folder',
     )
+    expect(profileError({ name: 'Home', configDir: ' /home/me/.claude-work ' }, others)).toBe(
+      '“Work” already uses this folder',
+    )
+  })
+
+  it('refuses a NUL in the name or folder, and takes the folder trimmed', () => {
+    expect(profileError({ name: 'Ho\0me', configDir: '/x' }, others)).toMatch(/name/i)
+    expect(profileError({ name: 'Home', configDir: '/a\0b' }, others)).toMatch(/absolute/i)
+    expect(profileError({ name: 'Home', configDir: '  /home/me/.claude-home/ ' }, others)).toBeNull()
+  })
+
+  it('accepts only what normalizeProfiles keeps, as the Settings dialog saves it', () => {
+    const cases = [
+      ['Home', '/home/me/.claude-home'],
+      [' Home ', '  /home/me//.claude-home/ '],
+      ['', '/x'],
+      ['  ', '/x'],
+      ['A\0', '/x'],
+      ['Home', ''],
+      ['Home', '   '],
+      ['Home', ' relative'],
+      ['Home', '/a\0b'],
+    ]
+    for (const [name, configDir] of cases) {
+      const kept = normalizeProfiles([{ id: 'p', name, configDir, billing: 'own' }])
+      expect([name, configDir, kept.length]).toEqual([name, configDir, profileError({ name, configDir }, []) ? 0 : 1])
+      if (kept.length) expect(kept[0]).toMatchObject({ name: name.trim(), configDir: '/home/me/.claude-home' })
+    }
   })
 })

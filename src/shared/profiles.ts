@@ -16,6 +16,10 @@ const isText = (v: unknown): v is string => typeof v === 'string' && v.trim() !=
  */
 export const normalizeConfigDir = (dir: string): string => dir.replace(/\/+/g, '/').replace(/(.)\/$/, '$1')
 
+/** A profile's folder as typed or loaded: trimmed and normalized when it is absolute text, else null. */
+const profileFolder = (dir: unknown): string | null =>
+  isText(dir) && dir.trim().startsWith('/') ? normalizeConfigDir(dir.trim()) : null
+
 /** Every profile, Default first; Default's folder is `defaultDir` (CLAUDE_CONFIG_DIR or ~/.claude, from main). */
 export function allProfiles(
   settings: Pick<Settings, 'profiles' | 'defaultProfileBilling'>,
@@ -46,36 +50,41 @@ export function effectiveProfileId(
 /**
  * Why a new or edited profile is refused, or null: an empty name, a name another profile (`others`, Default
  * included and the edited one left out) has, ignoring case and surrounding spaces, a folder that isn't absolute, or
- * one another profile already uses, once normalized.
+ * one another profile already uses, once trimmed and normalized. The same checks as normalizeProfiles, so what is
+ * accepted here is kept when saved.
  */
 export function profileError(
   p: Pick<ClaudeProfile, 'name' | 'configDir'>,
   others: readonly ClaudeProfile[],
 ): string | null {
+  if (!isText(p.name)) return 'Enter a name'
   const name = p.name.trim().toLowerCase()
-  if (name === '') return 'Enter a name'
   const namesake = others.find((o) => o.name.trim().toLowerCase() === name)
   if (namesake) return `Another account is named “${namesake.name}”`
-  if (!p.configDir.startsWith('/')) return 'Choose an absolute folder (starting with /)'
-  const dir = normalizeConfigDir(p.configDir)
+  const dir = profileFolder(p.configDir)
+  if (dir === null) return 'Choose an absolute folder (starting with /)'
   const owner = others.find((o) => normalizeConfigDir(o.configDir) === dir)
   return owner ? `“${owner.name}” already uses this folder` : null
 }
 
 /**
- * Settings.profiles from untrusted input: entries with an id and a name (trimmed) and an absolute folder
- * (normalized), in order. Dropped: anything else, Default's id, and an id or folder an earlier entry has. A billing
+ * Settings.profiles from untrusted input: entries with an id and a name (trimmed) and an absolute folder (trimmed
+ * and normalized), in order. Dropped: anything else, Default's id, and an id or folder an earlier entry has. A billing
  * that isn't one of PROFILE_BILLINGS is `own`. At most MAX_PROFILES.
  */
 export function normalizeProfiles(raw: readonly unknown[]): ClaudeProfile[] {
   const profiles: ClaudeProfile[] = []
   for (const entry of raw) {
     if (profiles.length === MAX_PROFILES) break
-    if (!isRecord(entry) || !isText(entry.id) || !isText(entry.name) || !isText(entry.configDir)) continue
-    if (!entry.configDir.startsWith('/')) continue
+    if (!isRecord(entry) || !isText(entry.id) || !isText(entry.name)) continue
     const { id } = entry
-    const configDir = normalizeConfigDir(entry.configDir)
-    if (id === DEFAULT_PROFILE_ID || profiles.some((p) => p.id === id || p.configDir === configDir)) continue
+    const configDir = profileFolder(entry.configDir)
+    if (
+      configDir === null ||
+      id === DEFAULT_PROFILE_ID ||
+      profiles.some((p) => p.id === id || p.configDir === configDir)
+    )
+      continue
     const billing = PROFILE_BILLINGS.includes(entry.billing as ProfileBilling)
       ? (entry.billing as ProfileBilling)
       : 'own'
