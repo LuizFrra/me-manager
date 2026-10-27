@@ -984,6 +984,7 @@ export class Orchestrator implements AppService {
         billing: raw.billing,
       }
       await this.deps.profileFolders.create(profile.configDir)
+      // A failed save leaves the folder just made behind, empty: harmless, and adding the profile again reuses it.
       await this.deps.settings.update({ profiles: [...profiles, profile] })
     })
     return this.listProfiles()
