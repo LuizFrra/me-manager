@@ -752,11 +752,17 @@ export class Orchestrator implements AppService {
     return this.deps.git.getUnsavedWork(repo.path, task.worktreePath, task.branch, task.baseRef)
   }
 
+  /**
+   * Runs `op` on the task's queue, then the state queue: after the task's queued git actions, so nothing runs in a
+   * worktree being removed, but without holding up changes elsewhere while it waits for them (a push can take a
+   * minute). Nothing takes the queues the other way round.
+   */
+  private afterTaskActions<T>(taskId: string, op: () => Promise<T>): Promise<T> {
+    return this.exclusive(() => this.exclusive(op), taskQueue(taskId))
+  }
+
   async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState> {
-    // After the task's queued git actions too, so a push never runs in a worktree being removed.
-    return this.exclusive(() =>
-      this.exclusive(() => this.removeTaskNow(themeId, repoId, taskId, deleteBranch), taskQueue(taskId)),
-    )
+    return this.afterTaskActions(taskId, () => this.removeTaskNow(themeId, repoId, taskId, deleteBranch))
   }
 
   private async removeTaskNow(
@@ -786,9 +792,7 @@ export class Orchestrator implements AppService {
 
   /** Like removeTask, after the task's queued git actions, so nothing runs in a worktree being removed. */
   async archiveTask(themeId: string, repoId: string, taskId: string, force = false): Promise<AppState> {
-    return this.exclusive(() =>
-      this.exclusive(() => this.archiveTaskNow(themeId, repoId, taskId, force === true), taskQueue(taskId)),
-    )
+    return this.afterTaskActions(taskId, () => this.archiveTaskNow(themeId, repoId, taskId, force === true))
   }
 
   private async archiveTaskNow(themeId: string, repoId: string, taskId: string, force: boolean): Promise<AppState> {
@@ -826,7 +830,7 @@ export class Orchestrator implements AppService {
 
   /** On the task's queue too, like archiveTask. The session is started by the next openTarget, as for any task. */
   async unarchiveTask(themeId: string, repoId: string, taskId: string): Promise<AppState> {
-    return this.exclusive(() => this.exclusive(() => this.unarchiveTaskNow(themeId, repoId, taskId), taskQueue(taskId)))
+    return this.afterTaskActions(taskId, () => this.unarchiveTaskNow(themeId, repoId, taskId))
   }
 
   private async unarchiveTaskNow(themeId: string, repoId: string, taskId: string): Promise<AppState> {

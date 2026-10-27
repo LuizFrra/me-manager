@@ -848,6 +848,27 @@ describe('Orchestrator: archiving tasks', () => {
     expect(orch.currentTarget()).toBeNull()
   })
 
+  it('waits for the git action on the task without holding up changes elsewhere', async () => {
+    for (const close of ['archive', 'remove'] as const) {
+      const { orch, git, themeId, repoId, target, task } = await withTask()
+      let release = (): void => {}
+      git.actionGate = new Promise<void>((r) => (release = r))
+      const push = orch.pushTask(target) // a slow network
+      const closing =
+        close === 'archive'
+          ? orch.archiveTask(themeId, repoId, task.id)
+          : orch.removeTask(themeId, repoId, task.id, false)
+      let renamed = false
+      void orch.renameTheme(themeId, 'Client Y').then(() => (renamed = true))
+      for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
+      expect(renamed).toBe(true)
+      expect(git.calls).toEqual([`push ${WT} ${BRANCH}`])
+      release()
+      await Promise.all([push, closing])
+      expect(git.calls.at(-1)).toBe(`removeWorktree ${WT}`)
+    }
+  })
+
   it('runs concurrent archive and restore calls one at a time, so only one archive takes effect', async () => {
     const { orch, git, themeId, repoId, task } = await withTask()
     const results = await Promise.allSettled([
