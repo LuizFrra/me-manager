@@ -97,17 +97,28 @@ function queryChars(query: string): number[] {
 
 /** The best match of `query` in `text`, or null if the query is not a subsequence. An empty query matches. */
 export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
-  return matchChars(queryChars(query), text)
+  const q = queryChars(query)
+  if (q.length === 0) return { score: 0, positions: [] }
+  const positions: number[] = new Array(q.length)
+  const score = matchChars(q, text, positions)
+  return score === -Infinity ? null : { score, positions }
 }
 
-/** The folded text being matched; one buffer for every call, as most texts are short and most are rejected. */
+// Buffers for every call, grown as needed: the palette matches up to 50,000 paths per keystroke, and a one-letter
+// query matches most of them. The folded text being matched, then the n × m score tables (see matchChars).
 let foldedText = new Uint16Array(256)
+let scoreTable = new Float64Array(1024)
+let runTable = new Float64Array(1024)
+let fromTable = new Int32Array(1024)
 
-function matchChars(q: number[], text: string): FuzzyMatch | null {
+/**
+ * The best score of the folded query `q` (not empty) in `text`, or -Infinity if it is not a subsequence. With
+ * `positions`, also fills it with where each query character matched.
+ */
+function matchChars(q: readonly number[], text: string, positions?: number[]): number {
   const n = q.length
   const m = text.length
-  if (n === 0) return { score: 0, positions: [] }
-  if (n > m) return null
+  if (n > m) return -Infinity
   if (foldedText.length < m) foldedText = new Uint16Array(m * 2)
   const lower = foldedText
 
@@ -118,15 +129,20 @@ function matchChars(q: number[], text: string): FuzzyMatch | null {
     lower[at] = fold(text.charCodeAt(at))
     if (lower[at] === q[qi]) qi++
   }
-  if (qi < n) return null
+  if (qi < n) return -Infinity
   for (; at < m; at++) lower[at] = fold(text.charCodeAt(at))
 
   // score[i * m + j]: best score with query char i matched at text position j; from[] remembers where i-1 went.
   // A consecutive run carries the bonus of its first character, so all of "app" in "src/app.ts" counts as a
-  // word-start match rather than only the "a".
-  const score = new Float64Array(n * m).fill(-Infinity)
-  const runBonus = new Float64Array(n * m)
-  const from = new Int32Array(n * m).fill(-1)
+  // word-start match rather than only the "a". Only score[] needs resetting: the others are read where it is set.
+  if (scoreTable.length < n * m) {
+    scoreTable = new Float64Array(n * m * 2)
+    runTable = new Float64Array(n * m * 2)
+    fromTable = new Int32Array(n * m * 2)
+  }
+  const score = scoreTable.fill(-Infinity, 0, n * m)
+  const runBonus = runTable
+  const from = fromTable
 
   for (let j = 0; j < m; j++) {
     if (lower[j] !== q[0]) continue
@@ -149,13 +165,13 @@ function matchChars(q: number[], text: string): FuzzyMatch | null {
         gapFrom = k
       }
       if (lower[j] !== q[i]) continue
-      const own = boundaryBonus(text, j)
       const prev = score[prevRow + j - 1]
+      if (prev === -Infinity && gapBest === -Infinity) continue // unreachable: skip the bonus lookup
+      const gapCost = PENALTY_GAP_EXTENSION * (j - 1) + (PENALTY_GAP_START - PENALTY_GAP_EXTENSION)
+      const own = boundaryBonus(text, j)
       const carried = Math.max(own, runBonus[prevRow + j - 1], BONUS_CONSECUTIVE)
       const consecutive = prev + SCORE_MATCH + carried
-      const gapped =
-        gapBest - PENALTY_GAP_EXTENSION * (j - 1) - (PENALTY_GAP_START - PENALTY_GAP_EXTENSION) + SCORE_MATCH + own
-      if (consecutive === -Infinity && gapped === -Infinity) continue
+      const gapped = gapBest - gapCost + SCORE_MATCH + own
       if (consecutive >= gapped) {
         score[row + j] = consecutive
         runBonus[row + j] = carried
@@ -171,18 +187,22 @@ function matchChars(q: number[], text: string): FuzzyMatch | null {
   const last = (n - 1) * m
   let end = -1
   for (let j = n - 1; j < m; j++) if (end === -1 || score[last + j] > score[last + end]) end = j
-  if (end === -1 || score[last + end] === -Infinity) return null
-  const positions: number[] = new Array(n)
-  for (let i = n - 1, j = end; i >= 0; i--) {
-    positions[i] = j
-    j = from[i * m + j]
+  if (end === -1 || score[last + end] === -Infinity) return -Infinity
+  if (positions) {
+    for (let i = n - 1, j = end; i >= 0; i--) {
+      positions[i] = j
+      j = from[i * m + j]
+    }
   }
-  return { score: score[last + end] - PENALTY_LENGTH * m, positions }
+  return score[last + end] - PENALTY_LENGTH * m
 }
 
 /**
  * The items whose text matches `query`, best first (ties keep their original order), at most `limit`.
  * An empty query returns the first `limit` items unchanged.
+ *
+ * Only scores are computed while scanning, and only the best `limit` are kept; the match positions are found for
+ * those alone. A small limit keeps a query that matches most of 50,000 paths cheap.
  */
 export function fuzzyFilter<T>(
   items: readonly T[],
@@ -192,11 +212,40 @@ export function fuzzyFilter<T>(
 ): FuzzyResult<T>[] {
   const q = queryChars(query)
   if (q.length === 0) return items.slice(0, limit).map((item) => ({ item, score: 0, positions: [] }))
-  const results: (FuzzyResult<T> & { index: number })[] = []
-  items.forEach((item, index) => {
-    const match = matchChars(q, text(item))
-    if (match) results.push({ item, index, ...match })
+  // The matches kept, best first, by index and score: all of them when the limit cuts none, else the best so far,
+  // each placed after those scoring at least as much, so ties keep their original order.
+  const best: number[] = []
+  const bestScore: number[] = []
+  if (limit >= items.length) {
+    const scores = new Float64Array(items.length)
+    for (let index = 0; index < items.length; index++) {
+      scores[index] = matchChars(q, text(items[index]))
+      if (scores[index] !== -Infinity) best.push(index)
+    }
+    best.sort((a, b) => scores[b] - scores[a] || a - b)
+    for (const index of best) bestScore.push(scores[index])
+  } else
+    for (let index = 0; index < items.length; index++) {
+      const s = matchChars(q, text(items[index]))
+      if (s === -Infinity || (best.length >= limit && s <= bestScore[best.length - 1])) continue
+      let lo = 0
+      let hi = best.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (bestScore[mid] >= s) lo = mid + 1
+        else hi = mid
+      }
+      best.splice(lo, 0, index)
+      bestScore.splice(lo, 0, s)
+      if (best.length > limit) {
+        best.pop()
+        bestScore.pop()
+      }
+    }
+  return best.map((index, rank) => {
+    const item = items[index]
+    const positions: number[] = new Array(q.length)
+    matchChars(q, text(item), positions)
+    return { item, score: bestScore[rank], positions }
   })
-  results.sort((a, b) => b.score - a.score || a.index - b.index)
-  return results.slice(0, limit).map(({ item, score, positions }) => ({ item, score, positions }))
 }

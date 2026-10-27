@@ -7,6 +7,7 @@ import { defaultRepo, greeting, repoChoices, taskNameFromPrompt } from '../lib/c
 import { homeTips, recentTasks, timeAgo, TIP_ROTATE_MS } from '../lib/onboarding'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
+import { startVisibleInterval } from '../lib/visibleInterval'
 import { ICON } from '../lib/icon'
 import { Spark } from './icons'
 
@@ -96,21 +97,26 @@ export function Welcome(p: StartActions & { onShowShortcuts: () => void }): Reac
   )
 }
 
+/** The tip Home showed last, so the next time it opens it goes on from there rather than from the first. */
+let lastTip = -1
+
 /**
  * A tip line that changes every TIP_ROTATE_MS, or on "Next tip". It holds still while hovered or focused, so it
  * can be read, and only then is it a live region: a screen reader hears the tips the user asks for, not every
- * automatic change.
+ * automatic change. It holds still too while the window is hidden.
  */
 function TipLine(): React.JSX.Element {
   const tips = useMemo(() => homeTips(), [])
-  const [index, setIndex] = useState(0)
+  const [index, setIndex] = useState(() => (lastTip + 1) % tips.length)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const paused = hovered || focused
   useEffect(() => {
+    lastTip = index
+  }, [index])
+  useEffect(() => {
     if (paused) return
-    const timer = setInterval(() => setIndex((i) => (i + 1) % tips.length), TIP_ROTATE_MS)
-    return () => clearInterval(timer)
+    return startVisibleInterval(() => setIndex((i) => (i + 1) % tips.length), TIP_ROTATE_MS)
   }, [tips.length, paused])
   return (
     <p
@@ -313,14 +319,16 @@ export function Home(
                 const session = sessionState(p.status, task.id)
                 const dot =
                   session === 'none' || session === 'missing' || session === 'running' ? session : `running ${session}`
+                // The dot's colour is all that tells "waiting" from "idle": say it.
+                const state = session === 'none' ? '' : `, ${SESSION_STATE_INFO[session].label.toLowerCase()}`
                 return (
                   <li key={task.id}>
                     <button
                       className="home-recent-task"
-                      aria-label={`Open ${task.name} (${theme.name} › ${repoName})`}
+                      aria-label={`Open ${task.name} (${theme.name} › ${repoName})${state}`}
                       onClick={() => p.onOpen(target)}
                     >
-                      <span className={`dot ${dot}`} aria-hidden="true">
+                      <span className={`dot ${dot}`} aria-hidden="true" title={SESSION_STATE_INFO[session].title}>
                         {SESSION_STATE_INFO[session].glyph}
                       </span>
                       <span className="home-recent-name" title={task.name}>

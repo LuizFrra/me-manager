@@ -274,6 +274,12 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
       </span>
     )
   }
+  /** The session state after the name, for screen readers: the dot's glyph is the same for several states. */
+  const stateNote = (id: string): React.JSX.Element | null => {
+    const state = sessionState(p.status, id)
+    if (state === 'none' || state === 'running') return null
+    return <span className="sr-only">, {SESSION_STATE_INFO[state].label.toLowerCase()}</span>
+  }
   const isSelected = (itemId: string, taskId?: string): boolean =>
     p.selected?.itemId === itemId && p.selected?.taskId === taskId
   // A repo's "Archived" group: collapsed unless opened, and open (like every group) while filtering.
@@ -736,6 +742,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                         >
                           {dot(item.id)} <Folder {...ICON} className="item-icon" />{' '}
                           <span className="row-name">{item.name}</span>
+                          {stateNote(item.id)}
                           {p.unread?.has(item.id) && <UnreadMark />}
                         </button>
                         <span className="row-actions">
@@ -797,7 +804,6 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 onKeyDown={(e) =>
                                   taskKeys(e, { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })
                                 }
-                                aria-selected={p.multiSelection.has(task.id)}
                               >
                                 <button
                                   className="row-label"
@@ -807,7 +813,10 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                   {...rowNav(`task:${task.id}`, 3)}
                                 >
                                   {dot(task.id)} <span className="row-name">{task.name}</span>
+                                  {stateNote(task.id)}
                                   {p.unread?.has(task.id) && <UnreadMark />}
+                                  {/* In the multi-selection: said with the name, as the row is not a selectable role. */}
+                                  {p.multiSelection.has(task.id) && <span className="sr-only">, selected</span>}
                                 </button>
                                 <OverBudget status={p.budgets?.[task.id]} />
                                 {p.gitStatus?.[task.id] && (

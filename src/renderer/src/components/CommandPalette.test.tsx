@@ -15,6 +15,25 @@ describe('CommandPalette', () => {
     expect(screen.getAllByRole('option')).toHaveLength(MAX_PALETTE_RESULTS)
   })
 
+  it('lists the recent commands first with an empty query, then the actions, then the rest', async () => {
+    const user = userEvent.setup()
+    const target = (label: string): PaletteCommand => ({ id: label, kind: 'task', label })
+    const commands = [target('Alpha'), target('Beta'), command('New theme'), target('Gamma'), command('Settings')]
+    render(
+      <CommandPalette
+        commands={commands}
+        recentIds={['Gamma', 'Gone', 'Beta']}
+        onRun={vi.fn()}
+        onOpenFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    const names = (): (string | null)[] => screen.getAllByRole('option').map((o) => o.getAttribute('aria-label'))
+    expect(names()).toEqual(['Gamma', 'Beta', 'New theme', 'Settings', 'Alpha'])
+    await user.type(screen.getByRole('combobox'), 'a')
+    expect(names()).toEqual(['Alpha', 'Beta', 'Gamma']) // a query ranks by the match alone
+  })
+
   it('moves with the arrow keys, wrapping around, and runs the active result on Enter', async () => {
     const user = userEvent.setup()
     const commands = [command('One'), command('Two'), command('Three')]

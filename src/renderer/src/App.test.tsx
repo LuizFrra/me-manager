@@ -18,6 +18,7 @@ import type {
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
 import { fuzzyFilter } from './lib/fuzzy'
+import { homeTips } from './lib/onboarding'
 import { mockColorScheme } from './test/matchMedia'
 
 vi.mock('./components/TerminalView', () => ({
@@ -86,8 +87,9 @@ interface Hold {
   gate?: Deferred
 }
 
-/** The sidebar button for a task; its label may start with a status dot. */
-const taskButton = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}$`) })
+/** The sidebar button for a task; its label may start with a status dot, and end with its state (", selected"). */
+const taskButton = (name: string): HTMLElement =>
+  screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}(, [^,]+)*$`) })
 
 /** Each task reports tabs named after it; `hold` delays responses for one task until released. */
 function perTaskTabs(getApi: () => MeManagerApi, hold: Hold): (target: Target) => Promise<TabInfo[]> {
@@ -422,7 +424,8 @@ describe('App side panel', () => {
     fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
     expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true })
-    await user.click(within(panel()).getByRole('button', { name: 'Close files panel' }))
+    // The panel's contents load lazily: on a cold start (this test alone) "Loading…" shows first.
+    await user.click(await within(panel()).findByRole('button', { name: 'Close files panel' }))
     expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
   })
 
@@ -718,6 +721,26 @@ describe('App command palette', () => {
     )
   })
 
+  it('lists the targets opened last first with an empty query, then the actions, however many tasks there are', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    let s = await api.createTheme('Work')
+    s = await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    for (let i = 1; i <= 60; i++) await api.createTask(s.themes[0].id, s.themes[0].items[0].id, `task ${i}`)
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: /^\S task 7$/ }))
+    await user.click(taskButton('task 42'))
+    await user.click(taskButton('task 3'))
+    await user.click(taskButton('task 42'))
+    const dialog = await openPalette()
+    const names = optionNames(dialog)
+    // The current task is where the user is already: not offered first.
+    expect(names.slice(0, 2)).toEqual(['Work › my-api › task 3', 'Work › my-api › task 7'])
+    expect(names).toEqual(expect.arrayContaining(['New task…', 'Git: Push branch', 'Open settings']))
+    await user.type(search(), 'task 59')
+    expect(optionNames(dialog)[0]).toBe('Work › my-api › task 59')
+  })
+
   it('leaves Ctrl+K and Ctrl+/ to the terminal on Linux', async () => {
     render(<App api={repoApi()} />)
     const k = fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
@@ -770,7 +793,8 @@ describe('App command palette', () => {
     await user.click(option)
 
     const panel = screen.getByRole('complementary', { name: 'Files panel' })
-    expect(within(panel).getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+    // The panel's contents load lazily: on a cold start "Loading…" shows first.
+    expect(await within(panel).findByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
     expect(await within(panel).findByRole('button', { name: /^app\.ts/ })).toHaveAttribute('aria-current', 'true')
     await waitFor(() => expect(document.querySelector('.code-body')?.textContent).toContain('greetAll'))
   })
@@ -3465,13 +3489,16 @@ describe('App welcome and home screens', () => {
       render(<App api={api} />)
       const tip = (): string => within(home()).getByText(/^Press |opens|searches|filters|shows|lists/).textContent ?? ''
       await screen.findByRole('region', { name: 'Home' })
-      expect(tip()).toBe('Press Ctrl+Shift+P to jump to any task, folder, file or action.')
+      // Home goes on from the tip it showed last, in earlier tests too.
+      const tips = homeTips()
+      const first = tips.indexOf(tip())
+      expect(first).not.toBe(-1)
       await act(async () => {
         await vi.advanceTimersByTimeAsync(8_000)
       })
-      expect(tip()).toContain('Ctrl+Shift+E')
+      expect(tip()).toBe(tips[(first + 1) % tips.length])
       await user.click(within(home()).getByRole('button', { name: 'Next tip' }))
-      expect(tip()).toContain('Ctrl+Shift+S')
+      expect(tip()).toBe(tips[(first + 2) % tips.length])
       await user.click(within(home()).getByRole('button', { name: /^Command palette/ }))
       expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
     } finally {
@@ -3584,7 +3611,7 @@ describe('App welcome and home screens', () => {
       api.getStatus = async () => ({ running: [fix.id, docs.id], missing: [], activity })
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
       render(<App api={api} />)
-      await user.click(await screen.findByRole('button', { name: /^\S docs$/ }))
+      await user.click(await screen.findByRole('button', { name: /^\S docs, working$/ }))
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_500)
       })
@@ -3592,9 +3619,9 @@ describe('App welcome and home screens', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_500)
       })
-      await user.click(await screen.findByRole('button', { name: /^\S fix, new$/ }))
-      expect(screen.getByRole('button', { name: /^\S docs$/ })).toBeInTheDocument()
-      expect(await screen.findByRole('button', { name: /^\S fix$/ })).toBeInTheDocument()
+      await user.click(await screen.findByRole('button', { name: /^\S fix, idle, new$/ }))
+      expect(screen.getByRole('button', { name: /^\S docs, idle$/ })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: /^\S fix, idle$/ })).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }

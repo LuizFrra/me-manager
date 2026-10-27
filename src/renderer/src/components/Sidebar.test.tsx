@@ -330,9 +330,10 @@ describe('Sidebar git badges', () => {
 })
 
 describe('Sidebar status dot', () => {
-  /** The dot of a task or folder row: its button is named "<dot> <name>". */
+  /** The dot of a task or folder row: its button is named "<dot> <name>", then its state. */
   const dotOf = (name: string): HTMLElement => {
-    const dot = screen.getByRole('button', { name: new RegExp(`^\\S ${name}$`, 'u') }).querySelector('.dot')
+    const label = screen.getByRole('button', { name: new RegExp(`^\\S ${name}(, [^,]+)?$`, 'u') })
+    const dot = label.querySelector('.dot')
     if (!(dot instanceof HTMLElement)) throw new Error('no dot')
     return dot
   }
@@ -357,6 +358,18 @@ describe('Sidebar status dot', () => {
     expect(dotOf('shell').className).toBe('dot running')
     expect(dotOf('fix')).toHaveTextContent('✻') // Claude Code's working mark
     for (const name of ['docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
+  })
+
+  it('says the session state with each name, as the dot shows waiting, idle and running alike', () => {
+    renderSidebar({
+      state: appState(theme('Client', [repo('api', [task('fix'), task('docs'), task('ship')]), folder('notes')])),
+      status: { running: ['fix', 'docs', 'notes'], missing: ['ship'], activity: { fix: 'busy', docs: 'waiting' } },
+      unread: new Set(['docs']),
+    })
+    expect(screen.getByRole('button', { name: '✻ fix, working' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '● docs, waiting for you, new' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '⚠ ship, path missing' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '● notes' })).toBeInTheDocument() // a session, nothing more to say
   })
 
   it('keeps ○ for no session and ⚠ for a missing path', () => {
@@ -724,13 +737,14 @@ describe('Sidebar multi-selection', () => {
     )
   }
   const fixTarget = { themeId: 'Client', itemId: 'api', taskId: 'fix' }
-  const label = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(`^\\S ${name}$`, 'u') })
+  const label = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: new RegExp(`^\\S ${name}(, selected)?$`, 'u') })
   const row = (name: string): HTMLElement => label(name).closest('.row') as HTMLElement
-  /** The tasks in the multi-selection, by their rows' aria-selected. */
+  /** The tasks in the multi-selection, as screen readers hear them: "● docs, selected". */
   const chosen = (): string[] =>
-    [...document.querySelectorAll('.task-row[aria-selected="true"]')].map(
-      (r) => r.querySelector('.row-label')?.textContent?.replace(/^\S /u, '') ?? '',
-    )
+    screen
+      .queryAllByRole('button', { name: /^\S .+, selected$/u })
+      .map((b) => b.textContent?.replace(/^\S |, selected$/gu, '') ?? '')
   const bar = (): HTMLElement => screen.getByRole('toolbar', { name: 'Selected tasks' })
 
   it('toggles tasks in with Ctrl+click, the current one included, without opening them', async () => {
@@ -746,7 +760,7 @@ describe('Sidebar multi-selection', () => {
     await user.keyboard('{/Control}')
     expect(chosen()).toEqual(['docs', 'ui'])
     expect(onSelect).not.toHaveBeenCalled()
-    expect(row('ship')).toHaveAttribute('aria-selected', 'false')
+    expect(label('ship')).toHaveAccessibleName('○ ship')
   })
 
   it('marks selected rows apart from the current task', () => {
@@ -755,7 +769,9 @@ describe('Sidebar multi-selection', () => {
     expect(row('fix')).not.toHaveClass('multi-selected')
     expect(row('docs')).toHaveClass('multi-selected')
     expect(row('docs')).not.toHaveClass('selected')
-    expect(row('docs')).toHaveAttribute('aria-selected', 'true')
+    expect(label('docs')).toHaveAccessibleName('○ docs, selected')
+    // aria-selected means nothing on an element without a role that takes it: screen readers never heard it.
+    expect(document.querySelector('[aria-selected]')).toBeNull()
   })
 
   it("selects a range with Shift+click, within the clicked task's repo", async () => {

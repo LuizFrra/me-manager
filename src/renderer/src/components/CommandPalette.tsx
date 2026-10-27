@@ -87,18 +87,37 @@ function FileLabel({ path, positions }: { path: string; positions: number[] }): 
 }
 
 /**
+ * What an empty query lists: the commands of `recentIds` in that order, then the actions, then the other tasks and
+ * folders. With many tasks, actions listed after all of them would fall past MAX_PALETTE_RESULTS.
+ */
+function browseOrder<C extends PaletteCommand>(commands: C[], recentIds: readonly string[]): C[] {
+  const byId = new Map(commands.map((c) => [c.id, c]))
+  const recent = recentIds.flatMap((id) => byId.get(id) ?? [])
+  const first = new Set<C>(recent)
+  return [
+    ...recent,
+    ...commands.filter((c) => c.kind === 'action' && !first.has(c)),
+    ...commands.filter((c) => c.kind !== 'action' && !first.has(c)),
+  ]
+}
+
+const NO_IDS: readonly string[] = []
+
+/**
  * Fuzzy "go to anything": tasks, folders and actions, plus the selected target's files, which are fetched when
  * the palette opens and kept while it stays open. Enter or a click runs the active result; Esc closes.
  */
 export function CommandPalette<C extends PaletteCommand>(props: {
   commands: C[]
+  /** Commands an empty query lists first, most recent first: the tasks and folders opened last. */
+  recentIds?: readonly string[]
   onRun: (command: C) => void
   /** Lists the selected target's files; undefined when nothing is selected. */
   loadFiles?: () => Promise<PaletteFiles>
   onOpenFile: (path: string) => void
   onClose: () => void
 }): React.JSX.Element {
-  const { commands, loadFiles, onRun, onOpenFile, onClose } = props
+  const { commands, recentIds = NO_IDS, loadFiles, onRun, onOpenFile, onClose } = props
   const [query, setQuery] = useState('')
   // The highlighted result, by id: when the results change under it (the files arrive), it stays the same result.
   // Null: the first one.
@@ -135,16 +154,16 @@ export function CommandPalette<C extends PaletteCommand>(props: {
     () => (files?.paths ?? []).map((path) => ({ id: `file:${path}`, kind: 'file', label: path })),
     [files],
   )
-  // Files only show up once the user types: an empty query lists tasks, folders and actions.
+  // Files only show up once the user types: an empty query lists tasks, folders and actions (see browseOrder).
   const results = useMemo(
     () =>
       fuzzyFilter<C | FileEntry>(
-        query.trim() ? [...commands, ...fileEntries] : commands,
+        query.trim() ? [...commands, ...fileEntries] : browseOrder(commands, recentIds),
         query,
         (c) => c.label,
         MAX_PALETTE_RESULTS,
       ),
-    [commands, fileEntries, query],
+    [commands, recentIds, fileEntries, query],
   )
   const current =
     results.length === 0
