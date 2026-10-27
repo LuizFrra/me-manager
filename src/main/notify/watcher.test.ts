@@ -49,6 +49,9 @@ interface Env {
 interface Setup {
   watcher: NotificationWatcher
   env: Env
+  clock: { now: number }
+  /** What lastStatus returns: the status the app last read for anyone, and when. */
+  last: { value: { at: number; status: LiveStatus } | null }
   notify: Mock<(n: DesktopNotice) => void>
   getStatus: Mock<() => Promise<LiveStatus>>
   /** Polls with these activities, 3 s after the previous poll. */
@@ -67,12 +70,14 @@ function setup(settings: Partial<Settings> = {}): Setup {
     failStatus: false,
   }
   const notify = vi.fn<(n: DesktopNotice) => void>()
+  const last: Setup['last'] = { value: null }
   const getStatus = vi.fn<() => Promise<LiveStatus>>(async () => {
     if (env.failStatus) throw new Error('tmux died')
     return { running: Object.keys(env.activity), missing: [], activity: { ...env.activity } }
   })
   const watcher = new NotificationWatcher({
     getStatus,
+    lastStatus: () => last.value,
     getState: async () => state,
     getSettings: () => env.settings,
     currentTarget: () => env.current,
@@ -88,7 +93,7 @@ function setup(settings: Partial<Settings> = {}): Setup {
   const work = async (activity: Record<string, ClaudeActivity>): Promise<void> => {
     for (let ms = 0; ms < MIN_BUSY_MS + 3000; ms += 3000) await poll(activity)
   }
-  return { watcher, env, notify, getStatus, poll, work }
+  return { watcher, env, clock, last, notify, getStatus, poll, work }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -158,6 +163,50 @@ describe('NotificationWatcher', () => {
     await work({ gone: 'busy' })
     await poll({ gone: 'idle' })
     expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('uses a status the app read within the poll interval (the window polls it) instead of polling tmux', async () => {
+    const { watcher, clock, last, notify, getStatus } = setup()
+    /** The renderer's poll, `ms` after the previous one, then the watcher's tick 1 s later. */
+    const seen = async (activity: Record<string, ClaudeActivity>, ms = 3000): Promise<void> => {
+      clock.now += ms
+      last.value = { at: clock.now, status: { running: Object.keys(activity), missing: [], activity } }
+      clock.now += 1000
+      await watcher.tick()
+    }
+    await seen({ k: 'idle' })
+    for (let ms = 0; ms < MIN_BUSY_MS + 3000; ms += 3000) await seen({ k: 'busy' }, 2000)
+    await seen({ k: 'idle' }, 2000)
+    expect(getStatus).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledOnce()
+
+    // The same status again is nothing new; one older than the interval is not used.
+    clock.now += 1000
+    await watcher.tick()
+    expect(getStatus).not.toHaveBeenCalled()
+    clock.now += DEFAULT_SETTINGS.pollIntervalMs
+    await watcher.tick()
+    expect(getStatus).toHaveBeenCalledOnce()
+    expect(notify).toHaveBeenCalledOnce()
+  })
+
+  it('times a status it reuses by when it was read', async () => {
+    const { watcher, clock, last, notify } = setup()
+    const at = (activity: Record<string, ClaudeActivity>, readAt: number): void => {
+      last.value = { at: readAt, status: { running: Object.keys(activity), missing: [], activity } }
+    }
+    const t0 = clock.now
+    at({ k: 'busy' }, t0)
+    await watcher.tick()
+    // Busy for 3 s by the reads' times, though 5.5 s by the ticks'.
+    at({ k: 'busy' }, t0 + 3000)
+    clock.now = t0 + 5500
+    await watcher.tick()
+    at({ k: 'idle' }, t0 + 5600)
+    clock.now = t0 + 5700
+    await watcher.tick()
+    expect(MIN_BUSY_MS).toBe(5000)
+    expect(notify).not.toHaveBeenCalled() // too short to count as work
   })
 
   it('polls at the poll interval from settings until stopped', async () => {

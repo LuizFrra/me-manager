@@ -1768,6 +1768,14 @@ describe('Orchestrator: Claude activity', () => {
     expect(windowActivity).not.toHaveBeenCalled()
   })
 
+  it('keeps the last status it read, with when, for the notification watcher', async () => {
+    const { orch, clock } = await withSessions()
+    expect(orch.lastStatus).toBeNull()
+    const status = await orch.getStatus()
+    expect(orch.lastStatus).toEqual({ at: clock.now, status })
+    expect(orch.lastStatus?.status).toBe(status)
+  })
+
   it('still reports sessions when the activity call fails', async () => {
     const { orch, tmux, task } = await withSessions()
     tmux.sessionActivity = async () => Promise.reject(new Error('tmux died'))

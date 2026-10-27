@@ -413,6 +413,9 @@ export class Orchestrator implements AppService {
     return withEffective(await this.deps.settings.update(patch))
   }
 
+  /** What getStatus last returned, to whoever asked, and when (ms): the notification watcher reuses a recent one. */
+  lastStatus: { at: number; status: LiveStatus } | null = null
+
   /**
    * Sessions, missing folders and Claude's activity. Kept cheap for polling: one tmux call, plus a screen capture
    * only for a quiet session whose window printed something since its last capture. Archived tasks are left out:
@@ -445,7 +448,9 @@ export class Orchestrator implements AppService {
         }
       }
     }
-    return { running, missing, activity: await this.claudeActivity(live, activityBySession) }
+    const status = { running, missing, activity: await this.claudeActivity(live, activityBySession) }
+    this.lastStatus = { at: this.now(), status }
+    return status
   }
 
   /** Busy from recent output; otherwise waiting or idle from the screen (see tmux/activity.ts). */
