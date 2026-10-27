@@ -1193,6 +1193,9 @@ describe('RestartClaudeDialog', () => {
     render(<RestartClaudeDialog name="fix-login" from="Default" to="Work" onConfirm={onConfirm} onCancel={onCancel} />)
     const dialog = screen.getByRole('alertdialog', { name: 'Restart Claude in Work' })
     expect(dialog).toHaveTextContent(/runs in Default/)
+    expect(dialog).toHaveTextContent(
+      'starts a new conversation in Work. This conversation’s history stays in Default’s folder.',
+    )
     expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
     const restart = screen.getByRole('button', { name: 'Restart Claude' })
     await user.dblClick(restart)

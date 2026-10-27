@@ -364,7 +364,8 @@ export function ArchiveTaskDialog(props: {
 
 /**
  * Asked before Claude, running in one account (`from`), is ended and started again in its tab in the account its
- * task or folder now has (`to`). Cancel is focused; Esc cancels.
+ * task or folder now has (`to`): a new conversation there, as each account keeps its own history. Cancel is
+ * focused; Esc cancels.
  */
 export function RestartClaudeDialog(props: {
   /** The task or folder. */
@@ -387,8 +388,8 @@ export function RestartClaudeDialog(props: {
       >
         <h2>Restart Claude in {props.to}?</h2>
         <p>
-          Claude in {props.name} runs in {props.from}. Restarting ends it, stopping whatever it is doing, and starts it
-          again in {props.to}, continuing that account’s last conversation here if it has one.
+          Claude in {props.name} runs in {props.from}. Restarting ends it, stopping whatever it is doing, and starts a
+          new conversation in {props.to}. This conversation’s history stays in {props.from}’s folder.
         </p>
         <div className="dialog-actions">
           <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
