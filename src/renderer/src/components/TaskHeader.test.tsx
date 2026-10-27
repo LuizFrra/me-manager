@@ -238,3 +238,13 @@ describe('TaskHeader usage badge and budget', () => {
     expect(badge).toHaveAccessibleDescription(/\$6\.00 of \$5\.00 task budget \(120%\)/)
   })
 })
+
+describe('TaskHeader long names', () => {
+  it('gives the title and path line their full text as a tooltip, as they are cut to one line', () => {
+    const title = `my-api › ${'a really long task name '.repeat(6).trim()}`
+    const subtitle = `branch: claude/client-x/${'x'.repeat(40)} · /home/u/.me-manager/worktrees/client-x/my-api/${'x'.repeat(40)}`
+    render(<TaskHeader {...base} title={title} subtitle={subtitle} />)
+    expect(screen.getByText(title)).toHaveAttribute('title', title)
+    expect(screen.getByText(subtitle)).toHaveAttribute('title', subtitle)
+  })
+})

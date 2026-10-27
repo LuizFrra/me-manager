@@ -290,7 +290,10 @@ export function TaskHeader(props: {
       <div className="task-header-top">
         <div className="task-header-text">
           <div className="task-title">
-            <span className="task-title-text">{props.title}</span>
+            {/* Cut to one line with an ellipsis (as is the path line), so the tooltip has it all. */}
+            <span className="task-title-text" title={props.title}>
+              {props.title}
+            </span>
             {props.session && (
               <span
                 className={`session-state ${props.session}`}
@@ -320,7 +323,9 @@ export function TaskHeader(props: {
               </span>
             )}
           </div>
-          <div className="task-subtitle">{props.subtitle}</div>
+          <div className="task-subtitle" title={props.subtitle}>
+            {props.subtitle}
+          </div>
           {props.git && props.baseRef !== undefined && <GitLine git={props.git} baseRef={props.baseRef} />}
           {props.devUrls && props.devUrls.length > 0 && props.onOpenUrl && (
             <div className="task-urls" role="group" aria-label="Dev-server links">
