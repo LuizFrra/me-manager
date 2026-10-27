@@ -336,6 +336,30 @@ describe('removeWorktree / deleteBranch', () => {
     await svc.removeWorktree(clone, wt)
     expect(await run('git', ['-C', clone, 'worktree', 'list'])).not.toContain(wt)
   })
+  it("deletes a worktree folder whose link with the repo broke, which git won't remove", async () => {
+    // The repo's entry for it pruned (or the repo cloned again at its path)…
+    const pruned = await withTask()
+    await writeFile(join(pruned.wt, 'dirty.txt'), 'x')
+    await rm(join(pruned.clone, '.git', 'worktrees'), { recursive: true, force: true })
+    await svc.removeWorktree(pruned.clone, pruned.wt)
+    expect(existsSync(pruned.wt)).toBe(false)
+    // …or its own `.git` file changed.
+    const relinked = await withTask()
+    await writeFile(join(relinked.wt, '.git'), 'gitdir: /nonexistent/worktree\n')
+    await svc.removeWorktree(relinked.clone, relinked.wt)
+    expect(existsSync(relinked.wt)).toBe(false)
+    expect(await run('git', ['-C', relinked.clone, 'worktree', 'list'])).not.toContain(relinked.wt)
+  })
+  it('never deletes a folder that is not a broken worktree when git refuses it', async () => {
+    const { clone, root } = await withTask()
+    const other = join(root, 'not-a-worktree')
+    await mkdir(other)
+    await writeFile(join(other, 'mine.txt'), 'keep me')
+    await expect(svc.removeWorktree(clone, other)).rejects.toThrow()
+    await expect(svc.removeWorktree(clone, clone)).rejects.toThrow() // the repo's own work tree
+    expect(existsSync(join(other, 'mine.txt'))).toBe(true)
+    expect(existsSync(join(clone, 'README.md'))).toBe(true)
+  })
   it('deletes the worktree folder when the original repo was moved', async () => {
     const { clone, wt } = await withTask()
     await writeFile(join(wt, 'dirty.txt'), 'x')

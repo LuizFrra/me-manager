@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { lstat, mkdir, rm } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { checkCloneUrl } from '../../shared/clone'
 import type { CommitResult, TaskGitStatus, UnsavedWork, UpdateResult, UpdateStrategy } from '../../shared/types'
 import type { GitApi } from '../contracts'
@@ -296,11 +296,33 @@ export class GitService implements GitApi {
       await rm(worktreePath, { recursive: true, force: true })
       return
     }
-    if (existsSync(worktreePath)) {
+    if (!existsSync(worktreePath)) {
+      await this.git(repoPath, ['worktree', 'prune'])
+      return
+    }
+    try {
       await this.git(repoPath, ['worktree', 'remove', '--force', worktreePath])
-    } else {
+    } catch (err) {
+      if (!(await this.isBrokenWorktree(worktreePath))) throw err
+      // git refuses it, which would keep the task forever; it is still the task's folder, so it goes like one whose
+      // repo is gone.
+      await rm(worktreePath, { recursive: true, force: true })
       await this.git(repoPath, ['worktree', 'prune'])
     }
+  }
+
+  /**
+   * Whether `path` is a linked worktree whose link with its repo broke: it has the `.git` file git leaves in one,
+   * but git can't open the repository through it (the repo's entry for it was pruned, the repo was cloned again,
+   * or the file was changed). A repository's own folder has a `.git` folder instead, so it is never one.
+   */
+  private async isBrokenWorktree(path: string): Promise<boolean> {
+    const link = await lstat(join(path, '.git')).catch(() => null)
+    if (!link?.isFile()) return false
+    return this.git(path, ['rev-parse', '--git-dir']).then(
+      () => false,
+      () => true,
+    )
   }
 
   async restoreWorktree(repoPath: string, worktreePath: string, branch: string): Promise<void> {

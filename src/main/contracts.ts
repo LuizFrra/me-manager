@@ -50,7 +50,10 @@ export interface GitApi {
    * the checkout fails, the branch it made is deleted again.
    */
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>
-  /** Removes the worktree (forced); prunes if its folder is already gone. */
+  /**
+   * Removes the worktree (forced); prunes if its folder is already gone. A folder whose worktree link broke (which
+   * git refuses to remove) is deleted, and so is the folder when the repo itself is gone.
+   */
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>
   /**
    * Recreates an archived task's worktree: `git worktree add <worktreePath> <branch>`, checking out the kept branch
