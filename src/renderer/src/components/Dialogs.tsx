@@ -57,6 +57,7 @@ export function NameDialog(props: {
   useRestoreFocus() // closing gives focus back, usually to the terminal
   const [name, setName] = useState(props.initial ?? '')
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const unchanged = props.initial !== undefined && name.trim() === props.initial
   const error = props.validate?.(name) ?? null
   const noteId = useId()
@@ -69,14 +70,16 @@ export function NameDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={props.title}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
         onSubmit={async (e) => {
           e.preventDefault()
-          if (!name.trim() || unchanged || error) return
+          if (busyRef.current || !name.trim() || unchanged || error) return
+          busyRef.current = true
           setBusy(true)
           try {
             await props.onSubmit(name.trim())
           } finally {
+            busyRef.current = false
             setBusy(false)
           }
         }}
@@ -103,7 +106,7 @@ export function NameDialog(props: {
           </p>
         )}
         <div className="dialog-actions">
-          <button type="button" onClick={props.onCancel}>
+          <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
           <button type="submit" disabled={busy || !name.trim() || unchanged || error !== null}>

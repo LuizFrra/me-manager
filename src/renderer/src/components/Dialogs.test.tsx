@@ -1001,3 +1001,31 @@ describe('ReviewCommentDialog: Esc with a typed comment', () => {
     expect(onCancel).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('NameDialog while it works', () => {
+  it('keeps Cancel off and Esc waiting, so a failed submit keeps the dialog and the name', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    // A failure is reported by the caller (a toast), which keeps the dialog: the promise just settles.
+    let fail = (): void => {}
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          fail = resolve
+        }),
+    )
+    render(<NameDialog title="New theme" placeholder="" onSubmit={onSubmit} onCancel={onCancel} />)
+    await user.keyboard('Client X{Enter}')
+    expect(screen.getByRole('button', { name: 'Working…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    await user.keyboard('{Enter}')
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    fail()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled())
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Client X')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
