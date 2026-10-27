@@ -416,6 +416,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     getBudgets: async () => demoBudgets(state, settings),
     ptyWrite: () => {},
     ptyResize: () => {},
+    pathForFile: (file) => `/demo/${file.name}`,
     onPtyData: () => () => {},
     onPtyExit: () => () => {},
     onSelectTarget: () => () => {},

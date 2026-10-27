@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import {
   BUDGET_ALERT,
   INVOKE_METHODS,
@@ -25,6 +25,7 @@ const api = {
   ...invokers,
   ptyWrite: (data: string) => ipcRenderer.send(PTY_WRITE, data),
   ptyResize: (cols: number, rows: number) => ipcRenderer.send(PTY_RESIZE, cols, rows),
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
   onPtyData: (cb: (data: string) => void) => subscribe(PTY_DATA, cb),
   onPtyExit: (cb: (code: number) => void) => subscribe(PTY_EXIT, cb),
   onSelectTarget: (cb: (target: Target) => void) => subscribe(SELECT_TARGET, cb),

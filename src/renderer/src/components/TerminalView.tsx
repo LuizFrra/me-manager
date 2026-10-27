@@ -12,9 +12,10 @@ import { createLinkProvider, type LinkFiles } from '../lib/terminalLinkProvider'
 import type { TextLink } from '../lib/terminalLinks'
 import { NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
 import { PopupMenu, type MenuItem } from './PopupMenu'
+import { joinShellWords } from '../../../shared/shell'
 
 export interface TerminalViewProps {
-  api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'>
+  api: Pick<MeManagerApi, 'ptyWrite' | 'ptyResize' | 'onPtyData'> & Partial<Pick<MeManagerApi, 'pathForFile'>>
   /** Changes whenever the attached session changes; the terminal resets. */
   sessionKey: string
   /** Applied live: the terminal refits and the pty is resized to the new rows and columns. */
@@ -277,6 +278,24 @@ export function TerminalView({
       setMenu({ x: e.clientX, y: e.clientY, trigger: term.textarea ?? host, items })
     }
     host.addEventListener('contextmenu', onContextMenu)
+    // Files dragged in from the desktop are typed as their quoted paths, as other terminals do: Claude Code reads a
+    // path to an image as that image.
+    const draggingFiles = (e: DragEvent): boolean => !!api.pathForFile && !!e.dataTransfer?.types.includes('Files')
+    const onDragOver = (e: DragEvent): void => {
+      if (!draggingFiles(e)) return
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (e: DragEvent): void => {
+      if (!draggingFiles(e) || modalOpenRef.current) return
+      e.preventDefault()
+      const paths = [...(e.dataTransfer?.files ?? [])].map((f) => api.pathForFile?.(f) ?? '').filter(Boolean)
+      if (paths.length === 0) return
+      term.paste(`${joinShellWords(paths)} `)
+      term.focus()
+    }
+    host.addEventListener('dragover', onDragOver)
+    host.addEventListener('drop', onDrop)
     // Captured: in mouse mode xterm stops the wheel event once it has reported it to tmux.
     const onWheel = (e: WheelEvent): void => {
       if (e.deltaY < 0) scrolledBackRef.current = true
@@ -327,6 +346,8 @@ export function TerminalView({
       host.removeEventListener('contextmenu', onContextMenu)
       host.removeEventListener('mousedown', onMouseDown)
       host.removeEventListener('wheel', onWheel, { capture: true })
+      host.removeEventListener('dragover', onDragOver)
+      host.removeEventListener('drop', onDrop)
       settled.cancel()
       offData()
       input.dispose()

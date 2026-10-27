@@ -600,6 +600,8 @@ export interface MeManagerApi {
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
+  /** Where a file dragged in from the desktop is on disk; '' for one that isn't a local file. Synchronous. */
+  pathForFile(file: File): string
   onPtyData(cb: (data: string) => void): () => void
   onPtyExit(cb: (code: number) => void): () => void
   /** Main asks to select a target (a desktop notification for it was clicked). Returns an unsubscribe function. */

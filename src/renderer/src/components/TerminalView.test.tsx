@@ -482,3 +482,29 @@ describe('TerminalView after a scroll back', () => {
     expect(api.ptyWrite).not.toHaveBeenCalled()
   })
 })
+
+describe('TerminalView file drops', () => {
+  it('types the quoted paths of files dropped from the desktop', () => {
+    const api = {
+      ptyWrite: vi.fn(),
+      ptyResize: vi.fn(),
+      onPtyData: () => () => {},
+      pathForFile: (f: File) => `/home/u/${f.name}`,
+    }
+    const { container } = render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    const host = container.querySelector('.terminal-host') as Element
+    const files = [new File(['x'], 'shot 1.png'), new File(['y'], 'notes.md')]
+    const dataTransfer = { types: ['Files'], files, dropEffect: 'none' }
+    const over = fireEvent.dragOver(host, { dataTransfer })
+    expect(over).toBe(false) // default prevented: a drop is allowed
+    fireEvent.drop(host, { dataTransfer })
+    expect(terms.at(-1)?.pasted).toEqual(["'/home/u/shot 1.png' /home/u/notes.md "])
+  })
+
+  it('leaves drags of text alone', () => {
+    const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {}, pathForFile: () => '/x' }
+    const { container } = render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    const host = container.querySelector('.terminal-host') as Element
+    expect(fireEvent.dragOver(host, { dataTransfer: { types: ['text/plain'], files: [] } })).toBe(true)
+  })
+})

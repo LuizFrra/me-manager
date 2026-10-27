@@ -269,6 +269,7 @@ export type AppService = Omit<
   | 'pickDirectory'
   | 'ptyWrite'
   | 'ptyResize'
+  | 'pathForFile'
   | 'onPtyData'
   | 'onPtyExit'
   | 'onSelectTarget'
