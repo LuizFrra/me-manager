@@ -601,12 +601,20 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commitIfChanged(m.moveItem(this.state, themeId, itemId, toIndex)))
   }
 
-  /** The default base and every listed branch, the default first (it may be a local branch git doesn't list). */
+  /**
+   * The default base and every listed branch, the default first (it may be a local branch git doesn't list). A repo
+   * without a default (a detached HEAD and no main or master) still lists its branches, the first as the default.
+   */
   private async branchList(repoPath: string): Promise<BranchList> {
-    const [defaultRef, branches] = await Promise.all([
-      this.deps.git.resolveBaseRef(repoPath),
+    const [found, branches] = await Promise.all([
+      this.deps.git.resolveBaseRef(repoPath).then(
+        (ref) => ({ ref }),
+        (err: unknown) => ({ err }),
+      ),
       this.deps.git.listBranches(repoPath),
     ])
+    if ('err' in found && branches.length === 0) throw found.err
+    const defaultRef = 'ref' in found ? found.ref : branches[0]
     return { default: defaultRef, branches: [defaultRef, ...branches.filter((b) => b !== defaultRef)] }
   }
 

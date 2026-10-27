@@ -366,6 +366,20 @@ describe('Orchestrator: new-task options', () => {
     })
   })
 
+  it('lists the branches, the first as the default, when the repo has no default base (a detached HEAD)', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    git.noDefaultBase = 'Could not find a base branch in /code/my-api'
+    git.branches = ['develop', 'trunk']
+    await expect(orch.listBranches(themeId, repoId)).resolves.toEqual({
+      default: 'develop',
+      branches: ['develop', 'trunk'],
+    })
+    expect(taskOf(await orch.createTask(themeId, repoId, 'fix', { baseRef: 'trunk' })).baseRef).toBe('trunk')
+    await expect(orch.createTask(themeId, repoId, 'other')).rejects.toThrow('Could not find a base branch')
+    git.branches = []
+    await expect(orch.listBranches(themeId, repoId)).rejects.toThrow('Could not find a base branch')
+  })
+
   it('creates the worktree from the chosen base branch and records it', async () => {
     const { orch, git, themeId, repoId } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { baseRef: 'origin/develop' }))

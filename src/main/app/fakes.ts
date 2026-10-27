@@ -96,7 +96,10 @@ export class FakeGit implements GitApi {
     this.calls.push(`fetch ${repo}`)
     if (this.failFetch) throw new Error('offline')
   }
+  /** When set, resolveBaseRef rejects with it (a repo with no default base, like a detached HEAD). */
+  noDefaultBase: string | null = null
   async resolveBaseRef(): Promise<string> {
+    if (this.noDefaultBase) throw new Error(this.noDefaultBase)
     return 'origin/main'
   }
   /** What listBranches returns; verifyRef is true for these unless listed in `unresolvable`. */
