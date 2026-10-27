@@ -663,6 +663,11 @@ button:disabled {
   font-weight: 560;
   letter-spacing: -0.01em;
   color: var(--text-strong);
+  /* A long name gets a line of its own and an ellipsis instead of pushing the header wider than the window. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .task-subtitle {
   margin-top: 2px;
@@ -981,6 +986,43 @@ button:disabled {
   padding-top: 14px;
   border-top: 1px solid var(--divider);
 }
+/* Sticks to the dialog's bottom edge (over its padding) while the sections scroll under it. */
+.settings-footer {
+  position: sticky;
+  bottom: -20px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -22px -20px;
+  padding: 10px 22px 16px;
+  background: var(--raised);
+  border-top: 1px solid var(--divider);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+.settings-footer .dialog-actions {
+  margin-top: 0;
+}
+.settings-discard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  font-size: 12px;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+}
+.settings-discard span {
+  flex: 1;
+}
+.settings-discard button {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+}
 .dialog .settings-section h3 {
   margin: 0;
   font-family: var(--font-serif);
@@ -1124,6 +1166,13 @@ button:disabled {
   color: var(--error-text);
   font-size: 12px;
 }
+/* "2 fields to fix", beside the Save it keeps off: a link to the first one. */
+.dialog-actions button.settings-to-fix {
+  padding: 0;
+  border: none;
+  color: var(--error-text);
+  font-size: 12px;
+}
 .dialog-note {
   margin: -4px 0 0;
   color: var(--muted);
@@ -1221,7 +1270,8 @@ button:disabled {
   flex: none;
   border-color: var(--border);
 }
-.clone-dialog .dialog-field-hint code {
+.clone-dialog .dialog-field-hint code,
+.new-task-dialog .dialog-field-hint code {
   font-family: var(--mono);
   font-size: 11px;
   padding: 0 3px;
@@ -3383,6 +3433,9 @@ kbd {
   color: var(--text);
   font-family: var(--mono);
   font-size: 11.5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .task-git-base.warn {
   color: var(--git-dirty);

@@ -76,6 +76,7 @@ import { applyMove, moveAnnouncement, sendMove, stepMove, type Move, type MoveEn
 import { effectiveSessionFlags } from './lib/sessionFlags'
 import { sessionState } from './lib/sessionState'
 import { runLabel, runState, type RunState } from './lib/run'
+import { newThemeNameError, renameError, type ExistingTask } from './lib/names'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -97,6 +98,7 @@ interface NameAsk {
   initial?: string
   submitLabel?: string
   note?: string
+  validate?: (name: string) => string | null
 }
 
 type DialogBody =
@@ -240,7 +242,11 @@ const BULK_LABEL: Record<BulkAction, (n: number) => string> = {
 }
 
 /** Renaming changes the display name only, never the slug that branches, worktrees and sessions are named by. */
-const RENAME_NOTE = 'The branch and folder keep their original name.'
+/** Renaming changes the display name only: the slug stays in branches, worktree folders and sessions. */
+const RENAME_NOTE = {
+  task: 'The branch and folder keep their original name.',
+  theme: 'Its tasks’ branches and folders keep their original names.',
+}
 
 const EMPTY: AppState = { version: 1, themes: [] }
 const NO_COMMENTS: readonly ReviewComment[] = []
@@ -284,10 +290,12 @@ const isArchivedTarget = (state: AppState, target: Target | null): boolean => {
   return task !== undefined && isArchived(task)
 }
 
-/** The names of a repo's tasks, archived ones included: what a task template's `{n}` counts. */
-function repoTaskNames(state: AppState, themeId: string, repoId: string): string[] {
+/** A repo's tasks, archived ones included: the names and branches a new task can't take, and what `{n}` counts. */
+function repoTasks(state: AppState, themeId: string, repoId: string, exceptId?: string): ExistingTask[] {
   const repo = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
-  return repo?.kind === 'repo' ? repo.tasks.map((t) => t.name) : []
+  if (repo?.kind !== 'repo') return []
+  const tasks = repo.tasks.filter((t) => t.id !== exceptId)
+  return tasks.map((t) => ({ name: t.name, slug: t.slug, archived: isArchived(t) }))
 }
 
 /** What "copy …" offers for `target`: its branch, path, attach command. */
@@ -950,18 +958,44 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     })
   }
 
+  const validateNewTheme = (name: string): string | null => newThemeNameError(name, stateRef.current.themes)
   const newTheme = (): void =>
-    askName({ title: 'New theme', placeholder: 'e.g. Client X' }, (name) => api.createTheme(name))
+    askName({ title: 'New theme', placeholder: 'e.g. Client X', validate: validateNewTheme }, (name) =>
+      api.createTheme(name),
+    )
 
-  const askRename = (what: 'theme' | 'task', current: string, submit: (name: string) => Promise<AppState>): void =>
+  /** `others`: the themes, or the repo's tasks, whose names the new one can't take. */
+  const askRename = (
+    what: 'theme' | 'task',
+    current: string,
+    others: () => { name: string; archived?: boolean }[],
+    submit: (name: string) => Promise<AppState>,
+  ): void =>
     askName(
-      { title: `Rename ${what}`, placeholder: current, initial: current, submitLabel: 'Rename', note: RENAME_NOTE },
+      {
+        title: `Rename ${what}`,
+        placeholder: current,
+        initial: current,
+        submitLabel: 'Rename',
+        note: RENAME_NOTE[what],
+        validate: (name) => renameError(name, others(), what),
+      },
       submit,
     )
   const renameTheme = (themeId: string, current: string): void =>
-    askRename('theme', current, (name) => api.renameTheme(themeId, name))
+    askRename(
+      'theme',
+      current,
+      () => stateRef.current.themes.filter((t) => t.id !== themeId),
+      (name) => api.renameTheme(themeId, name),
+    )
   const renameTask = (themeId: string, repoId: string, taskId: string, current: string): void =>
-    askRename('task', current, (name) => api.renameTask(themeId, repoId, taskId, name))
+    askRename(
+      'task',
+      current,
+      () => repoTasks(stateRef.current, themeId, repoId, taskId),
+      (name) => api.renameTask(themeId, repoId, taskId, name),
+    )
 
   const customizeTheme = (themeId: string): void => {
     const theme = state.themes.find((t) => t.id === themeId)
@@ -1078,6 +1112,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       placeholder: 'e.g. Client X',
       note: 'Repositories go into a theme: name one first. You can rename it later.',
       submitLabel: 'Create and continue',
+      validate: validateNewTheme,
       onSubmit: async (name) => {
         const next = await attempt(() => api.createTheme(name))
         if (!next) return
@@ -2077,6 +2112,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               subtitle={header.subtitle}
               notes={selectedTask?.notes}
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
+              onEditBudget={selectedTask ? editTaskBudget : undefined}
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
@@ -2246,6 +2282,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           initial={dialog.initial}
           submitLabel={dialog.submitLabel}
           note={dialog.note}
+          validate={dialog.validate}
           onSubmit={dialog.onSubmit}
           onCancel={() => closeDialog(dialog.id)}
         />
@@ -2253,9 +2290,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       {dialog?.kind === 'newTask' && (
         <NewTaskDialog
           repoName={dialog.repoName}
+          themeSlug={state.themes.find((t) => t.id === dialog.themeId)?.slug}
           loadBranches={() => api.listBranches(dialog.themeId, dialog.repoId)}
           templates={settings.taskTemplates}
-          taskNames={repoTaskNames(state, dialog.themeId, dialog.repoId)}
+          tasks={repoTasks(state, dialog.themeId, dialog.repoId)}
           initialTemplate={dialog.template}
           initialName={dialog.name}
           initialPrompt={dialog.prompt}

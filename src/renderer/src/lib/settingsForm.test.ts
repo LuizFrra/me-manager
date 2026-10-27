@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
-import { parseForm, toForm, type SettingsForm, type TemplateForm } from './settingsForm'
+import { errorCount, formChanged, parseForm, toForm, type SettingsForm, type TemplateForm } from './settingsForm'
 
 const form = (over: Partial<SettingsForm> = {}): SettingsForm => ({ ...toForm(DEFAULT_SETTINGS), ...over })
 
@@ -143,5 +143,28 @@ describe('settings form', () => {
       editorCommand: 'nvim runs in a terminal; choose a GUI editor (e.g. code, subl, gvim).',
     })
     expect(parseForm(form({ editorCommand: 'emacs' })).errors).toBeUndefined()
+  })
+})
+
+describe('errorCount', () => {
+  it('counts the invalid fields, each template field on its own', () => {
+    expect(errorCount({})).toBe(0)
+    expect(errorCount({ pollSeconds: 'x', dailyBudget: 'y' })).toBe(2)
+    expect(errorCount({ claudeArgs: 'x', taskTemplates: [{}, { name: 'a', base: 'b' }, { prompt: 'c' }] })).toBe(4)
+  })
+})
+
+describe('formChanged', () => {
+  const settings = { ...DEFAULT_SETTINGS, taskTemplates: [{ name: 'Review', taskName: 'review-{n}' }] }
+
+  it('tells an edited form from the one it started as, templates by their fields and order', () => {
+    const start = toForm(settings)
+    expect(formChanged(start, { ...start })).toBe(false)
+    expect(formChanged(start, toForm(settings))).toBe(false) // new template keys, same fields
+    expect(formChanged(start, { ...start, pollSeconds: '7' })).toBe(true)
+    expect(formChanged(start, { ...start, notifications: !start.notifications })).toBe(true)
+    const [review] = start.taskTemplates
+    expect(formChanged(start, { ...start, taskTemplates: [{ ...review, prompt: 'Go' }] })).toBe(true)
+    expect(formChanged(start, { ...start, taskTemplates: [] })).toBe(true)
   })
 })

@@ -13,6 +13,7 @@ import {
 } from '../../../shared/types'
 import { budgetFromText, budgetText } from '../../../shared/budget'
 import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
+import { branchName, slugify } from '../../../shared/naming'
 import { MAX_RUN_COMMAND, runCommandError } from '../../../shared/runCommand'
 import { expandTaskName, templateBase } from '../../../shared/templates'
 import { archiveSkipReason, type BulkAction } from '../lib/bulk'
@@ -23,6 +24,16 @@ import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
+import { newTaskNameError, type ExistingTask } from '../lib/names'
+
+/** A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. */
+const cancelOnEscape =
+  (cancel: () => void) =>
+  (e: React.KeyboardEvent): void => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    cancel()
+  }
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
 export function NameDialog(props: {
@@ -34,6 +45,8 @@ export function NameDialog(props: {
   submitLabel?: string
   /** A short explanation shown under the field. */
   note?: string
+  /** Why main would refuse the name (see lib/names), shown as it is typed with the button off; null when fine. */
+  validate?: (name: string) => string | null
   onSubmit: (name: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
@@ -41,16 +54,21 @@ export function NameDialog(props: {
   const [name, setName] = useState(props.initial ?? '')
   const [busy, setBusy] = useState(false)
   const unchanged = props.initial !== undefined && name.trim() === props.initial
+  const error = props.validate?.(name) ?? null
   const noteId = useId()
+  const errorId = useId()
+  const describedBy = [error && errorId, props.note && noteId].filter(Boolean).join(' ') || undefined
   return (
     <div className="overlay">
       <form
         className="dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={props.title}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={async (e) => {
           e.preventDefault()
-          if (!name.trim() || unchanged) return
+          if (!name.trim() || unchanged || error) return
           setBusy(true)
           try {
             await props.onSubmit(name.trim())
@@ -63,13 +81,18 @@ export function NameDialog(props: {
         <input
           autoFocus
           aria-label="Name"
-          aria-describedby={props.note ? noteId : undefined}
+          aria-describedby={describedBy}
+          aria-invalid={error ? true : undefined}
           placeholder={props.placeholder}
           value={name}
           onFocus={(e) => props.initial !== undefined && e.currentTarget.select()}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
         />
+        {error && (
+          <p id={errorId} className="dialog-field-hint dialog-field-error" role="alert">
+            {error}
+          </p>
+        )}
         {props.note && (
           <p id={noteId} className="dialog-note">
             {props.note}
@@ -79,7 +102,7 @@ export function NameDialog(props: {
           <button type="button" onClick={props.onCancel}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || !name.trim() || unchanged}>
+          <button type="submit" disabled={busy || !name.trim() || unchanged || error !== null}>
             {busy ? 'Working…' : (props.submitLabel ?? 'Create')}
           </button>
         </div>
@@ -130,7 +153,9 @@ export function RunCommandDialog(props: {
       <form
         className="dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={`Run command for ${props.itemName}`}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -148,7 +173,6 @@ export function RunCommandDialog(props: {
           maxLength={MAX_RUN_COMMAND + 100}
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
         />
         {error && (
           <p id={errorId} className="dialog-field-hint dialog-field-error" role="alert">
@@ -172,6 +196,10 @@ export function RunCommandDialog(props: {
   )
 }
 
+/**
+ * Asked before removing a task with unsaved work (or that could not be checked), listing it. Cancel is focused, so
+ * Enter loses nothing; Esc cancels.
+ */
 export function RemoveTaskDialog(props: {
   taskName: string
   work: UnsavedWork
@@ -180,25 +208,22 @@ export function RemoveTaskDialog(props: {
 }): React.JSX.Element {
   useRestoreFocus()
   const [deleteBranch, setDeleteBranch] = useState(false)
-  const [busy, setBusy] = useState(false)
-  // The ref blocks a second click that lands before React re-renders with the buttons disabled.
-  const busyRef = useRef(false)
+  const { busy, run } = useSingleRun(() => props.onConfirm(deleteBranch))
   const { uncommittedFiles, unpushedCommits, warning } = props.work
   const hasChanges = uncommittedFiles.length > 0 || unpushedCommits.length > 0
-  const confirm = async (): Promise<void> => {
-    if (busyRef.current) return
-    busyRef.current = true
-    setBusy(true)
-    try {
-      await props.onConfirm(deleteBranch)
-    } finally {
-      busyRef.current = false
-      setBusy(false)
-    }
-  }
   return (
     <div className="overlay">
-      <div className="dialog" role="dialog" aria-label={`Remove ${props.taskName}`}>
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Remove ${props.taskName}`}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || busy) return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
         <h2>Remove “{props.taskName}”?</h2>
         {warning && (
           <div className="dialog-warning" role="alert">
@@ -209,7 +234,7 @@ export function RemoveTaskDialog(props: {
         {hasChanges && <p>This task has work that will be lost:</p>}
         {uncommittedFiles.length > 0 && (
           <>
-            <h3>{uncommittedFiles.length} uncommitted file(s)</h3>
+            <h3>{plural(uncommittedFiles.length, 'uncommitted file')}</h3>
             <ul>
               {uncommittedFiles.map((f) => (
                 <li key={f}>{f}</li>
@@ -219,7 +244,7 @@ export function RemoveTaskDialog(props: {
         )}
         {unpushedCommits.length > 0 && (
           <>
-            <h3>{unpushedCommits.length} unpushed commit(s)</h3>
+            <h3>{plural(unpushedCommits.length, 'unpushed commit')}</h3>
             <ul>
               {unpushedCommits.map((c) => (
                 <li key={c}>{c}</li>
@@ -232,10 +257,10 @@ export function RemoveTaskDialog(props: {
           Also delete the branch
         </label>
         <div className="dialog-actions">
-          <button type="button" onClick={props.onCancel} disabled={busy}>
+          <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="button" className="danger" onClick={() => void confirm()} disabled={busy}>
+          <button type="button" className="danger" onClick={() => void run()} disabled={busy}>
             {busy ? 'Removing…' : 'Remove anyway'}
           </button>
         </div>
@@ -680,7 +705,6 @@ export function CloneRepoDialog(props: {
   )
 }
 
-/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
 /**
  * Writes or edits a review comment's note on `location` (see reviewLocation). With `initial`, saving it unchanged is
  * disabled.
@@ -705,7 +729,9 @@ export function ReviewCommentDialog(props: {
       <form
         className="dialog notes-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={title}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           save()
@@ -723,13 +749,9 @@ export function ReviewCommentDialog(props: {
           onFocus={(e) => editing && e.currentTarget.select()}
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              props.onCancel()
-            } else if (isModEnter(e.nativeEvent)) {
-              e.preventDefault()
-              save()
-            }
+            if (!isModEnter(e.nativeEvent)) return
+            e.preventDefault()
+            save()
           }}
         />
         <div className="notes-meta">
@@ -749,6 +771,7 @@ export function ReviewCommentDialog(props: {
   )
 }
 
+/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
 export function NotesDialog(props: {
   taskName: string
   initial: string
@@ -777,7 +800,9 @@ export function NotesDialog(props: {
       <form
         className="dialog notes-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={`Notes for ${props.taskName}`}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -794,13 +819,9 @@ export function NotesDialog(props: {
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              props.onCancel()
-            } else if (isModEnter(e.nativeEvent)) {
-              e.preventDefault()
-              void save()
-            }
+            if (!isModEnter(e.nativeEvent)) return
+            e.preventDefault()
+            void save()
           }}
         />
         <div className="notes-meta">
@@ -864,7 +885,9 @@ export function BudgetDialog(props: {
       <form
         className="dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={`Budget for ${props.taskName}`}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -882,7 +905,6 @@ export function BudgetDialog(props: {
             placeholder={props.defaultBudget === null ? 'None' : budgetText(props.defaultBudget)}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
           />
         </div>
         {error && (
@@ -920,7 +942,9 @@ interface Prefill {
 /**
  * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
  * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
- * default base. Mod+Enter creates from anywhere in the form, Esc cancels.
+ * default base. Mod+Enter creates from anywhere in the form, Esc cancels. A name main would refuse (no letters or
+ * numbers, or another task's name or branch) is explained under the field, with Create off; a valid one shows its
+ * branch.
  *
  * With templates, a "Template" choice comes first: picking one fills in the fields it sets (all stay editable),
  * and clears what the previous template filled in unless the user has changed it since. A template's base that
@@ -928,11 +952,13 @@ interface Prefill {
  */
 export function NewTaskDialog(props: {
   repoName: string
+  /** The theme's slug, for the branch the name gives (see branchName). */
+  themeSlug?: string
   loadBranches: () => Promise<BranchList>
   /** The task templates to choose from (Settings.taskTemplates). */
   templates?: TaskTemplate[]
-  /** The names of the repo's tasks, archived ones included: what a template's `{n}` counts. */
-  taskNames?: string[]
+  /** The repo's tasks, archived ones included: names taken, and what a template's `{n}` counts. */
+  tasks?: readonly ExistingTask[]
   /** The template chosen when the dialog opens, by name; None when no template has that name. */
   initialTemplate?: string
   /** The name and prompt it opens with (the home composer's), kept as typed when a template is chosen. */
@@ -944,11 +970,12 @@ export function NewTaskDialog(props: {
 }): React.JSX.Element {
   useRestoreFocus()
   const templates = props.templates ?? []
+  const taskNames = (props.tasks ?? []).map((t) => t.name)
   // The loader the dialog opened with: App re-renders (and passes a new function) on every status poll.
   const [loadBranches] = useState(() => props.loadBranches)
   const [initial] = useState(() => {
     const template = templates.find((t) => t.name === props.initialTemplate)
-    const name = template?.taskName ? expandTaskName(template.taskName, props.taskNames ?? [], new Date()) : ''
+    const name = template?.taskName ? expandTaskName(template.taskName, taskNames, new Date()) : ''
     return { template, prefill: { name, prompt: template?.prompt ?? '', baseRef: '' } }
   })
   const [templateName, setTemplateName] = useState(initial.template?.name ?? '')
@@ -965,6 +992,7 @@ export function NewTaskDialog(props: {
   const busyRef = useRef(false)
   const templateId = useId()
   const nameId = useId()
+  const nameHintId = useId()
   const baseId = useId()
   const baseHintId = useId()
   const promptId = useId()
@@ -1004,7 +1032,7 @@ export function NewTaskDialog(props: {
     const nextName = keepName
       ? name
       : template?.taskName
-        ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
+        ? expandTaskName(template.taskName, taskNames, new Date())
         : name === last.name
           ? ''
           : name
@@ -1023,8 +1051,11 @@ export function NewTaskDialog(props: {
     else setMissingBase(null)
   }
 
+  const nameError = newTaskNameError(name, props.tasks ?? [])
+  const slug = slugify(name)
+
   const submit = async (): Promise<void> => {
-    if (busyRef.current || !name.trim()) return
+    if (busyRef.current || !name.trim() || nameError) return
     busyRef.current = true
     setBusy(true)
     const options: NewTaskOptions = {}
@@ -1085,10 +1116,27 @@ export function NewTaskDialog(props: {
           <input
             id={nameId}
             autoFocus
+            aria-describedby={nameHintId}
+            aria-invalid={nameError ? true : undefined}
             placeholder="e.g. fix login bug"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          {nameError ? (
+            <p id={nameHintId} className="dialog-field-hint dialog-field-error" role="alert">
+              {nameError}
+            </p>
+          ) : (
+            <p id={nameHintId} className="dialog-field-hint">
+              {slug && props.themeSlug ? (
+                <>
+                  Branch: <code>{branchName(props.themeSlug, slug)}</code>
+                </>
+              ) : (
+                'Also names the task’s branch and folder.'
+              )}
+            </p>
+          )}
         </div>
         <div className="dialog-field">
           <label htmlFor={baseId}>Base branch</label>
@@ -1150,7 +1198,7 @@ export function NewTaskDialog(props: {
           <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || !name.trim()}>
+          <button type="submit" disabled={busy || !name.trim() || nameError !== null}>
             {busy ? 'Creating…' : 'Create'}
           </button>
         </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BranchList, TaskTemplate } from '../../../shared/types'
@@ -16,6 +16,7 @@ import {
   NewTaskDialog,
   NotesDialog,
   RemoveTaskDialog,
+  ReviewCommentDialog,
   RunCommandDialog,
 } from './Dialogs'
 
@@ -59,6 +60,69 @@ describe('RemoveTaskDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('repo missing')
     await user.click(screen.getByRole('button', { name: 'Remove anyway' }))
     expect(onConfirm).toHaveBeenCalledWith(false)
+  })
+
+  it('focuses Cancel so Enter loses nothing, closes with Esc (not while removing), and counts in words', async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    const onConfirm = vi.fn(() => new Promise<void>((r) => (finish = r)))
+    const onCancel = vi.fn()
+    render(
+      <RemoveTaskDialog
+        taskName="fix"
+        work={{ uncommittedFiles: ['src/login.ts'], unpushedCommits: ['abc1234 wip', 'def5678 more'] }}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    )
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove fix' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(within(dialog).getByRole('heading', { name: '1 uncommitted file' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: '2 unpushed commits' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onConfirm).not.toHaveBeenCalled()
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(2)
+
+    await user.click(screen.getByRole('button', { name: 'Remove anyway' }))
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(2) // removing can't be cancelled
+    finish()
+  })
+})
+
+describe('NameDialog', () => {
+  it('explains a name `validate` refuses as it is typed, with the button and Enter off', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn(async () => {})
+    render(
+      <NameDialog
+        title="Rename theme"
+        placeholder=""
+        initial="Client X"
+        submitLabel="Rename"
+        note="The branch and folder keep their original name."
+        validate={(name) => (name.trim().toLowerCase() === 'acme' ? 'A theme named “Acme” already exists.' : null)}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    )
+    const box = screen.getByRole('textbox', { name: 'Name' })
+    expect(box).toHaveAccessibleDescription('The branch and folder keep their original name.')
+    await user.clear(box)
+    await user.type(box, 'ACME{Enter}')
+    expect(screen.getByRole('alert')).toHaveTextContent('A theme named “Acme” already exists.')
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    expect(box).toHaveAccessibleDescription(
+      'A theme named “Acme” already exists. The branch and folder keep their original name.',
+    )
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled()
+    expect(onSubmit).not.toHaveBeenCalled()
+    await user.type(box, ' Corp{Enter}')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(onSubmit).toHaveBeenCalledWith('ACME Corp')
   })
 })
 
@@ -211,6 +275,19 @@ describe('BudgetDialog', () => {
     expect(onSave).toHaveBeenCalledWith(null)
   })
 
+  it('says to use a dot for cents, and takes an amount written as it is shown ("1,500")', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={onSave} onCancel={vi.fn()} />)
+    const input = screen.getByRole('textbox', { name: 'Budget' })
+    await user.type(input, '12,50')
+    expect(screen.getByRole('alert')).toHaveTextContent('Use a dot for cents, e.g. 12.50.')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    await user.clear(input)
+    await user.type(input, '1,500{Enter}')
+    expect(onSave).toHaveBeenCalledWith(1500)
+  })
+
   it('cancels with Escape', async () => {
     const user = userEvent.setup()
     const onCancel = vi.fn()
@@ -337,6 +414,105 @@ describe('dialogs give focus back when they close', () => {
   })
 })
 
+describe('dialogs cancel with Esc from any of their controls, not only the text field', () => {
+  it.each([
+    [
+      'Name',
+      (onCancel: () => void) => <NameDialog title="New theme" placeholder="" onSubmit={vi.fn()} onCancel={onCancel} />,
+    ],
+    [
+      'RunCommand',
+      (onCancel: () => void) => (
+        <RunCommandDialog itemName="api" kind="repo" initial="" onSave={vi.fn()} onCancel={onCancel} />
+      ),
+    ],
+    [
+      'Budget',
+      (onCancel: () => void) => (
+        <BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={vi.fn()} onCancel={onCancel} />
+      ),
+    ],
+    ['Notes', (onCancel: () => void) => <NotesDialog taskName="t" initial="" onSave={vi.fn()} onCancel={onCancel} />],
+    [
+      'ReviewComment',
+      (onCancel: () => void) => <ReviewCommentDialog location="a.ts:3" onSave={vi.fn()} onCancel={onCancel} />,
+    ],
+  ])('%s', async (_name, dialog) => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(dialog(onCancel))
+    const form = screen.getByRole('dialog')
+    expect(form).toHaveAttribute('aria-modal', 'true')
+    await user.tab() // from the text field to the first button
+    expect(within(form).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NewTaskDialog name', () => {
+  const LIST: BranchList = { default: 'origin/main', branches: ['origin/main'] }
+  const TASKS = [
+    { name: 'fix login bug', slug: 'fix-login-bug' },
+    { name: 'Old idea', slug: 'old-idea', archived: true },
+  ]
+  const name = (): HTMLElement => screen.getByRole('textbox', { name: 'Name' })
+  const create = (): HTMLElement => screen.getByRole('button', { name: 'Create' })
+
+  const renderDialog = (): ReturnType<typeof vi.fn> => {
+    const onSubmit = vi.fn(async () => {})
+    render(
+      <NewTaskDialog
+        repoName="my-api"
+        themeSlug="client-x"
+        loadBranches={async () => LIST}
+        tasks={TASKS}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    )
+    return onSubmit
+  }
+
+  it('shows the branch the name gives as it is typed', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    expect(name()).toHaveAccessibleDescription('Also names the task’s branch and folder.')
+    await user.type(name(), 'Add search!')
+    expect(name()).toHaveAccessibleDescription('Branch: claude/client-x/add-search')
+    expect(name()).not.toHaveAttribute('aria-invalid', 'true')
+    expect(create()).toBeEnabled()
+  })
+
+  it('explains a name main would refuse before anything is created, with Create off', async () => {
+    const user = userEvent.setup()
+    const onSubmit = renderDialog()
+    await user.type(name(), '!!!')
+    expect(screen.getByRole('alert')).toHaveTextContent(/letters or numbers/)
+    expect(name()).toHaveAttribute('aria-invalid', 'true')
+    expect(create()).toBeDisabled()
+
+    await user.clear(name())
+    await user.type(name(), 'Fix Login Bug')
+    expect(name()).toHaveAccessibleDescription('A task named “fix login bug” already exists.')
+    await user.keyboard('{Control>}{Enter}{/Control}{Enter}')
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    await user.clear(name())
+    await user.type(name(), 'fix-login-bug')
+    expect(screen.getByRole('alert')).toHaveTextContent('already uses the branch this name gives (…/fix-login-bug)')
+
+    await user.clear(name())
+    await user.type(name(), 'old idea')
+    expect(screen.getByRole('alert')).toHaveTextContent('A task named “Old idea” already exists (archived).')
+
+    await user.type(name(), ' 2')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(create())
+    expect(onSubmit).toHaveBeenCalledWith('old idea 2', expect.anything(), undefined)
+  })
+})
+
 describe('NewTaskDialog templates', () => {
   const LIST: BranchList = { default: 'origin/main', branches: ['origin/main', 'origin/develop', 'main'] }
   const REVIEW: TaskTemplate = {
@@ -358,7 +534,10 @@ describe('NewTaskDialog templates', () => {
         repoName="my-api"
         loadBranches={async () => LIST}
         templates={[REVIEW, PROMPT_ONLY]}
-        taskNames={['review-1', 'Review-4']}
+        tasks={[
+          { name: 'review-1', slug: 'review-1' },
+          { name: 'Review-4', slug: 'review-4' },
+        ]}
         onSubmit={onSubmit}
         onCancel={vi.fn()}
         {...props}

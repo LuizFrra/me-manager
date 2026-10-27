@@ -143,7 +143,7 @@ describe('App', () => {
     render(<App api={api} />)
     await createRepoAndTask(user)
     await user.click(screen.getByRole('button', { name: 'Remove task fix login bug' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByText('src/login.ts')).toBeInTheDocument()
     expect(removeTask).not.toHaveBeenCalled()
     await user.click(within(dialog).getByRole('button', { name: 'Remove anyway' }))
@@ -259,11 +259,11 @@ describe('App', () => {
     render(<App api={api} />)
     await createRepoAndTask(user)
     await user.click(screen.getByRole('button', { name: 'Remove task fix login bug' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('alert')).toHaveTextContent('repo missing')
     await user.click(within(dialog).getByRole('button', { name: 'Remove anyway' }))
     expect(removeTask).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   })
 
   it('shows backend errors as toasts', async () => {
@@ -1000,28 +1000,43 @@ describe('App rename', () => {
     )
   })
 
+  it('refuses a new theme named like another one, or without letters or numbers, as it is typed', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'New theme' }))
+    await user.type(nameBox(), 'client-x')
+    expect(screen.getByRole('alert')).toHaveTextContent('A theme named “Client X” already exists.')
+    await user.clear(nameBox())
+    await user.type(nameBox(), '***')
+    expect(screen.getByRole('alert')).toHaveTextContent(/letters or numbers/)
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+  })
+
   it('renames a theme', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
     await createTheme(user, 'Client X')
     await user.click(screen.getByRole('button', { name: 'Rename theme Client X' }))
-    expect(screen.getByRole('dialog', { name: 'Rename theme' })).toHaveTextContent(
-      'The branch and folder keep their original name.',
-    )
+    // A theme has no branch of its own: its name is in its tasks' branches and folders.
+    expect(nameBox()).toHaveAccessibleDescription('Its tasks’ branches and folders keep their original names.')
     await user.clear(nameBox())
     await user.type(nameBox(), 'Acme{Enter}')
     expect(await screen.findByRole('button', { name: 'Remove theme Acme' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument()
   })
 
-  it('keeps the dialog open and shows the error for a duplicate name', async () => {
+  it('says a name is taken as it is typed, without sending it', async () => {
     const user = userEvent.setup()
-    render(<App api={repoApi()} />)
+    const api = repoApi()
+    const renameTask = vi.spyOn(api, 'renameTask')
+    render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B')
     await user.click(screen.getByRole('button', { name: 'Rename task task B' }))
     await user.clear(nameBox())
     await user.type(nameBox(), 'TASK A{Enter}')
-    expect(await screen.findByRole('alert')).toHaveTextContent('A task named "TASK A" already exists')
+    expect(screen.getByRole('alert')).toHaveTextContent('A task named “task A” already exists.')
+    expect(renameTask).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'Rename task' })).toBeInTheDocument()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Rename task' })).not.toBeInTheDocument()
@@ -1942,6 +1957,13 @@ describe('App usage', () => {
         'budget-warn',
       )
 
+      // Also from the header's ⋯ menu.
+      await user.click(screen.getByRole('button', { name: 'More actions' }))
+      await user.click(screen.getByRole('menuitem', { name: 'Set budget…' }))
+      const fromHeader = await screen.findByRole('dialog', { name: 'Budget for fix login bug' })
+      expect(within(fromHeader).getByRole('textbox', { name: 'Budget' })).toHaveValue('3.50')
+      await user.keyboard('{Escape}')
+
       await palette('edit budget')
       const again = await screen.findByRole('dialog', { name: 'Budget for fix login bug' })
       await user.clear(within(again).getByRole('textbox', { name: 'Budget' }))
@@ -2116,6 +2138,9 @@ describe('App new task options', () => {
       'main',
     ])
     await user.type(dialog.getByRole('textbox', { name: 'Name' }), 'fix login')
+    expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveAccessibleDescription(
+      'Branch: claude/client-x/fix-login',
+    )
     await user.selectOptions(base, 'origin/develop')
     const prompt = dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })
     expect(prompt).toHaveAttribute('maxLength', '10000')

@@ -18,18 +18,20 @@ import type {
 import { USAGE_PERIODS } from '../../../shared/types'
 import { usageCacheTokens, usageTokens } from '../../../shared/usage'
 import { keepIfEqual } from '../lib/keepIfEqual'
+import { cleanError } from '../lib/toasts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
-import { COST_LABEL, formatCost, formatTokens, SUBSCRIPTION_NOTE } from '../lib/usageFormat'
+import { COST_LABEL, formatCost, formatTokens, PERIOD_LABEL, SUBSCRIPTION_NOTE } from '../lib/usageFormat'
 import { startVisibleInterval } from '../lib/visibleInterval'
 
 /** The report is re-read this often while the view is open. */
 export const USAGE_VIEW_POLL_MS = 10_000
 
-const TOGGLES: Record<UsagePeriod, { label: string; title: string }> = {
-  today: { label: 'Today', title: 'Since midnight' },
-  week: { label: 'This week', title: 'The last 7 days, today included' },
-  month: { label: 'This month', title: 'Since the 1st of this month' },
-  all: { label: 'All time', title: 'Everything in the transcripts Claude Code still keeps' },
+/** What each period covers; the buttons say PERIOD_LABEL, as the header badge does. */
+const PERIOD_TITLE: Record<UsagePeriod, string> = {
+  today: 'Since midnight',
+  week: 'The last 7 days, today included',
+  month: 'Since the 1st of this month',
+  all: 'Everything in the transcripts Claude Code still keeps',
 }
 
 type SortKey = 'name' | 'tokens' | 'cost'
@@ -266,7 +268,7 @@ export function UsageView(props: {
             setReport((prev) => (prev ? keepIfEqual({ ...next, generatedAt: prev.generatedAt })(prev) : next))
             setError(null)
           },
-          (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+          (err: unknown) => setError(cleanError(err)),
         ),
         api.getBudgets().then(
           (next) => setBudgets((prev) => (prev ? keepIfEqual(next)(prev) : next)),
@@ -317,10 +319,10 @@ export function UsageView(props: {
                 key={p}
                 aria-pressed={period === p}
                 className={period === p ? 'active' : undefined}
-                title={TOGGLES[p].title}
+                title={PERIOD_TITLE[p]}
                 onClick={() => setPeriod(p)}
               >
-                {TOGGLES[p].label}
+                {PERIOD_LABEL[p]}
               </button>
             ))}
           </div>
@@ -329,7 +331,11 @@ export function UsageView(props: {
           </button>
         </div>
         <div className="usage-body">
-          {error && <p className="usage-error">Could not read the usage: {error}</p>}
+          {error && (
+            <p className="usage-error" role="alert">
+              Could not read the usage: {error}
+            </p>
+          )}
           {!report && !error && <p className="usage-empty">Reading Claude Code transcripts…</p>}
           {report && total && (
             <>

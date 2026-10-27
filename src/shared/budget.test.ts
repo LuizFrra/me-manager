@@ -84,8 +84,20 @@ describe('budgetFromText', () => {
     expect(budgetFromText('   ')).toEqual({ value: null })
   })
 
+  it('takes thousands separators, as amounts are shown with them ("$100,000")', () => {
+    expect(budgetFromText('1,000')).toEqual({ value: 1000 })
+    expect(budgetFromText('$100,000')).toEqual({ value: 100_000 })
+    expect(budgetFromText('1,234.5')).toEqual({ value: 1234.5 })
+  })
+
+  it('says to use a dot for cents when a comma is used for them', () => {
+    for (const comma of ['12,5', '$5,50', '0,99']) {
+      expect(budgetFromText(comma)).toEqual({ error: 'Use a dot for cents, e.g. 12.50.' })
+    }
+  })
+
   it('explains what it accepts otherwise', () => {
-    for (const bad of ['0', '-5', 'five', '5$', '1e9', '100001', '0.001']) {
+    for (const bad of ['0', '-5', 'five', '5$', '1e9', '100001', '0.001', '1,00,000', '1,0000', '100,001']) {
       expect(budgetFromText(bad)).toEqual({ error: 'Enter an amount from $0.01 to $100,000, or leave it empty.' })
     }
   })
