@@ -11,6 +11,12 @@ describe('folderIndex', () => {
     expect(folderIndex([...paths, 'site/README.markdown'], 'site')).toBe('site/README.markdown')
   })
 
+  it("finds the root's README for the root ('')", () => {
+    expect(folderIndex(paths, '')).toBe('README.md')
+    expect(folderIndex(['docs/README.md', 'index.md'], '')).toBe('index.md')
+    expect(folderIndex(['docs/README.md'], '')).toBeNull()
+  })
+
   it('finds nothing for a folder without one, or a path that is no folder', () => {
     expect(folderIndex(paths, 'src')).toBeNull()
     expect(folderIndex(paths, 'src/app.ts')).toBeNull()

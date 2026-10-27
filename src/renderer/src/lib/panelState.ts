@@ -13,11 +13,23 @@ export interface SearchState {
 export const DEFAULT_SEARCH: SearchState = { query: '', caseSensitive: false, regex: false }
 
 /**
- * Lines to scroll to and mark (a search result's line, a review comment's lines), in the file `path`: shown only
- * while that file is. Each request is a new object, so opening the same lines again scrolls back to them.
+ * Lines to scroll to and mark (a search result's line, a review comment's lines), or a Markdown heading to scroll
+ * to, in the file `path`: shown only while that file is. Each request is a new object, so opening the same lines
+ * again scrolls back to them.
  */
 export interface PanelReveal extends SelectedLines {
   path: string
+  /** A heading's anchor (a link to `doc.md#usage`). */
+  heading?: string
+  /** Where the viewer was scrolled (Back to a document). */
+  scrollTop?: number
+}
+
+/** A file visited before following a link: where to go Back to, and how it was shown. */
+export interface PanelVisit {
+  path: string
+  scrollTop: number
+  mdMode: PanelState['mdMode']
 }
 
 /** What the side panel shows for one target. */
@@ -29,7 +41,7 @@ export interface PanelState {
   search: SearchState
   mdMode: 'view' | 'raw'
   /** Files visited before following Markdown links, most recent last. */
-  history: string[]
+  history: PanelVisit[]
 }
 
 export interface PanelEntry extends PanelState {

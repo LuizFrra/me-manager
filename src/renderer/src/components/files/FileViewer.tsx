@@ -36,12 +36,15 @@ export interface FileViewerProps {
   diffLayout?: DiffLayout
   /** Changes tab: the user picked a layout with the header's Unified / Split toggle. */
   onDiffLayout?: (layout: DiffLayout) => void
-  /** Lines to scroll to and mark (see CodeView, DiffView); a new object scrolls to them again. */
-  reveal?: SelectedLines
+  /**
+   * Lines to scroll to and mark (see CodeView, DiffView), or a Markdown heading to scroll to; a new object scrolls
+   * to them again.
+   */
+  reveal?: SelectedLines & { heading?: string; scrollTop?: number }
   canGoBack: boolean
   onBack: () => void
   onMdMode: (mode: PanelState['mdMode']) => void
-  onOpenLink: (path: string, lines?: LineRange) => void
+  onOpenLink: (path: string, lines?: LineRange, heading?: string) => void
   onOpenFile: (path: string) => void
   onError: (err: unknown) => void
   /**
@@ -65,6 +68,10 @@ interface ViewSelection {
 
 /** How long a copy button says it copied. */
 const COPIED_MS = 1500
+/** How long a restored scroll position follows the content's late growth. */
+const RESTORE_SCROLL_MS = 2000
+/** What the user scrolls with: a restored scroll position stops following the content then. */
+const USER_SCROLL_EVENTS = ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const
 
 export function FileViewer(p: FileViewerProps): React.JSX.Element {
   const { api, target } = p
@@ -108,6 +115,29 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     el.scrollTop = 0
     el.scrollLeft = 0
   }, [selKey])
+  // A scroll position to go back to (Back to a document), applied once its content is shown, and again while the
+  // content grows (a Markdown document's images and diagrams load after it) until the user scrolls.
+  const restored = useRef<object | undefined>(undefined)
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    const top = p.reveal?.scrollTop
+    if (!el || top === undefined || !p.content || restored.current === p.reveal) return
+    restored.current = p.reveal
+    el.scrollTop = top
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      el.scrollTop = top
+    })
+    for (const child of el.children) observer.observe(child)
+    const stop = (): void => {
+      observer.disconnect()
+      clearTimeout(timer)
+      for (const type of USER_SCROLL_EVENTS) el.removeEventListener(type, stop)
+    }
+    const timer = setTimeout(stop, RESTORE_SCROLL_MS)
+    for (const type of USER_SCROLL_EVENTS) el.addEventListener(type, stop, { passive: true })
+    return stop
+  }, [p.reveal, p.content])
   const select: LineSelectProps | undefined = p.onComment && {
     selection: current?.selection ?? null,
     onSelect: (selection, lines) => setViewSel(selection && lines ? { key: selKey, source, selection, lines } : null),
@@ -163,8 +193,8 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   } else if (p.content.kind === 'symlinkToFolder') {
     body = <p className="viewer-message">Symlink to a folder</p>
   } else if (image && (p.content.kind === 'binary' || (p.content.kind === 'text' && p.mdMode === 'view'))) {
-    // An SVG's text says which version it is (an edit may keep its size).
-    const version = p.content.kind === 'text' ? p.content.content : undefined
+    // An SVG's text, or a binary image's modification time, says which version it is (an edit may keep its size).
+    const version = p.content.kind === 'text' ? p.content.content : String(p.content.mtimeMs)
     body = <ImageView key={path} path={path} size={p.content.size} load={loadImage} version={version} />
   } else if (p.content.kind === 'binary') {
     body = <p className="viewer-message">Binary file ({formatSize(p.content.size)})</p>
@@ -185,6 +215,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
               loadImage={loadImage}
               onOpenLink={p.onOpenLink}
               onOpenExternal={openExternal}
+              reveal={p.reveal}
             />
           </div>
         ) : (

@@ -10,7 +10,7 @@ import { useLatestCallback } from '../../lib/useLatestCallback'
 export const SEARCH_DEBOUNCE_MS = 300
 
 export interface SearchViewProps {
-  api: Pick<MeManagerApi, 'searchFiles'>
+  api: Pick<MeManagerApi, 'searchFiles' | 'cancelSearch'>
   target: Target
   state: SearchState
   onState: (s: SearchState) => void
@@ -52,32 +52,46 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
   const resultsRef = useRef<HTMLDivElement>(null)
   // Only the latest search's answer is shown.
   const seq = useRef(0)
+  // A search is running in main: main gives it up for a newer one, but nothing else stops it (up to 10 s of git).
+  const running = useRef(false)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // The query of the last search started: a toggle on the same query searches again without waiting.
   const lastQuery = useRef<string | null>(null)
   // The first search (the tab reopened with a query) doesn't wait either.
   const mounted = useRef(false)
 
+  /** Drops the running search's answer, and stops it in main. */
+  const cancel = useLatestCallback((): void => {
+    seq.current++
+    if (!running.current) return
+    running.current = false
+    api.cancelSearch(target).catch(() => {})
+  })
+
   const run = useLatestCallback((): void => {
     clearTimeout(timer.current)
-    const id = ++seq.current
     if (query.trim() === '') {
+      cancel()
       lastQuery.current = null
       setOutcome(null)
       setBusy(false)
       return
     }
+    const id = ++seq.current
     lastQuery.current = query
+    running.current = true
     setBusy(true)
     api.searchFiles(target, query, { caseSensitive, regex }).then(
       (result) => {
         if (id !== seq.current) return
+        running.current = false
         setOutcome({ kind: 'done', result })
         setCollapsed(new Set())
         setBusy(false)
       },
       (err: unknown) => {
         if (id !== seq.current) return
+        running.current = false
         setOutcome({ kind: 'error', message: cleanError(err) })
         setBusy(false)
       },
@@ -87,17 +101,14 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
   useEffect(() => {
     const now = !mounted.current || lastQuery.current === query || query.trim() === ''
     mounted.current = true
+    // A new query: the last one's search is of no use, even before this one starts.
+    if (!now) cancel()
     timer.current = setTimeout(run, now ? 0 : SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer.current)
-  }, [run, query, caseSensitive, regex, p.reload])
+  }, [run, cancel, query, caseSensitive, regex, p.reload])
 
-  // A stale answer must not land after unmounting.
-  useEffect(
-    () => () => {
-      seq.current++
-    },
-    [],
-  )
+  // A stale answer must not land after unmounting, and a search nobody will see is stopped.
+  useEffect(() => () => cancel(), [cancel])
 
   const { takeFocus } = p
   useEffect(() => {

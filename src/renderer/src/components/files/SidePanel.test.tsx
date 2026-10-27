@@ -12,8 +12,9 @@ interface MdProps {
   source: string
   filePath: string
   loadImage: unknown
-  onOpenLink: (path: string, lines?: { start: number; end: number }) => void
+  onOpenLink: (path: string, lines?: { start: number; end: number }, heading?: string) => void
   onOpenExternal: unknown
+  reveal?: { heading?: string }
 }
 const mdRenders = vi.hoisted(() => [] as MdProps[])
 vi.mock('./MarkdownView', () => ({
@@ -25,6 +26,13 @@ vi.mock('./MarkdownView', () => ({
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('docs')}>folder link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('')}>root link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('docs/guide.md', { start: 2, end: 2 })}>
+          doc line link from {p.filePath}
+        </button>
+        <button onClick={() => p.onOpenLink('docs/guide.md', undefined, 'setup')}>
+          heading link from {p.filePath}
+        </button>
       </div>
     )
   },
@@ -172,7 +180,7 @@ describe('SidePanel', () => {
       listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'blob.bin', 'linked'], truncated: false }),
       readFile: async (_t, path) =>
         path === 'blob.bin'
-          ? { kind: 'binary', size: 2048 }
+          ? { kind: 'binary', size: 2048, mtimeMs: 0 }
           : path === 'big.log'
             ? { kind: 'text', content: 'start', size: 1_500_000, truncated: true }
             : path === 'linked'
@@ -213,6 +221,37 @@ describe('SidePanel', () => {
     expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
   })
 
+  it('goes Back to a rendered document as rendered, after a link opened lines of another one as its text', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'doc line link from README.md' }))
+    await vi.waitFor(() => expect(codeText()).toContain('# Guide'))
+    expect(screen.getByRole('button', { name: 'Raw' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('goes Back to a document where it was scrolled', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await screen.findByText(/MD:# Demo project/)
+    const body = document.querySelector('.viewer-body') as HTMLElement
+    body.scrollTop = 420
+    await user.click(screen.getByRole('button', { name: 'link from README.md' }))
+    expect(await screen.findByText(/MD:# Guide/)).toBeInTheDocument()
+    expect(body.scrollTop).toBe(0)
+    body.scrollTop = 80
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+    expect(body.scrollTop).toBe(420)
+    // Only once: a poll bringing the document again leaves the scroll alone.
+    body.scrollTop = 10
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await act(() => new Promise((r) => setTimeout(r, 0)))
+    expect(body.scrollTop).toBe(10)
+  })
+
   it('opens a Markdown link to lines of a file at those lines, with Back to the document', async () => {
     const user = userEvent.setup()
     render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
@@ -223,6 +262,16 @@ describe('SidePanel', () => {
     expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+  })
+
+  it('opens a Markdown link to a heading of another document at that heading', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'heading link from README.md' }))
+    expect(await screen.findByText(/MD:# Guide/)).toBeInTheDocument()
+    expect(mdRenders.at(-1)?.reveal).toEqual({ path: 'docs/guide.md', heading: 'setup' })
+    // Rendered, not as its source.
+    expect(screen.getByRole('button', { name: 'View' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it("opens a Markdown link to a folder at the folder's README", async () => {
@@ -236,6 +285,29 @@ describe('SidePanel', () => {
     await user.click(await screen.findByRole('button', { name: 'folder link from README.md' }))
     await vi.waitFor(() => expect(readFile).toHaveBeenLastCalledWith(TASK, 'docs/README.md'))
     expect(readFile).not.toHaveBeenCalledWith(TASK, 'docs')
+  })
+
+  it("opens a Markdown link to the root folder at the root's README", async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({
+      listFiles: async () => ({ paths: ['README.md', 'docs/README.md', 'docs/guide.md'], truncated: false }),
+    })
+    const readFile = vi.spyOn(api, 'readFile')
+    render(<Harness api={api} initial={{ selected: 'docs/guide.md' }} />)
+    await screen.findByRole('button', { name: 'docs' })
+    await user.click(await screen.findByRole('button', { name: 'root link from docs/guide.md' }))
+    await vi.waitFor(() => expect(readFile).toHaveBeenLastCalledWith(TASK, 'README.md'))
+    expect(screen.getByRole('button', { name: '← Back' })).toBeInTheDocument()
+  })
+
+  it('stays on the document when a link to the root folder has no README to open', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({ listFiles: async () => ({ paths: ['docs/guide.md'], truncated: false }) })
+    render(<Harness api={api} initial={{ selected: 'docs/guide.md' }} />)
+    await screen.findByRole('button', { name: 'docs' })
+    await user.click(await screen.findByRole('button', { name: 'root link from docs/guide.md' }))
+    expect(screen.getByTestId('markdown')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
   })
 
   it('passes MarkdownView the same callbacks when the panel re-renders', async () => {
@@ -546,6 +618,23 @@ describe('SidePanel', () => {
     expect(listChanges).toHaveBeenCalledTimes(2)
   })
 
+  it('re-reads the file list once when the open file goes missing, not on every poll after', async () => {
+    vi.useFakeTimers()
+    const api = createMockApi({ readFile: async () => ({ kind: 'missing' }) })
+    const listFiles = vi.spyOn(api, 'listFiles')
+    render(<Harness api={api} pollMs={1_000} initial={{ selected: 'gone.ts' }} />)
+    const flush = (ms = 0): Promise<void> =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    await flush()
+    expect(screen.getByText('File no longer exists')).toBeInTheDocument()
+    // The first load, and once more as the file is missing.
+    expect(listFiles).toHaveBeenCalledTimes(2)
+    await flush(4_000)
+    expect(listFiles).toHaveBeenCalledTimes(2)
+  })
+
   it('re-reads everything on ⟳', async () => {
     const user = userEvent.setup()
     const api = createMockApi()
@@ -617,6 +706,44 @@ describe('SidePanel', () => {
         expect(search).toHaveBeenLastCalledWith(TASK, 'greet', { caseSensitive: true, regex: true }),
       )
       expect(screen.getByRole('button', { name: 'Match case' })).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('cancels the running search when the query is cleared, changed or the tab is left', async () => {
+      const user = userEvent.setup()
+      // Searches that never finish, like a long one in a large repo.
+      const api = createMockApi({ searchFiles: () => new Promise(() => {}) })
+      const cancel = vi.spyOn(api, 'cancelSearch')
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      const input = await screen.findByRole('textbox', { name: 'Search in files' })
+      await user.type(input, 'slow{Enter}')
+      expect(cancel).not.toHaveBeenCalled()
+      await user.keyboard('{Escape}')
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(cancel).toHaveBeenCalledWith(TASK)
+      expect(screen.queryByText('Searching…')).not.toBeInTheDocument()
+      // Typing a new query gives up the last one at once, not when the next search starts.
+      await user.type(input, 'slow{Enter}')
+      await user.type(input, 'er')
+      expect(cancel).toHaveBeenCalledTimes(2)
+      // Leaving the tab gives up the search that started meanwhile; none is running afterwards.
+      await act(() => new Promise((r) => setTimeout(r, 400)))
+      await user.click(screen.getByRole('tab', { name: 'Files' }))
+      expect(cancel).toHaveBeenCalledTimes(3)
+      await user.click(screen.getByRole('tab', { name: 'Search' }))
+      await user.click(screen.getByRole('tab', { name: 'Files' }))
+      expect(cancel).toHaveBeenCalledTimes(4)
+    })
+
+    it('cancels nothing once the search is over', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      const cancel = vi.spyOn(api, 'cancelSearch')
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      await user.type(await screen.findByRole('textbox', { name: 'Search in files' }), 'greet{Enter}')
+      await screen.findByText(/results? in/)
+      await user.keyboard('{Escape}')
+      await user.click(screen.getByRole('tab', { name: 'Files' }))
+      expect(cancel).not.toHaveBeenCalled()
     })
 
     it('shows an invalid pattern inline, and says when results were capped', async () => {

@@ -2,7 +2,14 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { headingSlug, isExternal, lineFragment, linkFragment, resolveRelative } from '../../lib/markdown/paths'
+import {
+  headingSlug,
+  isExternal,
+  isRootLink,
+  lineFragment,
+  linkFragment,
+  resolveRelative,
+} from '../../lib/markdown/paths'
 import type { LineRange } from '../../lib/review'
 import { MermaidBlock } from './MermaidBlock'
 import { useLatestCallback } from '../../lib/useLatestCallback'
@@ -12,9 +19,14 @@ export interface MarkdownViewProps {
   /** Path of the .md file relative to the root, used to resolve relative links/images. */
   filePath: string
   loadImage: (relPath: string) => Promise<string | null>
-  /** Called with a root-relative path for links to other files inside the root, and the lines a `#L12` names. */
-  onOpenLink: (relPath: string, lines?: LineRange) => void
+  /**
+   * Called with a root-relative path for links to other files inside the root ('' for the root folder), and the
+   * lines a `#L12` names or the heading (its anchor, lowercased) any other `#fragment` names.
+   */
+  onOpenLink: (relPath: string, lines?: LineRange, heading?: string) => void
   onOpenExternal: (url: string) => void
+  /** A heading (its anchor) to scroll to, once shown; a new object scrolls to it again. */
+  reveal?: { heading?: string }
 }
 
 type HastNode = NonNullable<ExtraProps['node']>
@@ -55,6 +67,12 @@ const rehypePlugins: React.ComponentProps<typeof Markdown>['rehypePlugins'] = [
   [rehypeHighlight, { plainText: ['mermaid'] }],
   rehypeHeadingSlugs,
 ]
+
+/** Scrolls to the heading with this anchor (see rehypeHeadingSlugs) inside `body`, if there is one. */
+function scrollToHeading(body: HTMLElement | null, slug: string | undefined): void {
+  const heading = [...(body?.querySelectorAll<HTMLElement>('[data-slug]') ?? [])].find((h) => h.dataset.slug === slug)
+  if (heading && typeof heading.scrollIntoView === 'function') heading.scrollIntoView({ block: 'start' })
+}
 
 /** A link handled here (no href, so the browser can never follow it): a click or Enter calls `go`. */
 function ActionLink(p: { title?: string; go: () => void; children: React.ReactNode }): React.JSX.Element {
@@ -153,6 +171,7 @@ export const MarkdownView = memo(function MarkdownView({
   loadImage: loadImageProp,
   onOpenLink: onOpenLinkProp,
   onOpenExternal: onOpenExternalProp,
+  reveal,
 }: MarkdownViewProps): React.JSX.Element {
   const loadImage = useLatestCallback(loadImageProp)
   const onOpenLink = useLatestCallback(onOpenLinkProp)
@@ -180,24 +199,25 @@ export const MarkdownView = memo(function MarkdownView({
         if (href?.startsWith('#')) {
           // A heading of this document.
           const slug = linkFragment(href)?.toLowerCase()
-          const go = (): void => {
-            const heading = [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-slug]') ?? [])].find(
-              (h) => h.dataset.slug === slug,
-            )
-            if (heading && typeof heading.scrollIntoView === 'function') heading.scrollIntoView({ block: 'start' })
-          }
           return (
-            <ActionLink title={title ?? href} go={go}>
+            <ActionLink title={title ?? href} go={() => scrollToHeading(bodyRef.current, slug)}>
               {children}
             </ActionLink>
           )
         }
-        const path = href ? resolveRelative(filePath, href) : null
-        if (path) {
-          // `file.ts#L12-L20` opens the file at those lines.
-          const lines = lineFragment(linkFragment(href as string))
+        // '' for the root folder (`../` from docs/), which opens at its README like any folder.
+        const path = href ? (resolveRelative(filePath, href) ?? (isRootLink(filePath, href) ? '' : null)) : null
+        if (path !== null) {
+          // `file.ts#L12-L20` opens the file at those lines, `other.md#usage` at that heading.
+          const fragment = linkFragment(href as string)
+          const lines = lineFragment(fragment)
+          const go = (): void => {
+            if (lines) onOpenLink(path, lines)
+            else if (fragment) onOpenLink(path, undefined, fragment.toLowerCase())
+            else onOpenLink(path)
+          }
           return (
-            <ActionLink title={title ?? path} go={() => (lines ? onOpenLink(path, lines) : onOpenLink(path))}>
+            <ActionLink title={title ?? (path || '/')} go={go}>
               {children}
             </ActionLink>
           )
@@ -223,6 +243,12 @@ export const MarkdownView = memo(function MarkdownView({
     }),
     [filePath, loadImage, onOpenLink, onOpenExternal],
   )
+
+  // Once per request: a poll bringing a new version of the document doesn't scroll back to the heading.
+  const heading = reveal?.heading
+  useEffect(() => {
+    if (heading) scrollToHeading(bodyRef.current, heading)
+  }, [reveal, heading])
 
   return (
     <div className="markdown-body" ref={bodyRef}>

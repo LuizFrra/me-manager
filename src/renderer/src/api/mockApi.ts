@@ -338,7 +338,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     readFile: async (_target, path) => {
       const text = DEMO_FILES[path]
       if (text !== undefined) return { kind: 'text', content: text, size: new Blob([text]).size, truncated: false }
-      if (path in DEMO_BINARY) return { kind: 'binary', size: DEMO_BINARY[path] }
+      if (path in DEMO_BINARY) return { kind: 'binary', size: DEMO_BINARY[path], mtimeMs: 0 }
       return { kind: 'missing' }
     },
     readImage: async (_target, path) => {
@@ -347,6 +347,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         ? `data:image/svg+xml;base64,${btoa(DEMO_FILES[path])}`
         : null
     },
+    cancelSearch: async () => {},
     // The demo files, matched like main matches a folder (JavaScript patterns).
     searchFiles: async (_target, query, options) => {
       const pattern = searchPattern(checkSearchQuery(query), normalizeSearchOptions(options))

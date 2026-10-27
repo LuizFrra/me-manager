@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { headingSlug, isExternal, linkFragment, lineFragment, resolveRelative } from './paths'
+import { headingSlug, isExternal, isRootLink, linkFragment, lineFragment, resolveRelative } from './paths'
 
 describe('resolveRelative', () => {
   it('resolves a sibling file', () => {
@@ -48,6 +48,24 @@ describe('resolveRelative', () => {
     expect(resolveRelative('a.md', 'a%00.md')).toBeNull()
     expect(resolveRelative('docs/a.md', '..')).toBeNull()
     expect(resolveRelative('a.md', './')).toBeNull()
+  })
+})
+
+describe('isRootLink', () => {
+  it('is true for a link to the root folder itself', () => {
+    expect(isRootLink('docs/a.md', '..')).toBe(true)
+    expect(isRootLink('docs/a.md', '../#usage')).toBe(true)
+    expect(isRootLink('docs/deep/a.md', '/')).toBe(true)
+    expect(isRootLink('a.md', './')).toBe(true)
+  })
+
+  it('is false for anything else', () => {
+    expect(isRootLink('docs/a.md', '../README.md')).toBe(false)
+    expect(isRootLink('a.md', '..')).toBe(false)
+    expect(isRootLink('a.md', '#top')).toBe(false)
+    expect(isRootLink('a.md', '')).toBe(false)
+    expect(isRootLink('a.md', 'https://example.com/')).toBe(false)
+    expect(isRootLink('a.md', '//example.com/')).toBe(false)
   })
 })
 

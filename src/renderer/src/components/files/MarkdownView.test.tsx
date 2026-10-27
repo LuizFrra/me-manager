@@ -130,7 +130,7 @@ describe('MarkdownView', () => {
     it('opens a relative link from the keyboard', () => {
       const { props } = setup('[next](../README.md#top)')
       fireEvent.keyDown(screen.getByText('next'), { key: 'Enter' })
-      expect(props.onOpenLink).toHaveBeenCalledWith('README.md')
+      expect(props.onOpenLink).toHaveBeenCalledWith('README.md', undefined, 'top')
     })
 
     it('calls onOpenExternal for an external link and does not navigate', () => {
@@ -198,7 +198,44 @@ describe('MarkdownView', () => {
       click(screen.getByText('code'))
       expect(props.onOpenLink).toHaveBeenCalledWith('src/app.ts', { start: 10, end: 12 })
       click(screen.getByText('doc'))
+      expect(props.onOpenLink).toHaveBeenLastCalledWith('docs/b.md', undefined, 'usage')
+    })
+
+    it('opens a link to a heading of another file with its slug, lowercased and decoded', () => {
+      const { props } = setup('[a](b.md#Getting%20Started) [b](b.md#) [c](b.md)')
+      click(screen.getByText('a'))
+      expect(props.onOpenLink).toHaveBeenLastCalledWith('docs/b.md', undefined, 'getting started')
+      click(screen.getByText('b'))
       expect(props.onOpenLink).toHaveBeenLastCalledWith('docs/b.md')
+      click(screen.getByText('c'))
+      expect(props.onOpenLink).toHaveBeenLastCalledWith('docs/b.md')
+    })
+
+    it('scrolls to the heading it is asked to reveal, again for each new request', () => {
+      const scroll = vi.fn()
+      const original = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scroll
+      try {
+        const reveal = { heading: 'usage' }
+        const { container, props, rerender } = setup('# Title\n\n## Usage\n', { reveal })
+        expect(scroll).toHaveBeenCalledTimes(1)
+        expect(scroll.mock.contexts.at(-1)).toBe(container.querySelector('h2'))
+        rerender(<MarkdownView {...props} source={'# Title\n\n## Usage\n\nmore\n'} />)
+        expect(scroll).toHaveBeenCalledTimes(1)
+        rerender(<MarkdownView {...props} reveal={{ heading: 'title' }} />)
+        expect(scroll).toHaveBeenCalledTimes(2)
+        expect(scroll.mock.contexts.at(-1)).toBe(container.querySelector('h1'))
+      } finally {
+        HTMLElement.prototype.scrollIntoView = original
+      }
+    })
+
+    it('opens a link to the root folder (at its README, see SidePanel)', () => {
+      const { props } = setup('[home](../) [top](/)')
+      click(screen.getByText('home'))
+      expect(props.onOpenLink).toHaveBeenLastCalledWith('')
+      click(screen.getByText('top'))
+      expect(props.onOpenLink).toHaveBeenCalledTimes(2)
     })
 
     it('renders a link escaping the root as plain text', () => {

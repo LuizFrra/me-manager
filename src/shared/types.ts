@@ -545,6 +545,8 @@ export interface MeManagerApi {
    * Binary files are skipped. Rejects an empty or too long query, and an invalid regular expression.
    */
   searchFiles(target: Target, query: string, options?: SearchOptions): Promise<SearchResult>
+  /** Gives up the target's running searchFiles, if any (it rejects): its query was cleared or changed. */
+  cancelSearch(target: Target): Promise<void>
   /** Repo tasks only; rejects for folders. `uncommitted`: only what a commit would take (vs HEAD). */
   listChanges(target: Target, scope?: ChangeScope): Promise<ChangeList>
   /**
@@ -635,7 +637,8 @@ export interface FileList {
 
 export type FileContent =
   | { kind: 'text'; content: string; size: number; truncated: boolean }
-  | { kind: 'binary'; size: number }
+  /** `mtimeMs` tells versions apart: an image overwritten with the same size is shown again. */
+  | { kind: 'binary'; size: number; mtimeMs: number }
   /** A symlink inside the root that points to a folder (listed as an entry, but there is nothing to show). */
   | { kind: 'symlinkToFolder' }
   | { kind: 'missing' }

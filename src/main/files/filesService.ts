@@ -389,7 +389,7 @@ export class FilesService implements FilesApi {
     }
     if (!s.isFile()) throw new Error('Not a regular file')
     const head = await readHead(p.abs, Math.min(s.size, MAX_TEXT_BYTES))
-    if (looksBinary(head)) return { kind: 'binary', size: s.size }
+    if (looksBinary(head)) return { kind: 'binary', size: s.size, mtimeMs: s.mtimeMs }
     const truncated = s.size > MAX_TEXT_BYTES
     // stream: true holds back a multi-byte character cut in half at the limit instead of emitting U+FFFD.
     const content = new TextDecoder('utf-8').decode(head, { stream: truncated })

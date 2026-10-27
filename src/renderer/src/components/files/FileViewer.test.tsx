@@ -32,7 +32,7 @@ function renderViewer(
   return { readImage, ...render(<FileViewer {...props} />) }
 }
 
-const binary = (size: number): FileContent => ({ kind: 'binary', size })
+const binary = (size: number, mtimeMs = 1): FileContent => ({ kind: 'binary', size, mtimeMs })
 
 describe('FileViewer images', () => {
   it('shows a png through readImage, with its size and, once loaded, its dimensions', async () => {
@@ -172,6 +172,36 @@ describe('FileViewer images', () => {
     expect(await screen.findByRole('img', { name: 'icon.svg' })).toHaveAttribute('src', 'data:image/png;base64,v4')
   })
 
+  it('reads a binary image again when it is overwritten with one of the same size', async () => {
+    let n = 0
+    const readImage = vi.fn(async () => `data:image/bmp;base64,v${++n}`)
+    const api = { readImage, openExternal: async () => {} }
+    const at = (content: FileContent): React.JSX.Element => (
+      <FileViewer
+        api={api}
+        target={TARGET}
+        tab="files"
+        path="icon.bmp"
+        content={content}
+        mdMode="view"
+        canGoBack={false}
+        onBack={() => {}}
+        onMdMode={() => {}}
+        onOpenLink={() => {}}
+        onOpenFile={() => {}}
+        onError={() => {}}
+      />
+    )
+    const { rerender } = render(at(binary(100, 1000)))
+    expect(await screen.findByRole('img', { name: 'icon.bmp' })).toHaveAttribute('src', 'data:image/bmp;base64,v1')
+    rerender(at(binary(100, 1000)))
+    expect(readImage).toHaveBeenCalledTimes(1)
+    rerender(at(binary(100, 2000)))
+    await vi.waitFor(() =>
+      expect(screen.getByRole('img', { name: 'icon.bmp' })).toHaveAttribute('src', 'data:image/bmp;base64,v2'),
+    )
+  })
+
   it('shows no image for a deleted one', () => {
     const change: ChangedFile = { path: 'old.png', status: 'D', added: 0, removed: 0, binary: true }
     const { readImage } = renderViewer({ tab: 'changes', path: 'old.png', change, diff: 'Binary files differ' })
@@ -209,6 +239,45 @@ describe('FileViewer scrolling', () => {
     body.scrollTop = 300
     rerender(<FileViewer {...props({ tab: 'changes', path: 'b.ts', diff: '' })} />)
     expect(body.scrollTop).toBe(0)
+  })
+
+  it('goes back to a scroll position once the content is in, following its late growth until the user scrolls', () => {
+    const observers: (() => void)[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb)
+        }
+        observe(): void {
+          // the callbacks are called by hand below
+        }
+        disconnect(): void {
+          observers.length = 0
+        }
+      },
+    )
+    try {
+      const reveal = { scrollTop: 300 }
+      const { container, rerender } = render(<FileViewer {...props({ path: 'a.md', reveal })} />)
+      const body = container.querySelector('.viewer-body') as HTMLElement
+      expect(body.scrollTop).toBe(0)
+      rerender(<FileViewer {...props({ path: 'a.md', reveal, content: text('a\n') })} />)
+      expect(body.scrollTop).toBe(300)
+      // The browser clamped it to a shorter document; images then loaded.
+      body.scrollTop = 120
+      observers.forEach((cb) => cb())
+      expect(body.scrollTop).toBe(300)
+      fireEvent.wheel(body)
+      body.scrollTop = 250
+      observers.forEach((cb) => cb())
+      expect(body.scrollTop).toBe(250)
+      // A new version of the file doesn't go back again.
+      rerender(<FileViewer {...props({ path: 'a.md', reveal, content: text('a changed\n') })} />)
+      expect(body.scrollTop).toBe(250)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 
