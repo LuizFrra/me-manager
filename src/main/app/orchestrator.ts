@@ -1268,6 +1268,12 @@ export class Orchestrator implements AppService {
     }
   }
 
+  async cancelSearch(target: Target): Promise<void> {
+    const key = targetKey(target)
+    this.searches.get(key)?.abort()
+    this.searches.delete(key)
+  }
+
   async listChanges(target: Target, scope: ChangeScope = 'base'): Promise<ChangeList> {
     const { root, baseRef } = this.resolveTask(target)
     // Against HEAD, the merge-base is HEAD itself: what a commit would take.

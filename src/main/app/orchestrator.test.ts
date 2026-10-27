@@ -1544,6 +1544,29 @@ describe('Orchestrator: file viewer', () => {
     expect(signals.map((s) => s.aborted)).toEqual([true, false, false, false])
   })
 
+  it("cancels a target's running search on request, and only that one", async () => {
+    const { orch, files, taskTarget, folderTarget } = await withTaskAndFolder()
+    const signals: AbortSignal[] = []
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    files.searchFiles = async (_root, _isRepo, query, _options, signal) => {
+      signals.push(signal as AbortSignal)
+      await gate
+      if (signal?.aborted) throw new Error(`cancelled ${query}`)
+      return { matches: [], truncated: false }
+    }
+    const search = orch.searchFiles(taskTarget, 'a')
+    const other = orch.searchFiles(folderTarget, 'b')
+    await new Promise((r) => setTimeout(r, 0))
+    await orch.cancelSearch(taskTarget)
+    expect(signals.map((s) => s.aborted)).toEqual([true, false])
+    release()
+    await expect(search).rejects.toThrow('cancelled a')
+    await expect(other).resolves.toEqual({ matches: [], truncated: false })
+    // Nothing running: nothing to do.
+    await expect(orch.cancelSearch(taskTarget)).resolves.toBeUndefined()
+  })
+
   it('refuses to search a missing root, a repo without a task or an unknown target', async () => {
     const { orch, files, deps, themeId, repoId, taskTarget } = await withTaskAndFolder()
     await expect(orch.searchFiles({ themeId, itemId: repoId }, 'x')).rejects.toThrow('Choose a task to open')

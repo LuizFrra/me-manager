@@ -346,6 +346,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         ? `data:image/svg+xml;base64,${btoa(DEMO_FILES[path])}`
         : null
     },
+    cancelSearch: async () => {},
     // The demo files, matched like main matches a folder (JavaScript patterns).
     searchFiles: async (_target, query, options) => {
       const pattern = searchPattern(checkSearchQuery(query), normalizeSearchOptions(options))

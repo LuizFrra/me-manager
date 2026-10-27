@@ -53,6 +53,7 @@ export const INVOKE_METHODS = [
   'readFile',
   'readImage',
   'searchFiles',
+  'cancelSearch',
   'listChanges',
   'fileDiff',
   'openInEditor',

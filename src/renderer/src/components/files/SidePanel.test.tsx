@@ -619,6 +619,44 @@ describe('SidePanel', () => {
       expect(screen.getByRole('button', { name: 'Match case' })).toHaveAttribute('aria-pressed', 'true')
     })
 
+    it('cancels the running search when the query is cleared, changed or the tab is left', async () => {
+      const user = userEvent.setup()
+      // Searches that never finish, like a long one in a large repo.
+      const api = createMockApi({ searchFiles: () => new Promise(() => {}) })
+      const cancel = vi.spyOn(api, 'cancelSearch')
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      const input = await screen.findByRole('textbox', { name: 'Search in files' })
+      await user.type(input, 'slow{Enter}')
+      expect(cancel).not.toHaveBeenCalled()
+      await user.keyboard('{Escape}')
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(cancel).toHaveBeenCalledWith(TASK)
+      expect(screen.queryByText('Searching…')).not.toBeInTheDocument()
+      // Typing a new query gives up the last one at once, not when the next search starts.
+      await user.type(input, 'slow{Enter}')
+      await user.type(input, 'er')
+      expect(cancel).toHaveBeenCalledTimes(2)
+      // Leaving the tab gives up the search that started meanwhile; none is running afterwards.
+      await act(() => new Promise((r) => setTimeout(r, 400)))
+      await user.click(screen.getByRole('tab', { name: 'Files' }))
+      expect(cancel).toHaveBeenCalledTimes(3)
+      await user.click(screen.getByRole('tab', { name: 'Search' }))
+      await user.click(screen.getByRole('tab', { name: 'Files' }))
+      expect(cancel).toHaveBeenCalledTimes(4)
+    })
+
+    it('cancels nothing once the search is over', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi()
+      const cancel = vi.spyOn(api, 'cancelSearch')
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      await user.type(await screen.findByRole('textbox', { name: 'Search in files' }), 'greet{Enter}')
+      await screen.findByText(/results? in/)
+      await user.keyboard('{Escape}')
+      await user.click(screen.getByRole('tab', { name: 'Files' }))
+      expect(cancel).not.toHaveBeenCalled()
+    })
+
     it('shows an invalid pattern inline, and says when results were capped', async () => {
       const user = userEvent.setup()
       let fail = true

@@ -532,6 +532,8 @@ export interface MeManagerApi {
    * Binary files are skipped. Rejects an empty or too long query, and an invalid regular expression.
    */
   searchFiles(target: Target, query: string, options?: SearchOptions): Promise<SearchResult>
+  /** Gives up the target's running searchFiles, if any (it rejects): its query was cleared or changed. */
+  cancelSearch(target: Target): Promise<void>
   /** Repo tasks only; rejects for folders. `uncommitted`: only what a commit would take (vs HEAD). */
   listChanges(target: Target, scope?: ChangeScope): Promise<ChangeList>
   /**
