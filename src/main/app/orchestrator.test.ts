@@ -1685,6 +1685,12 @@ describe('Orchestrator: usage', () => {
     expect(usage.calls[2]).toEqual(usage.calls[0])
   })
 
+  it('names the folder the usage is read from', async () => {
+    const { orch, usage } = await setup()
+    usage.projectsDir = '/custom/claude/projects'
+    expect(await orch.getUsageFolder()).toBe('/custom/claude/projects')
+  })
+
   it('works for a target whose folder is gone, but not for a repo without a task', async () => {
     const ctx = await withTargets()
     ctx.deps.pathExists = () => false

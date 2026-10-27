@@ -242,7 +242,7 @@ function Budgets(props: { budgets: BudgetReport; report: UsageReport; onOpenSett
  * a time, with the budgets. Costs are estimates at API prices. Esc, the ✕ button or a click outside closes it.
  */
 export function UsageView(props: {
-  api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets'>
+  api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'>
   onClose: () => void
   onOpenTarget: (target: Target) => void
   /** Closes the view for the Settings dialog, where the budgets are set. */
@@ -253,6 +253,8 @@ export function UsageView(props: {
   const [report, setReport] = useState<UsageReport | null>(null)
   const [budgets, setBudgets] = useState<BudgetReport | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Where the transcripts are read from (CLAUDE_CONFIG_DIR moves it); asked once.
+  const [folder, setFolder] = useState<string | null>(null)
   const [period, setPeriod] = useState<UsagePeriod>('month')
   const [sort, setSort] = useState<Sort>({ key: 'cost', desc: true })
   useRestoreFocus()
@@ -281,6 +283,9 @@ export function UsageView(props: {
     void load()
     return startVisibleInterval(load, USAGE_VIEW_POLL_MS)
   }, [load])
+  useEffect(() => {
+    api.getUsageFolder().then(setFolder, () => {})
+  }, [api])
 
   const onSort = (key: SortKey): void =>
     setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: key !== 'name' }))
@@ -434,7 +439,14 @@ export function UsageView(props: {
         </div>
         <p className="usage-footnote">
           * {COST_LABEL}. {SUBSCRIPTION_NOTE} API prices as of {PRICING_SOURCE_DATE}. Counted from Claude Code&apos;s
-          transcripts in ~/.claude/projects, which it prunes after a while (cleanupPeriodDays).
+          transcripts
+          {folder ? (
+            <>
+              {' '}
+              in <code>{folder}</code>
+            </>
+          ) : null}
+          , which it prunes after a while (cleanupPeriodDays).
         </p>
       </div>
     </div>

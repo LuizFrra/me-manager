@@ -597,6 +597,8 @@ export interface MeManagerApi {
    * Reads no usage at all while no budget is set.
    */
   getBudgets(): Promise<BudgetReport>
+  /** The folder the usage is read from: `projects` in the Claude config folder (CLAUDE_CONFIG_DIR or ~/.claude). */
+  getUsageFolder(): Promise<string>
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void

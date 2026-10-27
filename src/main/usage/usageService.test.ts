@@ -120,6 +120,10 @@ describe('paths', () => {
     expect(claudeConfigDir({ CLAUDE_CONFIG_DIR: '/custom/claude' })).toBe('/custom/claude')
     expect(claudeConfigDir({})).toMatch(/\.claude$/)
   })
+
+  it('names the folder it reads the transcripts from', () => {
+    expect(new UsageService({ claudeDir: '/custom/claude' }).projectsDir).toBe(join('/custom/claude', 'projects'))
+  })
 })
 
 describe('parseUsageLine', () => {

@@ -414,6 +414,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     getUsage: async (target) => demoUsage(targetKey(target)),
     getUsageReport: async () => demoUsageReport(state),
     getBudgets: async () => demoBudgets(state, settings),
+    getUsageFolder: async () => '/home/me/.claude/projects',
     ptyWrite: () => {},
     ptyResize: () => {},
     pathForFile: (file) => `/demo/${file.name}`,

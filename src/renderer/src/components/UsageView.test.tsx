@@ -25,10 +25,11 @@ const report: UsageReport = {
   ],
 }
 
-function renderView(budgets: BudgetReport, usage: UsageReport = report): void {
-  const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets'> = {
+function renderView(budgets: BudgetReport, usage: UsageReport = report, folder = '/home/u/.claude/projects'): void {
+  const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'> = {
     getUsageReport: async () => usage,
     getBudgets: async () => budgets,
+    getUsageFolder: async () => folder,
   }
   render(<UsageView api={api} onClose={vi.fn()} onOpenTarget={vi.fn()} onOpenSettings={vi.fn()} />)
 }
@@ -69,7 +70,8 @@ describe('UsageView budgets', () => {
 
 describe('UsageView errors', () => {
   it("shows why the usage can't be read without the IPC wrapper's prefix", async () => {
-    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets'> = {
+    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'> = {
+      getUsageFolder: async () => '/home/u/.claude/projects',
       getUsageReport: async () => {
         throw new Error(
           "Error invoking remote method 'api:getUsageReport': Error: EACCES: permission denied, scandir '/home/u/.claude/projects'",
@@ -98,5 +100,13 @@ describe('UsageView periods', () => {
     await user.click(periods[1])
     expect(periods[1]).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$1.71')
+  })
+})
+
+describe('UsageView footnote', () => {
+  it('names the folder the transcripts are read from (CLAUDE_CONFIG_DIR when set)', async () => {
+    renderView({ daily: null, tasks: {} }, report, '/custom/claude/projects')
+    expect(await screen.findByText('/custom/claude/projects')).toBeInTheDocument()
+    expect(screen.queryByText(/~\/\.claude/)).not.toBeInTheDocument()
   })
 })
