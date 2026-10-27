@@ -5,6 +5,7 @@ import type {
   PullRequestResult,
   FileContent,
   FileList,
+  ProfileLogin,
   SearchOptions,
   SearchResult,
   TabInfo,
@@ -22,6 +23,7 @@ import type {
   LauncherApi,
   NewWindowOptions,
   OrchestratorDeps,
+  ProfileFoldersApi,
   PromptFilesApi,
   PtyApi,
   SendTextOptions,
@@ -543,6 +545,18 @@ export class FakePromptFiles implements PromptFilesApi {
   }
 }
 
+/** `login[dir]` for each folder (`notSignedIn` otherwise); `created` lists the folders made, in order. */
+export class FakeProfileFolders implements ProfileFoldersApi {
+  login: Record<string, ProfileLogin> = {}
+  created: string[] = []
+  async loginState(dir: string): Promise<ProfileLogin> {
+    return this.login[dir] ?? 'notSignedIn'
+  }
+  async create(dir: string): Promise<void> {
+    this.created.push(dir)
+  }
+}
+
 /** Returns `byRoot[root]` for each root and `byGroup[name]` for each group (empty usage otherwise). */
 export class FakeUsage implements UsageApi {
   projectsDir = '/home/me/.claude/projects'
@@ -577,6 +591,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   launcher: FakeLauncher
   usage: FakeUsage
   promptFiles: FakePromptFiles
+  profileFolders: FakeProfileFolders
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
@@ -589,6 +604,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const usage = new FakeUsage()
   const ui = new MemoryUiStore()
   const promptFiles = new FakePromptFiles()
+  const profileFolders = new FakeProfileFolders()
   const deps: OrchestratorDeps = {
     store,
     git,
@@ -604,7 +620,8 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     worktreesRoot: '/wt',
     pathExists: () => true,
     defaultClaudeDir: '/home/me/.claude',
+    profileFolders,
     ...overrides,
   }
-  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles }
+  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles, profileFolders }
 }

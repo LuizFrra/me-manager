@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -36,6 +36,7 @@ import {
   type TaskGitStatus,
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
+import { MAX_PROFILES } from '../../shared/profiles'
 import { makeDeps, MemoryStore } from './fakes'
 import * as m from '../store/mutations'
 
@@ -1403,6 +1404,141 @@ describe('Orchestrator: Claude profiles', () => {
     await expect(ctx.orch.setThemeProfile('nope', 'p-work')).rejects.toThrow()
     await expect(ctx.orch.setTaskProfile(themeId, repoId, 'nope', 'p-work')).rejects.toThrow()
     expect(ctx.store.saved).toEqual([])
+  })
+
+  it('lists every profile, Default first, with its billing and login state', async () => {
+    const ctx = await withProfiles()
+    ctx.profileFolders.login = { '/home/me/.claude': 'signedIn', '/home/me/.claude-work': 'keyOrGateway' }
+    await ctx.settings.update({ defaultProfileBilling: 'company' })
+    await expect(ctx.orch.listProfiles()).resolves.toEqual([
+      {
+        id: 'default',
+        name: 'Default',
+        configDir: '/home/me/.claude',
+        billing: 'company',
+        isDefault: true,
+        login: 'signedIn',
+      },
+      { ...work, isDefault: false, login: 'keyOrGateway' },
+      { ...home, isDefault: false, login: 'notSignedIn' },
+    ])
+  })
+
+  it('adds a profile, creating its folder, with ~/ for the home folder', async () => {
+    const ctx = await withProfiles()
+    const list = await ctx.orch.addProfile({ name: '  Client ', configDir: '~/.claude-client/', billing: 'company' })
+    const configDir = join(homedir(), '.claude-client')
+    expect(ctx.profileFolders.created).toEqual([configDir])
+    const added = ctx.settings.get().profiles[2]
+    expect(added).toEqual({
+      id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      name: 'Client',
+      configDir,
+      billing: 'company',
+    })
+    expect(list.map((p) => p.name)).toEqual(['Default', 'Work', 'Home', 'Client'])
+    expect(list[3]).toEqual({ ...added, isDefault: false, login: 'notSignedIn' })
+
+    await ctx.orch.addProfile({ name: 'Other', configDir: '/srv//claude/other/', billing: 'own' })
+    expect(ctx.profileFolders.created.at(-1)).toBe('/srv/claude/other')
+    expect(ctx.settings.get().profiles[3]).toMatchObject({ configDir: '/srv/claude/other' })
+  })
+
+  it('refuses a new profile named like another or in a folder another has, creating nothing', async () => {
+    const ctx = await withProfiles()
+    const add = (name: string, configDir: string, billing: unknown = 'own'): Promise<unknown> =>
+      ctx.orch.addProfile({ name, configDir, billing } as never)
+    await expect(add('work', '/home/me/.claude-x')).rejects.toThrow('Another account is named “Work”')
+    await expect(add(' default ', '/home/me/.claude-x')).rejects.toThrow('Another account is named “Default”')
+    await expect(add('X', '/home/me/.claude-work/')).rejects.toThrow('“Work” already uses this folder')
+    await expect(add('X', '/home/me/.claude')).rejects.toThrow('“Default” already uses this folder')
+    await expect(add('X', 'claude-x')).rejects.toThrow('Choose an absolute folder')
+    await expect(add(' ', '/home/me/.claude-x')).rejects.toThrow('Enter a name')
+    await expect(add('X', '/home/me/.claude-x', 'mine')).rejects.toThrow('Choose who pays for this account')
+    await expect(ctx.orch.addProfile(null as never)).rejects.toThrow('Enter a name')
+    expect(ctx.profileFolders.created).toEqual([])
+    expect(ctx.settings.get().profiles).toEqual([work, home])
+  })
+
+  it('refuses a profile past the most there can be', async () => {
+    const ctx = await withProfiles()
+    for (let i = ctx.settings.get().profiles.length; i < MAX_PROFILES; i++) {
+      await ctx.orch.addProfile({ name: `P${i}`, configDir: `/p/${i}`, billing: 'own' })
+    }
+    await expect(ctx.orch.addProfile({ name: 'One more', configDir: '/p/more', billing: 'own' })).rejects.toThrow(
+      `At most ${MAX_PROFILES} Claude accounts`,
+    )
+    expect(ctx.profileFolders.created).not.toContain('/p/more')
+  })
+
+  it("renames a profile and changes its billing, never its folder, and Default's billing only", async () => {
+    const ctx = await withProfiles()
+    let list = await ctx.orch.updateProfile('p-work', { name: ' Company ' })
+    expect(list[1]).toMatchObject({ ...work, name: 'Company' })
+    list = await ctx.orch.updateProfile('p-work', { billing: 'own', configDir: '/elsewhere' } as never)
+    expect(list[1]).toMatchObject({ ...work, name: 'Company', billing: 'own' })
+    // Its own name, in other case, is no clash.
+    expect((await ctx.orch.updateProfile('p-home', { name: 'HOME' }))[2].name).toBe('HOME')
+    list = await ctx.orch.updateProfile('default', { billing: 'company' })
+    expect(list[0]).toMatchObject({ id: 'default', name: 'Default', billing: 'company' })
+    expect(ctx.settings.get()).toMatchObject({
+      defaultProfileBilling: 'company',
+      profiles: [
+        { ...work, name: 'Company', billing: 'own' },
+        { ...home, name: 'HOME' },
+      ],
+    })
+
+    await expect(ctx.orch.updateProfile('default', { name: 'Mine' })).rejects.toThrow("Default can't be renamed")
+    await expect(ctx.orch.updateProfile('p-work', { name: 'home' })).rejects.toThrow('Another account is named “HOME”')
+    await expect(ctx.orch.updateProfile('p-work', { name: 'default' })).rejects.toThrow('named “Default”')
+    await expect(ctx.orch.updateProfile('p-work', { name: '' })).rejects.toThrow('Enter a name')
+    await expect(ctx.orch.updateProfile('p-work', { billing: 'x' } as never)).rejects.toThrow('Choose who pays')
+    await expect(ctx.orch.updateProfile('p-gone', { name: 'X' })).rejects.toThrow('Claude account not found')
+    expect(ctx.settings.get().profiles[0]).toEqual({ ...work, name: 'Company', billing: 'own' })
+  })
+
+  it('removes a profile no theme or task uses, leaving its folder alone', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const list = await ctx.orch.removeProfile('p-home')
+    expect(list.map((p) => p.id)).toEqual(['default', 'p-work'])
+    expect(ctx.settings.get().profiles).toEqual([work])
+    await expect(ctx.orch.removeProfile('default')).rejects.toThrow("Default can't be removed")
+    await expect(ctx.orch.removeProfile('p-home')).rejects.toThrow('Claude account not found')
+  })
+
+  it('refuses to remove a profile a theme or a task uses, archived ones too, naming up to three', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', taskProfile: 'p-work' })
+    const { themeId, repoId } = ctx
+    await expect(ctx.orch.removeProfile('p-work')).rejects.toThrow('Used by Client X, Client X › my-api › fix')
+    const archived = { ...fixTask, id: 'task-old', name: 'old', slug: 'old', archivedAt: '2026-02-01T00:00:00.000Z' }
+    const other = { ...fixTask, id: 'task-new', name: 'new', slug: 'new' }
+    let s = m.addTask(m.addTask(await ctx.orch.getState(), themeId, repoId, archived), themeId, repoId, other)
+    s = m.addTheme(s, 'Personal')
+    const personalId = s.themes[1].id
+    s = m.setThemeProfile(m.setThemeProfile(s, themeId, null), personalId, 'p-home')
+    for (const id of [fixTask.id, 'task-old', 'task-new']) s = m.setTaskProfile(s, themeId, repoId, id, 'p-home')
+    await ctx.store.save(s)
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    await expect(orch.removeProfile('p-home')).rejects.toThrow(
+      'Used by Client X › my-api › fix, Client X › my-api › old, Client X › my-api › new, …',
+    )
+    expect(ctx.settings.get().profiles).toEqual([work, home])
+    // Used by nothing once they are all back to Default.
+    s = m.setThemeProfile(s, personalId, null)
+    for (const id of [fixTask.id, 'task-old', 'task-new']) s = m.setTaskProfile(s, themeId, repoId, id, null)
+    await ctx.store.save(s)
+    const after = new Orchestrator(ctx.deps)
+    await after.init()
+    await expect(after.removeProfile('p-home')).resolves.toHaveLength(2)
+  })
+
+  it('starts and lists profiles with a theme or task on a profile that is gone', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-gone', taskProfile: 'p-gone-too' })
+    await expect(ctx.orch.listProfiles()).resolves.toHaveLength(3)
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toBeUndefined() // Default
   })
 })
 

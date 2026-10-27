@@ -2,8 +2,12 @@ import {
   MAX_COMMIT_MESSAGE,
   MAX_TASK_NOTES,
   MAX_TASK_PROMPT,
+  PROFILE_BILLINGS,
   type AppState,
+  type ClaudeProfile,
   type MeManagerApi,
+  type ProfileBilling,
+  type ProfileStatus,
   type SearchMatch,
   type Settings,
   type TabInfo,
@@ -29,7 +33,13 @@ import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { moveActiveTask, moveEntry } from '../../../shared/reorder'
 import { normalizeBudget } from '../../../shared/budget'
-import { allProfiles } from '../../../shared/profiles'
+import {
+  allProfiles,
+  DEFAULT_PROFILE_ID,
+  MAX_PROFILES,
+  normalizeConfigDir,
+  profileError,
+} from '../../../shared/profiles'
 import { demoBudgets, demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
 
@@ -124,6 +134,30 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     if (profileId !== null && !allProfiles(settings, DEMO_CLAUDE_DIR).some((p) => p.id === profileId))
       throw new Error('Claude account not found')
   }
+
+  /** The demo's profiles: Default signed in, the ones added not (yet). */
+  const profiles = (): ProfileStatus[] =>
+    allProfiles(settings, DEMO_CLAUDE_DIR).map((p) => ({
+      ...p,
+      isDefault: p.id === DEFAULT_PROFILE_ID,
+      login: p.id === DEFAULT_PROFILE_ID ? 'signedIn' : 'notSignedIn',
+    }))
+  const checked = (error: string | null): void => {
+    if (error) throw new Error(error)
+  }
+  const checkBilling = (billing: unknown): void => {
+    if (!PROFILE_BILLINGS.includes(billing as ProfileBilling)) throw new Error('Choose who pays for this account')
+  }
+  /** What uses the profile, as main names it when it refuses to remove one. */
+  const profileUsers = (id: string): string[] =>
+    state.themes.flatMap((t) => [
+      ...(t.profileId === id ? [t.name] : []),
+      ...t.items.flatMap((i) =>
+        i.kind === 'repo'
+          ? i.tasks.filter((k) => k.profileId === id).map((k) => `${t.name} › ${i.name} › ${k.name}`)
+          : [],
+      ),
+    ])
 
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
     const next = clone(state)
@@ -305,6 +339,50 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (profileId === null) delete task.profileId
         else task.profileId = profileId
       }),
+    listProfiles: async () => profiles(),
+    // Checked like main; `~/` is the demo's home folder.
+    addProfile: async ({ name, configDir, billing }) => {
+      const dir = configDir.trim().replace(/^~\//, '/home/demo/')
+      checked(profileError({ name, configDir: dir }, profiles()))
+      checkBilling(billing)
+      if (settings.profiles.length >= MAX_PROFILES) throw new Error(`At most ${MAX_PROFILES} Claude accounts`)
+      const profile = { id: id(), name: name.trim(), configDir: normalizeConfigDir(dir), billing }
+      settings = { ...settings, profiles: [...settings.profiles, profile] }
+      return profiles()
+    },
+    updateProfile: async (profileId, { name, billing }) => {
+      const profile = profiles().find((p) => p.id === profileId)
+      if (!profile) throw new Error('Claude account not found')
+      if (billing !== undefined) checkBilling(billing)
+      if (profile.isDefault) {
+        if (name !== undefined) throw new Error("Default can't be renamed")
+        if (billing) settings = { ...settings, defaultProfileBilling: billing }
+        return profiles()
+      }
+      if (name !== undefined) {
+        checked(
+          profileError(
+            { name, configDir: profile.configDir },
+            profiles().filter((p) => p.id !== profileId),
+          ),
+        )
+      }
+      const edited = (p: ClaudeProfile): ClaudeProfile => ({
+        ...p,
+        name: name?.trim() ?? p.name,
+        billing: billing ?? p.billing,
+      })
+      settings = { ...settings, profiles: settings.profiles.map((p) => (p.id === profileId ? edited(p) : p)) }
+      return profiles()
+    },
+    removeProfile: async (profileId) => {
+      if (!profiles().some((p) => p.id === profileId)) throw new Error('Claude account not found')
+      if (profileId === DEFAULT_PROFILE_ID) throw new Error("Default can't be removed")
+      const users = profileUsers(profileId)
+      if (users.length > 0) throw new Error(`Used by ${users.slice(0, 3).join(', ')}${users.length > 3 ? ', …' : ''}`)
+      settings = { ...settings, profiles: settings.profiles.filter((p) => p.id !== profileId) }
+      return profiles()
+    },
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: async (themeId, repoId, taskId) => ({
       state: await edit(themeId, (t) => {

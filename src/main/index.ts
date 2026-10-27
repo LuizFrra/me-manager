@@ -28,6 +28,7 @@ import {
   usageCacheFile,
   worktreesRoot,
 } from './paths'
+import { ProfileFolders } from './profileFolders'
 import { PromptFiles } from './promptFiles'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
@@ -155,6 +156,7 @@ async function bootstrap(): Promise<void> {
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
     defaultClaudeDir: claudeConfigDir(),
+    profileFolders: new ProfileFolders(),
   })
   await orchestrator.init()
   started = orchestrator

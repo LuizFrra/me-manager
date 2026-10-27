@@ -6,6 +6,7 @@ import type {
   FileContent,
   FileList,
   MeManagerApi,
+  ProfileLogin,
   PullRequestResult,
   SearchOptions,
   SearchResult,
@@ -259,6 +260,14 @@ export interface FilesApi {
   fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string>
 }
 
+/** Claude profile folders (see shared/profiles.ts): only what is there is looked at, never a file's contents. */
+export interface ProfileFoldersApi {
+  /** See ProfileLogin. Never rejects: what can't be read counts as not there. */
+  loginState(dir: string): Promise<ProfileLogin>
+  /** `mkdir -p`, private to the user; nothing is put in it. Resolves when it is there already. */
+  create(dir: string): Promise<void>
+}
+
 export interface SettingsApi {
   /** The current settings (loaded at startup). */
   get(): Settings
@@ -338,4 +347,5 @@ export interface OrchestratorDeps {
   pathExists: (path: string) => boolean
   /** The Default Claude profile's folder: $CLAUDE_CONFIG_DIR or ~/.claude (see shared/profiles.ts). */
   defaultClaudeDir: string
+  profileFolders: ProfileFoldersApi
 }

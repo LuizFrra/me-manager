@@ -7,6 +7,7 @@ import {
   MAX_COMMIT_MESSAGE,
   MAX_TASK_PROMPT,
   MAX_TRANSCRIPT_BYTES,
+  PROFILE_BILLINGS,
 } from '../../shared/types'
 import type {
   AppState,
@@ -24,7 +25,11 @@ import type {
   Item,
   FileList,
   LiveStatus,
+  NewProfile,
   NewTaskOptions,
+  ProfileBilling,
+  ProfilePatch,
+  ProfileStatus,
   PullRequestResult,
   PushResult,
   RemoveTaskResult,
@@ -49,7 +54,14 @@ import type {
   UsageTargetReport,
 } from '../../shared/types'
 import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
-import { allProfiles, DEFAULT_PROFILE_ID, effectiveProfileId } from '../../shared/profiles'
+import {
+  allProfiles,
+  DEFAULT_PROFILE_ID,
+  effectiveProfileId,
+  MAX_PROFILES,
+  normalizeConfigDir,
+  profileError,
+} from '../../shared/profiles'
 import { builtInClaudeFlags, effectiveClaudeFlags } from '../../shared/settings'
 import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
@@ -60,7 +72,7 @@ import { findDevUrls, MAX_DEV_URLS } from '../../shared/devUrls'
 import { mapLimit } from '../concurrency'
 import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries, WindowActivity } from '../contracts'
 import { baseBranchName } from '../git/gh'
-import { taskWorktreePath } from '../paths'
+import { expandHome, taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
 import * as m from '../store/mutations'
 import { isRecentlyActive, looksWaiting } from '../tmux/activity'
@@ -232,6 +244,13 @@ export const ARCHIVE_REFUSAL = 'Commit or discard the changes first'
 /** Refuses the target's sessions, worktree and git: an archived task has neither, until it is restored. */
 function assertNotArchived(task: Task): void {
   if (isArchived(task)) throw new Error(`"${task.name}" is archived: restore it first`)
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** A ProfileBilling from the renderer, or a refusal. */
+function checkBilling(billing: unknown): asserts billing is ProfileBilling {
+  if (!PROFILE_BILLINGS.includes(billing as ProfileBilling)) throw new Error('Choose who pays for this account')
 }
 
 const STATE_QUEUE = 'state'
@@ -446,7 +465,7 @@ export class Orchestrator implements AppService {
   private profileFor(target: Target): ClaudeProfile {
     const theme = m.getTheme(this.state, target.themeId)
     const task = target.taskId ? m.getTask(this.state, target.themeId, target.itemId, target.taskId) : undefined
-    const profiles = allProfiles(this.deps.settings.get(), this.deps.defaultClaudeDir)
+    const profiles = this.profiles()
     const { id } = effectiveProfileId(profiles, theme, task)
     return profiles.find((p) => p.id === id)!
   }
@@ -894,9 +913,106 @@ export class Orchestrator implements AppService {
 
   /** Refuses an id no profile has (null, for none, is fine). */
   private assertProfile(profileId: string | null): void {
-    if (profileId === null) return
-    const profiles = allProfiles(this.deps.settings.get(), this.deps.defaultClaudeDir)
-    if (!profiles.some((p) => p.id === profileId)) throw new Error('Claude account not found')
+    if (profileId !== null) this.getProfile(profileId)
+  }
+
+  private profiles(): ClaudeProfile[] {
+    return allProfiles(this.deps.settings.get(), this.deps.defaultClaudeDir)
+  }
+
+  private getProfile(id: string): ClaudeProfile {
+    const profile = this.profiles().find((p) => p.id === id)
+    if (!profile) throw new Error('Claude account not found')
+    return profile
+  }
+
+  async listProfiles(): Promise<ProfileStatus[]> {
+    return Promise.all(
+      this.profiles().map(async (p) => ({
+        ...p,
+        isDefault: p.id === DEFAULT_PROFILE_ID,
+        login: await this.deps.profileFolders.loginState(p.configDir),
+      })),
+    )
+  }
+
+  /**
+   * Profiles change in the state queue, so that removeProfile's check that nothing uses one and setThemeProfile's
+   * and setTaskProfile's that it exists see each other's changes.
+   */
+  async addProfile(input: NewProfile): Promise<ProfileStatus[]> {
+    await this.exclusive(async () => {
+      const raw: Partial<Record<keyof NewProfile, unknown>> = isRecord(input) ? input : {}
+      const name = typeof raw.name === 'string' ? raw.name : ''
+      const configDir = typeof raw.configDir === 'string' ? expandHome(raw.configDir.trim()) : ''
+      const error = profileError({ name, configDir }, this.profiles())
+      if (error) throw new Error(error)
+      checkBilling(raw.billing)
+      const { profiles } = this.deps.settings.get()
+      if (profiles.length >= MAX_PROFILES) throw new Error(`At most ${MAX_PROFILES} Claude accounts`)
+      const profile: ClaudeProfile = {
+        id: randomUUID(),
+        name: name.trim(),
+        configDir: normalizeConfigDir(configDir),
+        billing: raw.billing,
+      }
+      await this.deps.profileFolders.create(profile.configDir)
+      await this.deps.settings.update({ profiles: [...profiles, profile] })
+    })
+    return this.listProfiles()
+  }
+
+  async updateProfile(id: string, patch: ProfilePatch): Promise<ProfileStatus[]> {
+    await this.exclusive(async () => {
+      const raw: Partial<Record<keyof ProfilePatch, unknown>> = isRecord(patch) ? patch : {}
+      const { billing } = raw
+      if (billing !== undefined) checkBilling(billing)
+      const profile = this.getProfile(id)
+      if (id === DEFAULT_PROFILE_ID) {
+        if (raw.name !== undefined) throw new Error("Default can't be renamed")
+        if (billing !== undefined) await this.deps.settings.update({ defaultProfileBilling: billing })
+        return
+      }
+      const name = raw.name === undefined ? profile.name : typeof raw.name === 'string' ? raw.name.trim() : ''
+      // Checked only when it changes, so a billing change goes through whatever a hand edit did to the names.
+      if (raw.name !== undefined) {
+        const error = profileError(
+          { name, configDir: profile.configDir },
+          this.profiles().filter((p) => p.id !== id),
+        )
+        if (error) throw new Error(error)
+      }
+      const next = { ...profile, name, billing: billing ?? profile.billing }
+      const profiles = this.deps.settings.get().profiles.map((p) => (p.id === id ? next : p))
+      await this.deps.settings.update({ profiles })
+    })
+    return this.listProfiles()
+  }
+
+  async removeProfile(id: string): Promise<ProfileStatus[]> {
+    await this.exclusive(async () => {
+      this.getProfile(id)
+      if (id === DEFAULT_PROFILE_ID) throw new Error("Default can't be removed")
+      const users = this.profileUsers(id)
+      if (users.length > 0) throw new Error(`Used by ${users.slice(0, 3).join(', ')}${users.length > 3 ? ', …' : ''}`)
+      const profiles = this.deps.settings.get().profiles.filter((p) => p.id !== id)
+      await this.deps.settings.update({ profiles })
+    })
+    return this.listProfiles()
+  }
+
+  /** The themes (`Theme`) and tasks, archived ones too (`Theme › Repo › Task`), set to the profile `id`. */
+  private profileUsers(id: string): string[] {
+    const users: string[] = []
+    for (const theme of this.state.themes) {
+      if (theme.profileId === id) users.push(theme.name)
+      for (const item of theme.items) {
+        if (item.kind !== 'repo') continue
+        for (const task of item.tasks)
+          if (task.profileId === id) users.push(`${theme.name} › ${item.name} › ${task.name}`)
+      }
+    }
+    return users
   }
 
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {

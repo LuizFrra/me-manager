@@ -235,6 +235,44 @@ describe('createMockApi', () => {
     expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, null))).not.toHaveProperty('profileId')
   })
 
+  it('adds, edits and removes Claude profiles like main', async () => {
+    const api = createMockApi()
+    expect(await api.listProfiles()).toEqual([
+      {
+        id: 'default',
+        name: 'Default',
+        configDir: '/home/demo/.claude',
+        billing: 'own',
+        isDefault: true,
+        login: 'signedIn',
+      },
+    ])
+    let list = await api.addProfile({ name: ' Work ', configDir: '~/.claude-work', billing: 'company' })
+    expect(list[1]).toMatchObject({
+      name: 'Work',
+      configDir: '/home/demo/.claude-work',
+      billing: 'company',
+      isDefault: false,
+      login: 'notSignedIn',
+    })
+    const workId = list[1].id
+    await expect(api.addProfile({ name: 'work', configDir: '/x', billing: 'own' })).rejects.toThrow('named “Work”')
+    await expect(api.addProfile({ name: 'X', configDir: '/home/demo/.claude', billing: 'own' })).rejects.toThrow(
+      '“Default” already uses this folder',
+    )
+    list = await api.updateProfile(workId, { name: 'Company', billing: 'own' })
+    expect(list[1]).toMatchObject({ name: 'Company', billing: 'own', configDir: '/home/demo/.claude-work' })
+    expect((await api.updateProfile('default', { billing: 'company' }))[0].billing).toBe('company')
+    await expect(api.updateProfile('default', { name: 'Mine' })).rejects.toThrow("Default can't be renamed")
+
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    await api.setThemeProfile(themeId, workId)
+    await expect(api.removeProfile(workId)).rejects.toThrow('Used by Client X')
+    await expect(api.removeProfile('default')).rejects.toThrow("Default can't be removed")
+    await api.setThemeProfile(themeId, null)
+    expect((await api.removeProfile(workId)).map((p) => p.id)).toEqual(['default'])
+  })
+
   it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {
     const api = createMockApi()
     const themeId = (await api.createTheme('Client X')).themes[0].id

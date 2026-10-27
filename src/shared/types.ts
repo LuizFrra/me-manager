@@ -309,6 +309,33 @@ export interface ClaudeProfile {
 }
 
 /**
+ * Whether a profile's folder holds a login, from which files are there (never what is in them): `signedIn` with a
+ * credentials file, `keyOrGateway` when its settings.json sets `apiKeyHelper` or `env.ANTHROPIC_BASE_URL`,
+ * `unknown` on macOS without either (Claude Code keeps the login in the Keychain there), `notSignedIn` otherwise,
+ * and `folderMissing` when the folder is gone.
+ */
+export type ProfileLogin = 'signedIn' | 'keyOrGateway' | 'notSignedIn' | 'unknown' | 'folderMissing'
+
+/** What MeManagerApi.addProfile takes. */
+export interface NewProfile {
+  name: string
+  configDir: string
+  billing: ProfileBilling
+}
+
+/** What MeManagerApi.updateProfile changes: what is left out stays. */
+export interface ProfilePatch {
+  name?: string
+  billing?: ProfileBilling
+}
+
+/** A Claude profile as Settings lists it (see MeManagerApi.listProfiles). */
+export interface ProfileStatus extends ClaudeProfile {
+  isDefault: boolean
+  login: ProfileLogin
+}
+
+/**
  * Whether each built-in Claude flag applies to the sessions the app starts, once the user's own arguments
  * (Settings.claudeArgs) are counted: a toggle is moot when those arguments set the option themselves
  * (`--permission-mode acceptEdits` keeps permissions on), and they can turn it on with the toggle off.
@@ -494,6 +521,20 @@ export interface MeManagerApi {
   setThemeProfile(themeId: string, profileId: string | null): Promise<AppState>
   /** Sets the task's own Claude profile, as setThemeProfile; null removes it, so the theme's applies. */
   setTaskProfile(themeId: string, repoId: string, taskId: string, profileId: string | null): Promise<AppState>
+  /** Every Claude profile, Default first, with its login state (see ProfileLogin). */
+  listProfiles(): Promise<ProfileStatus[]>
+  /**
+   * Adds a Claude profile: `configDir` is absolute or starts with `~/` (the home folder), and is created, empty,
+   * when missing. Refused as profileError says (a name or folder another profile has), and past MAX_PROFILES.
+   */
+  addProfile(input: NewProfile): Promise<ProfileStatus[]>
+  /** Renames a profile or changes who pays for it; its folder never changes. Default's billing only. */
+  updateProfile(id: string, patch: ProfilePatch): Promise<ProfileStatus[]>
+  /**
+   * Removes a profile from the app; its folder is left as it is. Refused for Default, and while a theme or task
+   * (archived ones too) uses it: the message names them.
+   */
+  removeProfile(id: string): Promise<ProfileStatus[]>
   /**
    * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
    * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.

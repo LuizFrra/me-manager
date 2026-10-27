@@ -27,3 +27,6 @@ export function taskWorktreePath(
 ): string {
   return join(root, themeSlug, repoSlug, taskSlug)
 }
+
+/** `~/…` as a path in `home` (the user's home folder by default); any other path as it is. */
+export const expandHome = (dir: string, home = homedir()): string => (dir.startsWith('~/') ? home + dir.slice(1) : dir)
