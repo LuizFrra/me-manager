@@ -180,6 +180,34 @@ button:disabled {
 .sidebar-rail-spacer {
   flex: 1;
 }
+/* On the rail's toggle: sessions waiting for the user (their count), or finished unseen (a dot). */
+.sidebar-rail button {
+  position: relative;
+}
+.rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.rail-badge.waiting {
+  top: 1px;
+  right: 1px;
+  width: auto;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  background: var(--waiting);
+}
 .sidebar {
   display: flex;
   flex-direction: column;

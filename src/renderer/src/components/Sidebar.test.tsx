@@ -132,6 +132,40 @@ describe('Sidebar header and tree', () => {
   })
 })
 
+describe('Sidebar rail', () => {
+  const rail = (patch: Partial<SidebarProps>): RenderResult =>
+    renderSidebar({ rail: true, onToggleSidebar: vi.fn(), ...patch })
+
+  it('says on its Show sidebar button how many sessions wait for the user, and how many finished unseen', () => {
+    const status: LiveStatus = {
+      running: ['fix', 'docs', 'notes'],
+      missing: [],
+      activity: { fix: 'waiting', docs: 'waiting', notes: 'idle' },
+    }
+    rail({ status, unread: new Set(['notes']) })
+    const toggle = screen.getByRole('button', { name: 'Show sidebar, 2 waiting for you, 1 finished' })
+    expect(toggle.querySelector('.rail-badge')).toHaveTextContent('2')
+    expect(toggle).toHaveAttribute('title', 'Show sidebar (Ctrl+Shift+B): 2 waiting for you, 1 finished')
+  })
+
+  it('marks finished sessions alone with a dot, and nothing when all is quiet', () => {
+    const { unmount } = rail({ unread: new Set(['fix']) })
+    const toggle = screen.getByRole('button', { name: 'Show sidebar, 1 finished' })
+    expect(toggle.querySelector('.rail-badge')).toHaveTextContent('')
+    unmount()
+    rail({})
+    expect(screen.getByRole('button', { name: 'Show sidebar' }).querySelector('.rail-badge')).toBeNull()
+  })
+
+  it('is the same Sidebar landmark as the full sidebar', () => {
+    const { unmount } = rail({})
+    expect(screen.getByRole('navigation', { name: 'Sidebar' })).toHaveClass('sidebar-rail')
+    unmount()
+    renderSidebar()
+    expect(screen.getByRole('navigation', { name: 'Sidebar' })).not.toHaveClass('sidebar-rail')
+  })
+})
+
 describe('Sidebar keyboard navigation', () => {
   const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
   const navState = appState(theme('Client', [repo('api', [task('fix'), task('docs'), archived]), folder('notes')]))

@@ -27,6 +27,7 @@ import {
   type TaskGitStatus,
 } from '../../../shared/types'
 import type { BulkAction } from '../lib/bulk'
+import { waitingTargets } from '../lib/attention'
 import { gitBadges, plural } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
@@ -501,16 +502,27 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     }
   }
 
-  if (p.rail)
+  if (p.rail) {
+    // The rows' marks are hidden in the rail: its toggle says what waits for the user and what finished unseen.
+    const waiting = waitingTargets(p.state, p.status).length
+    const finished = p.unread?.size ?? 0
+    const notes = [waiting > 0 && `${waiting} waiting for you`, finished > 0 && `${finished} finished`].filter(Boolean)
     return (
       <nav className="sidebar sidebar-rail" aria-label="Sidebar" inert={p.inert}>
         {p.onToggleSidebar && (
           <button
-            aria-label="Show sidebar"
-            title={`Show sidebar (${shortcutLabel('sidebar')})`}
+            aria-label={['Show sidebar', ...notes].join(', ')}
+            title={`Show sidebar (${shortcutLabel('sidebar')})${notes.length > 0 ? `: ${notes.join(', ')}` : ''}`}
             onClick={p.onToggleSidebar}
           >
             <PanelLeft {...ICON} size={18} />
+            {waiting > 0 ? (
+              <span className="rail-badge waiting" aria-hidden="true">
+                {waiting}
+              </span>
+            ) : (
+              finished > 0 && <span className="rail-badge" aria-hidden="true" />
+            )}
           </button>
         )}
         {p.onNewTask && (
@@ -536,11 +548,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
         </button>
       </nav>
     )
+  }
 
   return (
     <nav
       ref={navRef}
       className="sidebar"
+      aria-label="Sidebar"
       inert={p.inert}
       onKeyDown={(e) => {
         // Esc anywhere in the sidebar clears the selection; the filter's Esc clears the filter only.
