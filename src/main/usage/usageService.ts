@@ -1,5 +1,5 @@
-import type { Dirent } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
+import { statSync, type Dirent, type Stats } from 'node:fs'
+import { open, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import { messageCost, totalTokens, type TokenCounts } from '../../shared/pricing'
@@ -18,8 +18,13 @@ export const MAX_TRACKED_FILES = 20_000
 const MAX_SCAN_DEPTH = 4
 /** Calls closer together than this reuse the last scan instead of stat-ing every transcript again. */
 const DEFAULT_MIN_REFRESH_MS = 1_000
-/** Transcripts stat-ed (and, when changed, read) at the same time by a scan. */
-export const STAT_CONCURRENCY = 16
+/**
+ * Transcripts stat-ed by a scan before it lets other work run. Synchronously: a stat through the thread pool costs
+ * several times the CPU of the stat itself, and every scan checks every transcript.
+ */
+export const STAT_SLICE = 128
+/** Changed transcripts read at the same time by a scan. */
+export const READ_CONCURRENCY = 16
 /** Claude Code shortens project folder names longer than this and appends a hash. */
 const MAX_ENCODED_LENGTH = 200
 
@@ -513,10 +518,25 @@ export class UsageService implements UsageApi {
       this.generation++
       this.mergedStale = true
     }
-    // Concurrently: one stat at a time would make a scan of thousands of transcripts as slow as their sum.
-    await mapLimit(found, STAT_CONCURRENCY, async (path) => {
+    const changed: { path: string; st: Stats }[] = []
+    for (let i = 0; i < found.length; i += STAT_SLICE) {
+      if (i > 0) await new Promise((resolve) => setImmediate(resolve))
+      for (const path of found.slice(i, i + STAT_SLICE)) {
+        let st: Stats | undefined
+        try {
+          st = statSync(path, { throwIfNoEntry: false })
+        } catch {
+          // Unreadable: keep what was read before, try again next time.
+        }
+        const known = this.files.get(path)
+        if (!st || (known && st.ino === known.ino && st.size === known.size && st.mtimeMs === known.mtimeMs)) continue
+        changed.push({ path, st })
+      }
+    }
+    // Concurrently: one read at a time would make a first scan of thousands of transcripts as slow as their sum.
+    await mapLimit(changed, READ_CONCURRENCY, async ({ path, st }) => {
       try {
-        await this.update(path)
+        await this.update(path, st)
       } catch {
         // Unreadable or vanished mid-scan: keep what was read before, try again next time.
       }
@@ -537,11 +557,9 @@ export class UsageService implements UsageApi {
     }
   }
 
-  /** Reads what changed in one transcript, bumping the generation when its records changed. */
-  private async update(path: string): Promise<void> {
-    const st = await stat(path)
+  /** Reads what changed in one transcript (`st` is its stat), bumping the generation when its records changed. */
+  private async update(path: string, st: Stats): Promise<void> {
     const known = this.files.get(path)
-    if (known && st.ino === known.ino && st.size === known.size && st.mtimeMs === known.mtimeMs) return
     const replaced =
       !known ||
       st.ino !== known.ino ||

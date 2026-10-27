@@ -3,27 +3,38 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTempDirs, makeTempDir } from '../files/testRepos'
 
-// Wraps the real stat so tests can see how many run at once.
-const statFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
+// Wraps the real open so tests can see how many transcripts are read at once.
+const openFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
-  const stat = (async (...args: Parameters<typeof real.stat>) => {
-    statFlight.peak = Math.max(statFlight.peak, ++statFlight.now)
+  const open = (async (...args: Parameters<typeof real.open>) => {
+    openFlight.peak = Math.max(openFlight.peak, ++openFlight.now)
     try {
-      return await real.stat(...args)
+      return await real.open(...args)
     } finally {
-      statFlight.now--
+      openFlight.now--
     }
-  }) as typeof real.stat
-  return { ...real, stat, default: { ...real, stat } }
+  }) as typeof real.open
+  return { ...real, open, default: { ...real, open } }
+})
+// Wraps the real statSync so tests can see when each stat ran, as counted by `ticks` (see below).
+const statLog = vi.hoisted(() => ({ ticks: 0, calls: [] as number[] }))
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  const statSync = ((...args: Parameters<typeof real.statSync>) => {
+    statLog.calls.push(statLog.ticks)
+    return real.statSync(...args)
+  }) as typeof real.statSync
+  return { ...real, statSync, default: { ...real, statSync } }
 })
 
 import {
   claudeConfigDir,
-  STAT_CONCURRENCY,
   encodeProjectPath,
   parseUsageLine,
   projectDirMatches,
+  READ_CONCURRENCY,
+  STAT_SLICE,
   streamLines,
   UsageService,
 } from './usageService'
@@ -415,13 +426,38 @@ describe('UsageService', () => {
     expect(usage.all).toMatchObject({ messages: 0, cost: 0, firstSeen: null, models: [] })
   })
 
-  it(`checks the transcripts ${STAT_CONCURRENCY} at a time, not one by one`, async () => {
-    expect(STAT_CONCURRENCY).toBe(16)
+  it(`reads changed transcripts ${READ_CONCURRENCY} at a time, not one by one`, async () => {
+    expect(READ_CONCURRENCY).toBe(16)
     for (let i = 0; i < 40; i++) await put('/p/proj', `s${i}.jsonl`, line({ input: 1 }))
-    statFlight.peak = 0
+    openFlight.peak = 0
     const all = (await usageOf(service(), '/p/proj')).all
     expect(all.messages).toBe(40)
-    expect(statFlight.peak).toBe(STAT_CONCURRENCY)
+    expect(openFlight.peak).toBe(READ_CONCURRENCY)
+  })
+
+  it(`checks the transcripts at most ${STAT_SLICE} at a time between turns of the event loop`, async () => {
+    const count = STAT_SLICE * 2 + 10
+    for (let i = 0; i < count; i++) await put('/p/proj', `s${i}.jsonl`, line({ input: 1 }))
+    const svc = service()
+    await usageOf(svc, '/p/proj')
+    // Counts turns of the event loop while the next scan runs: stats in one slice see the same count.
+    let ticking = true
+    const tick = (): void => {
+      statLog.ticks++
+      if (ticking) setImmediate(tick)
+    }
+    setImmediate(tick)
+    statLog.calls = []
+    try {
+      expect((await usageOf(svc, '/p/proj')).all.messages).toBe(count)
+    } finally {
+      ticking = false
+    }
+    expect(statLog.calls).toHaveLength(count)
+    const slices = new Map<number, number>()
+    for (const t of statLog.calls) slices.set(t, (slices.get(t) ?? 0) + 1)
+    expect(Math.max(...slices.values())).toBeLessThanOrEqual(STAT_SLICE)
+    expect(slices.size).toBeGreaterThanOrEqual(3)
   })
 
   it('reuses the cached result while nothing changed', async () => {
