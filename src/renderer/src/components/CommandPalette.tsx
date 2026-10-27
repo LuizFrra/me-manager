@@ -87,6 +87,9 @@ export function CommandPalette<C extends PaletteCommand>(props: {
   const listId = useId()
   // The result highlighted on screen, for when the files arrive: see loadFiles below.
   const shownActive = useRef<string | null>(null)
+  // Whether the next change of highlight scrolls it into view: not when the pointer made it, as a row half out of
+  // view would scroll from under the pointer, leaving it over another row.
+  const scrollToActive = useRef(true)
   useRestoreFocus()
 
   useEffect(() => {
@@ -131,8 +134,11 @@ export function CommandPalette<C extends PaletteCommand>(props: {
 
   useEffect(() => {
     shownActive.current = results[current]?.item.id ?? null
-    const el = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
-    el?.scrollIntoView?.({ block: 'nearest' })
+    if (scrollToActive.current) {
+      const el = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+      el?.scrollIntoView?.({ block: 'nearest' })
+    }
+    scrollToActive.current = true
   }, [current, results])
 
   const run = (entry: C | FileEntry | undefined): void => {
@@ -192,7 +198,11 @@ export function CommandPalette<C extends PaletteCommand>(props: {
               aria-selected={i === current}
               aria-label={item.label}
               className="palette-option"
-              onMouseMove={() => i !== current && setActiveId(item.id)}
+              onMouseMove={() => {
+                if (i === current) return
+                scrollToActive.current = false
+                setActiveId(item.id)
+              }}
               onMouseDown={(e) => e.preventDefault()} // keep focus in the input
               onClick={() => run(item)}
             >

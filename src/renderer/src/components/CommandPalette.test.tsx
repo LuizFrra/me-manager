@@ -49,6 +49,33 @@ describe('CommandPalette', () => {
     expect(onRun).toHaveBeenCalledWith(commands[0])
   })
 
+  it('scrolls the result the keys move to into view, but not one the pointer is over', () => {
+    const scrolled: Element[] = []
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+    try {
+      render(
+        <CommandPalette
+          commands={[command('One'), command('Two'), command('Three')]}
+          onRun={vi.fn()}
+          onOpenFile={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      )
+      scrolled.length = 0
+      // A row half out of view would scroll under the pointer, which would then be over another row.
+      fireEvent.mouseMove(screen.getByRole('option', { name: 'Two' }))
+      expect(screen.getByRole('option', { name: 'Two' })).toHaveAttribute('aria-selected', 'true')
+      expect(scrolled).toEqual([])
+      fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' })
+      expect(scrolled).toEqual([screen.getByRole('option', { name: 'Three' })])
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
+  })
+
   it('runs a clicked result and closes on Esc', async () => {
     const user = userEvent.setup()
     const commands = [command('One'), command('Two')]
