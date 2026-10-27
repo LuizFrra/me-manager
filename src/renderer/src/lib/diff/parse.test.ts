@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { modeChangeText, parseUnifiedDiff } from './parse'
+import { mixedLineEndings, modeChangeText, parseUnifiedDiff } from './parse'
 import {
   ADDED_FILE,
   BINARY,
@@ -8,6 +8,7 @@ import {
   EMPTY_ADDED,
   EMPTY_DELETED,
   FILE_TO_SYMLINK,
+  LF_TO_CRLF,
   MODE_AND_CONTENT,
   MODE_ONLY,
   HEADER_LIKE_CONTENT,
@@ -140,6 +141,27 @@ describe('parseUnifiedDiff', () => {
     const d = parseUnifiedDiff(SINGLE_HUNK.replace(/\n/g, '\r\n'))
     expect(d.newPath).toBe('single.txt')
     expect(d.hunks[0].lines[1]).toEqual({ kind: 'del', text: 'beta', oldNo: 2 })
+    expect(mixedLineEndings(d)).toBe(false)
+  })
+
+  it('marks lines whose content ends with a carriage return, without it in their text', () => {
+    const d = parseUnifiedDiff(LF_TO_CRLF)
+    expect(d.hunks[0].lines).toEqual([
+      { kind: 'context', text: 'keep', oldNo: 1, newNo: 1, cr: true },
+      { kind: 'del', text: 'x', oldNo: 2 },
+      { kind: 'del', text: 'y', oldNo: 3 },
+      { kind: 'add', text: 'x', newNo: 2, cr: true },
+      { kind: 'add', text: 'y', newNo: 3, cr: true },
+    ])
+    expect(mixedLineEndings(d)).toBe(true)
+    // In a diff text with CRLF endings of its own, a CRLF line of the file ends with two.
+    const both = parseUnifiedDiff(LF_TO_CRLF.replace(/\n/g, '\r\n'))
+    expect(both.hunks[0].lines.map((l) => l.cr ?? false)).toEqual([true, false, false, true, true])
+  })
+
+  it('finds no mixed line endings in a file that uses CRLF throughout', () => {
+    expect(mixedLineEndings(parseUnifiedDiff(SINGLE_HUNK.replace(/^([ +-][^+-].*)$/gm, '$1\r')))).toBe(false)
+    expect(mixedLineEndings(parseUnifiedDiff(SINGLE_HUNK))).toBe(false)
   })
   it('decodes git-quoted non-ASCII paths', () => {
     expect(parseUnifiedDiff(QUOTED_PATH)).toMatchObject({ oldPath: 'café.txt', newPath: 'café.txt' })

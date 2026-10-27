@@ -2369,6 +2369,11 @@ pre code.hljs {
   color: var(--muted);
   font-style: italic;
 }
+/* A carriage return, shown when the diff mixes CRLF and LF line endings. */
+.diff-eol {
+  margin-left: 1px;
+  color: var(--faint);
+}
 /* Split layout: old | new, each with its line numbers. Lines wrap, so both halves stay in view. */
 .diff-view.diff-view-split {
   min-width: 0;

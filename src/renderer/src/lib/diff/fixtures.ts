@@ -192,3 +192,16 @@ index 0000000..33b030c
 +run.sh
 \\ No newline at end of file
 `
+
+/** A file converted from LF to CRLF line endings: the lines only differ by their carriage return. */
+export const LF_TO_CRLF = `diff --git a/crlf.txt b/crlf.txt
+index b77b4eb..0aa0f34 100644
+--- a/crlf.txt
++++ b/crlf.txt
+@@ -1,3 +1,3 @@
+ keep\r
+-x
+-y
++x\r
++y\r
+`

@@ -14,6 +14,7 @@ import {
   EMPTY_ADDED,
   EMPTY_DELETED,
   FILE_TO_SYMLINK,
+  LF_TO_CRLF,
   MODE_AND_CONTENT,
   MODE_ONLY,
   MULTI_HUNK,
@@ -100,6 +101,23 @@ describe('DiffView', () => {
     unmount2()
     render(<DiffView diff={FILE_TO_SYMLINK} layout="split" />)
     expect(screen.getByText('Changed from a regular file to a symlink (mode 100644 → 120000)')).toBeInTheDocument()
+  })
+
+  it('marks CRLF line endings when the diff mixes them with LF ones', () => {
+    const { container, unmount } = render(<DiffView diff={LF_TO_CRLF} />)
+    expect(screen.getByText('Line endings differ: ␍ marks the lines that end in CRLF.')).toBeInTheDocument()
+    const marked = [...container.querySelectorAll('.diff-eol')].map((m) => m.closest('tr')?.className)
+    expect(marked).toEqual(['diff-context', 'diff-add', 'diff-add'])
+    unmount()
+    const split = render(<DiffView diff={LF_TO_CRLF} layout="split" />)
+    // The unchanged line on both sides, and the two added lines.
+    expect(split.container.querySelectorAll('.diff-eol')).toHaveLength(4)
+    split.unmount()
+    // A file with CRLF endings throughout: nothing to tell apart.
+    const crlf = render(<DiffView diff={SINGLE_HUNK.replace(/^([ +-][^+-].*)$/gm, '$1\r')} />)
+    expect(crlf.container.querySelector('.diff-eol')).toBeNull()
+    expect(screen.queryByText(/Line endings differ/)).not.toBeInTheDocument()
+    expect(screen.getByText('BETA')).toBeInTheDocument()
   })
 
   it('shows the old path for a pure rename', () => {

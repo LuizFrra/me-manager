@@ -1,5 +1,11 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { modeChangeText, parseUnifiedDiff, type DiffLine, type ParsedDiff } from '../../lib/diff/parse'
+import {
+  mixedLineEndings,
+  modeChangeText,
+  parseUnifiedDiff,
+  type DiffLine,
+  type ParsedDiff,
+} from '../../lib/diff/parse'
 import type { DiffLayout } from '../../lib/diff/layout'
 import { splitHunks, type SplitCell, type SplitHunk, type SplitRow } from '../../lib/diff/split'
 import {
@@ -85,10 +91,10 @@ function tableRows(parsed: ParsedDiff, split: SplitHunk[] | null, selectable: Se
   const at = (sel: number | undefined): void => {
     if (sel !== undefined && out.rowOf[sel] === undefined) out.rowOf[sel] = out.rows.length
   }
-  const fit = (text: string): void => {
+  const fit = (text: string, cr?: boolean): void => {
     let tabs = 0
     for (let i = text.indexOf('\t'); i !== -1; i = text.indexOf('\t', i + 1)) tabs++
-    out.longest = Math.max(out.longest, text.length + 3 * tabs)
+    out.longest = Math.max(out.longest, text.length + 3 * tabs + (cr ? 1 : 0))
   }
   if (split) {
     for (const hunk of split) {
@@ -109,7 +115,7 @@ function tableRows(parsed: ParsedDiff, split: SplitHunk[] | null, selectable: Se
         const sel = selectable.index.get(line)
         at(sel)
         out.rows.push({ kind: 'line', line, sel })
-        fit(line.text)
+        fit(line.text, line.cr)
       }
     }
   }
@@ -136,11 +142,13 @@ function SplitSide({
   sel,
   selected,
   clipped,
+  eol,
 }: {
   cell: SplitCell | null
   sel?: number
   selected: boolean
   clipped: boolean
+  eol: boolean
 }): React.JSX.Element {
   const cls = `${cell ? ROW_CLASS[cell.kind] : 'diff-empty'}${selected ? ' diff-selected' : ''}`
   return (
@@ -150,10 +158,18 @@ function SplitSide({
       </td>
       <td className={`diff-text ${cls}`} title={clipped && cell?.text ? cell.text : undefined}>
         {cell?.text}
+        {eol && cell?.cr && <CrMark />}
       </td>
     </>
   )
 }
+
+/** Where a line's carriage return is, when the diff mixes CRLF and LF line endings. */
+const CrMark = (): React.JSX.Element => (
+  <span className="diff-eol" title="CRLF line ending">
+    ␍
+  </span>
+)
 
 /** An empty row standing for `rows` rows left out of a long diff, keeping the table's height. */
 const Spacer = ({ rows, cols }: { rows: number; cols: number }): React.JSX.Element | null =>
@@ -175,6 +191,8 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
   // Remembers which diff text the user expanded, so a new diff starts collapsed again.
   const [expandedDiff, setExpandedDiff] = useState<string | null>(null)
 
+  // Lines that only differ by their line ending look the same, unless the carriage returns are shown.
+  const eol = useMemo(() => mixedLineEndings(parsed), [parsed])
   const selectable = useMemo(() => selectableLines(parsed), [parsed])
   const table = useMemo(() => tableRows(parsed, split, selectable), [parsed, split, selectable])
   // A long diff renders the rows in view of the viewer's body (its scroller), all one line high.
@@ -273,8 +291,8 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
       const right = select ? row.right : undefined
       shown.push(
         <tr key={i} aria-rowindex={index}>
-          <SplitSide cell={row.row.left} sel={left} selected={isSelected(left)} clipped={virtual} />
-          <SplitSide cell={row.row.right} sel={right} selected={isSelected(right)} clipped={virtual} />
+          <SplitSide cell={row.row.left} sel={left} selected={isSelected(left)} clipped={virtual} eol={eol} />
+          <SplitSide cell={row.row.right} sel={right} selected={isSelected(right)} clipped={virtual} eol={eol} />
         </tr>,
       )
     } else {
@@ -292,7 +310,10 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
           <td className="diff-ln" data-sel={sel}>
             {line.newNo}
           </td>
-          <td className="diff-text">{line.text}</td>
+          <td className="diff-text">
+            {line.text}
+            {eol && line.cr && <CrMark />}
+          </td>
         </tr>,
       )
     }
@@ -320,6 +341,7 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
         </div>
       )}
       {modeChange && <div className="diff-message">{modeChange}</div>}
+      {eol && <div className="diff-message">Line endings differ: ␍ marks the lines that end in CRLF.</div>}
       {select && (
         <span id={hintId} hidden>
           {LINE_SELECT_HINT}

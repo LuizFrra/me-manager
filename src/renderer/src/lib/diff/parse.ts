@@ -2,9 +2,12 @@ export type DiffLineKind = 'context' | 'add' | 'del' | 'note'
 
 export interface DiffLine {
   kind: DiffLineKind
+  /** The line, without its line ending. */
   text: string
   oldNo?: number
   newNo?: number
+  /** The line ends with a carriage return (a CRLF line ending), which `text` leaves out. */
+  cr?: true
 }
 
 export interface DiffHunk {
@@ -83,7 +86,11 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
   let added = false
   let deleted = false
 
-  for (const line of text.split(/\r?\n/)) {
+  // A diff text with CRLF line endings of its own (git writes LF): a carriage return left at the end of a line
+  // after taking one off is the file's.
+  const crlf = /^[^\n]*\r\n/.test(text)
+  for (const raw of text.split('\n')) {
+    const line = crlf && raw.endsWith('\r') ? raw.slice(0, -1) : raw
     const header = HUNK_HEADER.exec(line)
     if (header) {
       hunk = { header: line, lines: [] }
@@ -101,17 +108,19 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     }
 
     if (hunk && (oldLeft > 0 || newLeft > 0)) {
-      const body = line.slice(1)
+      let body = line.slice(1)
+      const cr = body.endsWith('\r') ? ({ cr: true } as const) : undefined
+      if (cr) body = body.slice(0, -1)
       // git with diff.suppressBlankEmpty writes an empty context line as '' instead of ' '.
       if (line.startsWith(' ') || (line === '' && oldLeft > 0 && newLeft > 0)) {
-        hunk.lines.push({ kind: 'context', text: body, oldNo: oldNo++, newNo: newNo++ })
+        hunk.lines.push({ kind: 'context', text: body, oldNo: oldNo++, newNo: newNo++, ...cr })
         oldLeft--
         newLeft--
       } else if (line.startsWith('-')) {
-        hunk.lines.push({ kind: 'del', text: body, oldNo: oldNo++ })
+        hunk.lines.push({ kind: 'del', text: body, oldNo: oldNo++, ...cr })
         oldLeft--
       } else if (line.startsWith('+')) {
-        hunk.lines.push({ kind: 'add', text: body, newNo: newNo++ })
+        hunk.lines.push({ kind: 'add', text: body, newNo: newNo++, ...cr })
         newLeft--
       }
       continue
@@ -160,4 +169,22 @@ export function modeChangeText({ oldMode, newMode }: Pick<ParsedDiff, 'oldMode' 
   const from = MODE_NAMES[oldMode]
   const to = MODE_NAMES[newMode]
   return from && to ? `Changed from ${from} to ${to} (mode ${modes})` : `Mode changed (${modes})`
+}
+
+/**
+ * Whether some lines of the diff end with CRLF and others with LF: then lines that only differ by their ending look
+ * the same, unless the endings are shown.
+ */
+export function mixedLineEndings(parsed: ParsedDiff): boolean {
+  let cr = false
+  let lf = false
+  for (const hunk of parsed.hunks) {
+    for (const line of hunk.lines) {
+      if (line.kind === 'note') continue
+      if (line.cr) cr = true
+      else lf = true
+      if (cr && lf) return true
+    }
+  }
+  return false
 }
