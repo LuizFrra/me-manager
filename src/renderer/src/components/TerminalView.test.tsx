@@ -34,6 +34,7 @@ vi.mock('@xterm/xterm', () => ({
     linkProviders: ILinkProvider[] = []
     input?: (data: string) => void
     textarea = undefined
+    unicode = { register: noop, activeVersion: '6' }
     loadAddon = noop
     open = noop
     attachCustomKeyEventHandler(handler: KeyHandler): void {
@@ -218,6 +219,19 @@ describe('TerminalView clipboard', () => {
     render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
     await providers.at(-1)?.writeText('c' as never, 'from claude')
     expect(writeText).toHaveBeenCalledWith('from claude')
+  })
+})
+
+describe('TerminalView unicode', () => {
+  it('measures characters as tmux does', () => {
+    render(
+      <TerminalView
+        api={{ ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }}
+        sessionKey="s"
+        fontSize={13}
+      />,
+    )
+    expect((terms.at(-1) as unknown as { unicode: { activeVersion: string } }).unicode.activeVersion).toBe('system')
   })
 })
 

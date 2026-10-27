@@ -11,6 +11,7 @@ import { TERMINAL_MIN_CONTRAST, TERMINAL_THEMES } from '../lib/terminalTheme'
 import { createLinkProvider, type LinkFiles } from '../lib/terminalLinkProvider'
 import type { TextLink } from '../lib/terminalLinks'
 import { NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
+import { SYSTEM_UNICODE } from '../lib/unicodeWidths'
 import { PopupMenu, type MenuItem } from './PopupMenu'
 import { joinShellWords } from '../../../shared/shell'
 
@@ -139,6 +140,7 @@ export function TerminalView({
       fontSize: initialFontSize,
       cursorBlink: true,
       macOptionClickForcesSelection: true,
+      allowProposedApi: true, // for term.unicode
       theme: TERMINAL_THEMES[initialAppearance],
       minimumContrastRatio: TERMINAL_MIN_CONTRAST[initialAppearance],
       // OSC 8 hyperlinks (tmux passes them on): followed like the links found in the text. Without a handler xterm
@@ -153,6 +155,9 @@ export function TerminalView({
         leave: leaveLink,
       },
     })
+    // Emoji widths as tmux counts them (see SYSTEM_UNICODE), so lines with emoji stay aligned.
+    term.unicode.register(SYSTEM_UNICODE)
+    term.unicode.activeVersion = SYSTEM_UNICODE.version
     const fit = new FitAddon()
     term.loadAddon(fit)
     // OSC 52 is write-only: programs in the pty may set the clipboard but never read it. tmux's mouse selections
