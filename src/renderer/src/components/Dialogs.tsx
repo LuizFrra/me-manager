@@ -22,6 +22,7 @@ import { plural } from '../lib/gitStatus'
 import { cleanError, errorSummary } from '../lib/toasts'
 import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
+import { useConfirmDiscard } from '../lib/useConfirmDiscard'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
 import { newTaskNameError, type ExistingTask } from '../lib/names'
@@ -771,7 +772,10 @@ export function ReviewCommentDialog(props: {
   )
 }
 
-/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
+/**
+ * Edits a task's free-text notes. Mod+Enter saves, Esc cancels (asking first once they were edited); saving an
+ * empty text removes the notes.
+ */
 export function NotesDialog(props: {
   taskName: string
   initial: string
@@ -784,6 +788,7 @@ export function NotesDialog(props: {
   const busyRef = useRef(false)
   const counterId = useId()
   const unchanged = notes.trim() === props.initial.trim()
+  const discard = useConfirmDiscard(() => !unchanged, props.onCancel)
   const save = async (): Promise<void> => {
     if (busyRef.current || unchanged) return
     busyRef.current = true
@@ -802,7 +807,7 @@ export function NotesDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Notes for ${props.taskName}`}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(discard.escape)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -828,6 +833,7 @@ export function NotesDialog(props: {
           <span>{MOD_ENTER_LABEL} to save</span>
           <span id={counterId}>{`${notes.length} / ${MAX_TASK_NOTES}`}</span>
         </div>
+        {discard.prompt}
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
@@ -942,9 +948,9 @@ interface Prefill {
 /**
  * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
  * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
- * default base. Mod+Enter creates from anywhere in the form, Esc cancels. A name main would refuse (no letters or
- * numbers, or another task's name or branch) is explained under the field, with Create off; a valid one shows its
- * branch.
+ * default base. Mod+Enter creates from anywhere in the form, Esc cancels (asking first when a prompt was typed: the
+ * composer's and a template's are not lost). A name main would refuse (no letters or numbers, or another task's
+ * name or branch) is explained under the field, with Create off; a valid one shows its branch.
  *
  * With templates, a "Template" choice comes first: picking one fills in the fields it sets (all stay editable),
  * and clears what the previous template filled in unless the user has changed it since. A template's base that
@@ -1053,6 +1059,11 @@ export function NewTaskDialog(props: {
 
   const nameError = newTaskNameError(name, props.tasks ?? [])
   const slug = slugify(name)
+  const discard = useConfirmDiscard(
+    () => prompt.trim() !== '' && prompt !== (props.initialPrompt ?? '') && prompt !== prefill.current.prompt,
+    props.onCancel,
+    'Discard the prompt you typed? Esc again discards it.',
+  )
 
   const submit = async (): Promise<void> => {
     if (busyRef.current || !name.trim() || nameError) return
@@ -1083,7 +1094,7 @@ export function NewTaskDialog(props: {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
-            props.onCancel()
+            discard.escape()
           } else if (isModEnter(e.nativeEvent)) {
             e.preventDefault()
             void submit()
@@ -1193,6 +1204,7 @@ export function NewTaskDialog(props: {
             <span>{`${prompt.length} / ${MAX_TASK_PROMPT}`}</span>
           </div>
         </div>
+        {discard.prompt}
         <div className="dialog-actions">
           <span className="dialog-actions-hint">{MOD_ENTER_LABEL} to create</span>
           <button type="button" onClick={props.onCancel} disabled={busy}>

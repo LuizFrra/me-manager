@@ -2210,7 +2210,7 @@ describe('App new task options', () => {
     await user.click(dialog.getByRole('button', { name: 'Create' }))
     expect(await screen.findByText(/already exists/)).toBeInTheDocument()
     expect(dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })).toHaveValue('hello')
-    await user.keyboard('{Escape}')
+    await user.keyboard('{Escape}{Escape}') // the first asks before discarding the typed prompt
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })

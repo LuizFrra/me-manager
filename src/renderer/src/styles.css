@@ -1003,7 +1003,7 @@ button:disabled {
 .settings-footer .dialog-actions {
   margin-top: 0;
 }
-.settings-discard {
+.dialog-discard {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1013,10 +1013,10 @@ button:disabled {
   border: 1px solid var(--danger);
   border-radius: 6px;
 }
-.settings-discard span {
+.dialog-discard span {
   flex: 1;
 }
-.settings-discard button {
+.dialog-discard button {
   flex: none;
   padding: 3px 10px;
   font-size: 12px;

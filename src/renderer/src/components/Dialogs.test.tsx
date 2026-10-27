@@ -794,3 +794,81 @@ describe('CommitDialog', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
+
+describe('Esc asks before discarding typed text', () => {
+  it('Notes: asks when the notes were edited; Keep editing goes back, a second Esc or Discard discards', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<NotesDialog taskName="t" initial="old" onSave={vi.fn()} onCancel={onCancel} />)
+    const notes = screen.getByRole('textbox', { name: 'Notes' })
+    await user.type(notes, ' and new')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard your changes? Esc again discards them.')
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(notes).toHaveFocus()
+    expect(notes).toHaveValue('old and new')
+
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(onCancel).toHaveBeenCalledTimes(2)
+    await user.click(screen.getByRole('button', { name: 'Cancel' })) // needs no confirmation
+    expect(onCancel).toHaveBeenCalledTimes(3)
+  })
+
+  it('Notes: closes at once when the notes are as they were', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<NotesDialog taskName="t" initial="old" onSave={vi.fn()} onCancel={onCancel} />)
+    await user.type(screen.getByRole('textbox', { name: 'Notes' }), 'x{Backspace}')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  const LIST: BranchList = { default: 'origin/main', branches: ['origin/main'] }
+  const PROMPT: TaskTemplate = { name: 'Explain', prompt: 'Explain this repo' }
+  const renderNewTask = (props: Partial<React.ComponentProps<typeof NewTaskDialog>> = {}): ReturnType<typeof vi.fn> => {
+    const onCancel = vi.fn()
+    render(
+      <NewTaskDialog
+        repoName="api"
+        loadBranches={async () => LIST}
+        templates={[PROMPT]}
+        onSubmit={vi.fn()}
+        onCancel={onCancel}
+        {...props}
+      />,
+    )
+    return onCancel
+  }
+
+  it('New task: asks when a prompt was typed', async () => {
+    const user = userEvent.setup()
+    const onCancel = renderNewTask()
+    const prompt = screen.getByRole('textbox', { name: 'Initial prompt (optional)' })
+    await user.type(prompt, 'Fix the login')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard the prompt you typed? Esc again discards it.')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it("New task: closes at once with only a name, or a template's prompt", async () => {
+    const user = userEvent.setup()
+    const onCancel = renderNewTask()
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'fix')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Template' }), 'Explain')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it("New task: closes at once with the composer's prompt, which the composer keeps", async () => {
+    const user = userEvent.setup()
+    const onCancel = renderNewTask({ initialName: 'fix', initialPrompt: 'Fix the login' })
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})

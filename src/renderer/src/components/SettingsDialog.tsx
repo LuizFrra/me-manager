@@ -14,6 +14,7 @@ import {
   type SettingsForm,
   type TemplateForm,
 } from '../lib/settingsForm'
+import { useConfirmDiscard } from '../lib/useConfirmDiscard'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 
 /**
@@ -263,9 +264,7 @@ export function SettingsDialog(props: {
 }): React.JSX.Element {
   const [form, setForm] = useState<SettingsForm>(() => toForm(props.settings))
   const [start] = useState(form)
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
-  // What had focus when Esc asked: "Keep editing" goes back to it.
-  const editing = useRef<HTMLElement | null>(null)
+  const discard = useConfirmDiscard(() => formChanged(start, form), props.onCancel)
   // A one-line input can't show (or keep) a line break: such arguments are only saved back as they were, unless
   // the field is edited, and a warning points to settings.json.
   const [argsEdited, setArgsEdited] = useState(false)
@@ -333,9 +332,7 @@ export function SettingsDialog(props: {
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return
           e.preventDefault()
-          if (confirmDiscard || !formChanged(start, form)) return props.onCancel()
-          editing.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-          setConfirmDiscard(true)
+          discard.escape()
         }}
       >
         <h2>Settings</h2>
@@ -601,23 +598,7 @@ export function SettingsDialog(props: {
 
         {/* Stays at the bottom of the scrolling dialog, so Save and the Esc question are always in view. */}
         <div className="settings-footer">
-          {confirmDiscard && (
-            <div className="settings-discard" role="alert">
-              <span>Discard your changes? Esc again discards them.</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmDiscard(false)
-                  editing.current?.focus()
-                }}
-              >
-                Keep editing
-              </button>
-              <button type="button" className="danger" onClick={props.onCancel}>
-                Discard
-              </button>
-            </div>
-          )}
+          {discard.prompt}
           <div className="dialog-actions">
             {toFix > 0 && (
               <button
