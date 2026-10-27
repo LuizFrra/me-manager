@@ -1346,6 +1346,20 @@ describe('Orchestrator: Claude profiles', () => {
     expect(envOf(ctx, SESSION, 'claude')).toEqual(home)
   })
 
+  it("refuses to restart the run command when the profile's folder is gone, leaving the running one alone", async () => {
+    const missing: string[] = []
+    const ctx = await withProfiles({ themeProfile: 'p-work', missing })
+    await ctx.orch.openTarget(ctx.target)
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    await ctx.orch.startRun(ctx.target)
+    missing.push('/home/me/.claude-work')
+    ctx.tmux.calls = []
+    await expect(ctx.orch.restartRun(ctx.target)).rejects.toThrow(
+      'Claude account “Work”: folder not found (/home/me/.claude-work)',
+    )
+    expect(ctx.tmux.calls).toEqual([]) // no Ctrl-C, no respawn
+  })
+
   it("refuses to start anything when the profile's folder is gone, never falling back to another account", async () => {
     const ctx = await withProfiles({ themeProfile: 'p-work', missing: ['/home/me/.claude-work'] })
     const refusal = 'Claude account “Work”: folder not found (/home/me/.claude-work)'
