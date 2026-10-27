@@ -133,3 +133,62 @@ similarity index 100%
 rename from "caf\\303\\251.txt"
 rename to "na\\303\\257ve.txt"
 `
+
+/** `chmod +x` and nothing else. */
+export const MODE_ONLY = `diff --git a/run.sh b/run.sh
+old mode 100644
+new mode 100755
+`
+
+/** `chmod +x` with an edit. */
+export const MODE_AND_CONTENT = `diff --git a/run.sh b/run.sh
+old mode 100644
+new mode 100755
+index 422c2b7..55dce13
+--- a/run.sh
++++ b/run.sh
+@@ -1,2 +1,2 @@
+ a
+-b
++B
+`
+
+export const EMPTY_ADDED = `diff --git a/empty.txt b/empty.txt
+new file mode 100644
+index 0000000..e69de29
+`
+
+export const EMPTY_DELETED = `diff --git a/empty.txt b/empty.txt
+deleted file mode 100644
+index e69de29..0000000
+`
+
+export const BINARY_ADDED = `diff --git a/new.bin b/new.bin
+new file mode 100644
+index 0000000..bdc955b
+Binary files /dev/null and b/new.bin differ
+`
+
+export const BINARY_DELETED = `diff --git a/img.png b/img.png
+deleted file mode 100644
+index f584f40..0000000
+Binary files a/img.png and /dev/null differ
+`
+
+/** A file replaced by a symlink: git writes the deletion and the addition as two diffs. */
+export const FILE_TO_SYMLINK = `diff --git a/link b/link
+deleted file mode 100644
+index ce01362..0000000
+--- a/link
++++ /dev/null
+@@ -1 +0,0 @@
+-hello
+diff --git a/link b/link
+new file mode 120000
+index 0000000..33b030c
+--- /dev/null
++++ b/link
+@@ -0,0 +1 @@
++run.sh
+\\ No newline at end of file
+`

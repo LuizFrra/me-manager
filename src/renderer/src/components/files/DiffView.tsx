@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { parseUnifiedDiff, type DiffLine, type ParsedDiff } from '../../lib/diff/parse'
+import { modeChangeText, parseUnifiedDiff, type DiffLine, type ParsedDiff } from '../../lib/diff/parse'
 import type { DiffLayout } from '../../lib/diff/layout'
 import { splitHunks, type SplitCell, type SplitHunk, type SplitRow } from '../../lib/diff/split'
 import {
@@ -224,10 +224,25 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
     },
   }
 
-  if (parsed.binary) return <div className="diff-view diff-message">Binary file changed.</div>
-  if (parsed.hunks.length === 0) {
-    if (parsed.renamed) return <div className="diff-view diff-message">Renamed from {parsed.oldPath}</div>
-    return <div className="diff-view diff-message">No changes.</div>
+  const modeChange = modeChangeText(parsed)
+  if (parsed.binary || parsed.hunks.length === 0) {
+    // No lines to show: what happened to the file as a whole. An empty file added or deleted has no lines either.
+    const what = parsed.binary
+      ? `Binary file ${parsed.status ?? 'changed'}.`
+      : parsed.renamed
+        ? `Renamed from ${parsed.oldPath}`
+        : parsed.status
+          ? `Empty file ${parsed.status}.`
+          : modeChange
+            ? null
+            : 'No changes.'
+    if (!modeChange) return <div className="diff-view diff-message">{what}</div>
+    return (
+      <div className="diff-view">
+        {what && <div className="diff-message">{what}</div>}
+        <div className="diff-message">{modeChange}</div>
+      </div>
+    )
   }
 
   if (parsed.lineCount > LARGE_DIFF_LINES && expandedDiff !== diff) {
@@ -304,6 +319,7 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
           Renamed from {parsed.oldPath} to {parsed.newPath}
         </div>
       )}
+      {modeChange && <div className="diff-message">{modeChange}</div>}
       {select && (
         <span id={hintId} hidden>
           {LINE_SELECT_HINT}

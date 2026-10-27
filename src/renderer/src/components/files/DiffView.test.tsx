@@ -9,6 +9,13 @@ import { DIFF_ROW_HEIGHT, DiffView } from './DiffView'
 import {
   ADDED_FILE,
   BINARY,
+  BINARY_ADDED,
+  BINARY_DELETED,
+  EMPTY_ADDED,
+  EMPTY_DELETED,
+  FILE_TO_SYMLINK,
+  MODE_AND_CONTENT,
+  MODE_ONLY,
   MULTI_HUNK,
   NO_NEWLINE,
   RENAME_ONLY,
@@ -63,6 +70,36 @@ describe('DiffView', () => {
   it('shows a notice for binary files', () => {
     render(<DiffView diff={BINARY} />)
     expect(screen.getByText('Binary file changed.')).toBeInTheDocument()
+  })
+
+  it('says a binary file was added or deleted', () => {
+    const { unmount } = render(<DiffView diff={BINARY_ADDED} />)
+    expect(screen.getByText('Binary file added.')).toBeInTheDocument()
+    unmount()
+    render(<DiffView diff={BINARY_DELETED} />)
+    expect(screen.getByText('Binary file deleted.')).toBeInTheDocument()
+  })
+
+  it('says an empty file was added or deleted instead of "No changes."', () => {
+    const { unmount } = render(<DiffView diff={EMPTY_ADDED} />)
+    expect(screen.getByText('Empty file added.')).toBeInTheDocument()
+    expect(screen.queryByText('No changes.')).not.toBeInTheDocument()
+    unmount()
+    render(<DiffView diff={EMPTY_DELETED} />)
+    expect(screen.getByText('Empty file deleted.')).toBeInTheDocument()
+  })
+
+  it('shows a change of the file mode alone, or above the lines', () => {
+    const { unmount } = render(<DiffView diff={MODE_ONLY} />)
+    expect(screen.getByText('Made executable (mode 100644 → 100755)')).toBeInTheDocument()
+    expect(screen.queryByText('No changes.')).not.toBeInTheDocument()
+    unmount()
+    const { unmount: unmount2 } = render(<DiffView diff={MODE_AND_CONTENT} />)
+    expect(screen.getByText('Made executable (mode 100644 → 100755)')).toBeInTheDocument()
+    expect(screen.getByText('B').closest('tr')).toHaveClass('diff-add')
+    unmount2()
+    render(<DiffView diff={FILE_TO_SYMLINK} layout="split" />)
+    expect(screen.getByText('Changed from a regular file to a symlink (mode 100644 → 120000)')).toBeInTheDocument()
   })
 
   it('shows the old path for a pure rename', () => {

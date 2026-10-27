@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { parseUnifiedDiff } from './parse'
+import { modeChangeText, parseUnifiedDiff } from './parse'
 import {
   ADDED_FILE,
   BINARY,
+  BINARY_ADDED,
   DELETED_FILE,
+  EMPTY_ADDED,
+  EMPTY_DELETED,
+  FILE_TO_SYMLINK,
+  MODE_AND_CONTENT,
+  MODE_ONLY,
   HEADER_LIKE_CONTENT,
   MULTI_HUNK,
   NO_NEWLINE,
@@ -162,5 +168,37 @@ describe('parseUnifiedDiff', () => {
       { kind: 'context', text: 'three', oldNo: 4, newNo: 4 },
     ])
     expect(d.lineCount).toBe(5)
+  })
+
+  it('reads file modes and whether the file was added or deleted', () => {
+    expect(parseUnifiedDiff(MODE_ONLY)).toMatchObject({ oldMode: '100644', newMode: '100755', hunks: [] })
+    expect(parseUnifiedDiff(MODE_AND_CONTENT)).toMatchObject({ oldMode: '100644', newMode: '100755', lineCount: 3 })
+    expect(parseUnifiedDiff(EMPTY_ADDED)).toMatchObject({ status: 'added', newMode: '100644', hunks: [] })
+    expect(parseUnifiedDiff(EMPTY_DELETED)).toMatchObject({ status: 'deleted', oldMode: '100644', hunks: [] })
+    expect(parseUnifiedDiff(BINARY_ADDED)).toMatchObject({ status: 'added', binary: true })
+    expect(parseUnifiedDiff(ADDED_FILE).status).toBe('added')
+    expect(parseUnifiedDiff(DELETED_FILE).status).toBe('deleted')
+    expect(parseUnifiedDiff(SINGLE_HUNK)).not.toHaveProperty('status')
+    expect(parseUnifiedDiff(SINGLE_HUNK)).not.toHaveProperty('oldMode')
+  })
+
+  it('reads a file replaced by a symlink as a type change, not as an addition', () => {
+    const d = parseUnifiedDiff(FILE_TO_SYMLINK)
+    expect(d).toMatchObject({ oldMode: '100644', newMode: '120000', lineCount: 3 })
+    expect(d).not.toHaveProperty('status')
+  })
+})
+
+describe('modeChangeText', () => {
+  it('says how the mode changed, or null when it did not', () => {
+    expect(modeChangeText(parseUnifiedDiff(MODE_ONLY))).toBe('Made executable (mode 100644 → 100755)')
+    expect(modeChangeText({ oldMode: '100755', newMode: '100644' })).toBe('No longer executable (mode 100755 → 100644)')
+    expect(modeChangeText(parseUnifiedDiff(FILE_TO_SYMLINK))).toBe(
+      'Changed from a regular file to a symlink (mode 100644 → 120000)',
+    )
+    expect(modeChangeText({ oldMode: '100644', newMode: '100600' })).toBe('Mode changed (100644 → 100600)')
+    expect(modeChangeText(parseUnifiedDiff(SINGLE_HUNK))).toBeNull()
+    expect(modeChangeText(parseUnifiedDiff(EMPTY_ADDED))).toBeNull()
+    expect(modeChangeText(parseUnifiedDiff(DELETED_FILE))).toBeNull()
   })
 })
