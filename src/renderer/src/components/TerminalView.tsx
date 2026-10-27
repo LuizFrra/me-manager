@@ -50,6 +50,8 @@ const NOTICE_MS = 1200
 /** The task's file list for path links is listed again after this long, so new files become links too. */
 const LINK_FILES_TTL_MS = 30_000
 const MOD = isMac ? 'Cmd' : 'Ctrl'
+/** Room kept for the "Ctrl+click to open link" hint at the window's right edge. */
+const HINT_WIDTH = 180
 const COPY_KEY = isMac ? '⌘C' : 'Ctrl+C'
 
 /** Following a link takes Ctrl+click (Cmd+click on macOS), so a plain click still focuses or selects. */
@@ -429,7 +431,15 @@ export function TerminalView({
     <>
       <div className="terminal-host" ref={hostRef} />
       {hovered && linkHint && (
-        <div className="terminal-hint" style={{ left: hovered.x + 12, top: hovered.y + 18 }} aria-hidden="true">
+        <div
+          className="terminal-hint"
+          // Kept inside the window for a link near its right or bottom edge.
+          style={{
+            left: Math.max(0, Math.min(hovered.x + 12, window.innerWidth - HINT_WIDTH)),
+            top: hovered.y + 40 > window.innerHeight ? hovered.y - 30 : hovered.y + 18,
+          }}
+          aria-hidden="true"
+        >
           {linkHint}
         </div>
       )}

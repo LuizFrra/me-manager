@@ -574,3 +574,27 @@ describe('TerminalView jump to the bottom', () => {
     await vi.waitFor(() => expect(screen.queryByRole('button', { name: '↓ Jump to the bottom' })).toBeNull())
   })
 })
+
+describe('TerminalView link hint', () => {
+  it('stays inside the window for a link at its right edge', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 })
+    render(
+      <TerminalView
+        api={{ ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }}
+        sessionKey="s"
+        fontSize={13}
+      />,
+    )
+    const handler = terms.at(-1)?.options.linkHandler
+    act(() =>
+      handler?.hover?.(new MouseEvent('mousemove', { clientX: 790, clientY: 590 }), 'https://a.dev', {
+        start: { x: 1, y: 1 },
+        end: { x: 2, y: 1 },
+      }),
+    )
+    const hint = await screen.findByText('Ctrl+click to open link')
+    expect(hint.style.left).toBe('620px')
+    expect(hint.style.top).toBe('560px')
+  })
+})
