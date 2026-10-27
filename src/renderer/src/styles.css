@@ -1100,6 +1100,13 @@ button:disabled {
   color: var(--error-text);
   font-size: 12px;
 }
+/* "2 fields to fix", beside the Save it keeps off: a link to the first one. */
+.dialog-actions button.settings-to-fix {
+  padding: 0;
+  border: none;
+  color: var(--error-text);
+  font-size: 12px;
+}
 .dialog-note {
   margin: -4px 0 0;
   color: var(--muted);

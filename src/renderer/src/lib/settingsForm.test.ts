@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
-import { parseForm, toForm, type SettingsForm, type TemplateForm } from './settingsForm'
+import { errorCount, parseForm, toForm, type SettingsForm, type TemplateForm } from './settingsForm'
 
 const form = (over: Partial<SettingsForm> = {}): SettingsForm => ({ ...toForm(DEFAULT_SETTINGS), ...over })
 
@@ -143,5 +143,13 @@ describe('settings form', () => {
       editorCommand: 'nvim runs in a terminal; choose a GUI editor (e.g. code, subl, gvim).',
     })
     expect(parseForm(form({ editorCommand: 'emacs' })).errors).toBeUndefined()
+  })
+})
+
+describe('errorCount', () => {
+  it('counts the invalid fields, each template field on its own', () => {
+    expect(errorCount({})).toBe(0)
+    expect(errorCount({ pollSeconds: 'x', dailyBudget: 'y' })).toBe(2)
+    expect(errorCount({ claudeArgs: 'x', taskTemplates: [{}, { name: 'a', base: 'b' }, { prompt: 'c' }] })).toBe(4)
   })
 })

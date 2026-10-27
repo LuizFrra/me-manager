@@ -2,7 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { FONT_SIZE_LIMITS } from '../../../shared/settings'
 import { MAX_TASK_TEMPLATES, type TemplateErrors } from '../../../shared/templates'
 import { MAX_TASK_PROMPT, type Appearance, type Settings, type UpdateStrategy } from '../../../shared/types'
+import { plural } from '../lib/gitStatus'
 import {
+  errorCount,
   newTemplateKey,
   parseForm,
   POLL_SECONDS,
@@ -247,7 +249,10 @@ const APPEARANCE_CHOICES: { value: Appearance; label: string }[] = [
   { value: 'light', label: 'Light' },
 ]
 
-/** Edits the app settings. Fields are checked as you type; Save is off while one is invalid. Esc cancels. */
+/**
+ * Edits the app settings. Fields are checked as you type; Save is off while one is invalid, and a button beside it
+ * counts them and takes you to the first (it may be scrolled out of view). Esc cancels.
+ */
 export function SettingsDialog(props: {
   settings: Settings
   /** The edited settings, a patch over the current ones. */
@@ -267,6 +272,9 @@ export function SettingsDialog(props: {
     return { settings: { ...result.settings, claudeArgs: [...props.settings.claudeArgs] } }
   }, [form, argsEdited, multilineArg, props.settings.claudeArgs])
   const errors = parsed.errors ?? {}
+  const toFix = errorCount(errors)
+  const formRef = useRef<HTMLFormElement>(null)
+  const toFixId = useId()
   const notificationsHintId = useId()
   const statusBarHintId = useId()
   const remoteHintId = useId()
@@ -306,6 +314,7 @@ export function SettingsDialog(props: {
   return (
     <div className="overlay">
       <form
+        ref={formRef}
         className="dialog settings-dialog"
         role="dialog"
         aria-modal="true"
@@ -583,10 +592,20 @@ export function SettingsDialog(props: {
         />
 
         <div className="dialog-actions">
+          {toFix > 0 && (
+            <button
+              type="button"
+              id={toFixId}
+              className="link-button dialog-actions-hint settings-to-fix"
+              onClick={() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()}
+            >
+              {plural(toFix, 'field')} to fix
+            </button>
+          )}
           <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || !parsed.settings}>
+          <button type="submit" disabled={busy || !parsed.settings} aria-describedby={toFix > 0 ? toFixId : undefined}>
             {busy ? 'Saving…' : 'Save'}
           </button>
         </div>

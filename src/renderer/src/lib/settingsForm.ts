@@ -47,6 +47,12 @@ export type SettingsFormErrors = Partial<Record<Exclude<keyof SettingsForm, 'tas
   taskTemplates?: TemplateErrors[]
 }
 
+/** How many fields are invalid, each template's counted one by one. */
+export function errorCount(errors: SettingsFormErrors): number {
+  const { taskTemplates = [], ...fields } = errors
+  return Object.keys(fields).length + taskTemplates.reduce((n, e) => n + Object.keys(e).length, 0)
+}
+
 export const POLL_SECONDS = { min: POLL_INTERVAL_LIMITS.min / 1000, max: POLL_INTERVAL_LIMITS.max / 1000 }
 
 export function toForm(s: Settings): SettingsForm {

@@ -255,3 +255,24 @@ describe('SettingsDialog: task templates', () => {
     expect(add).toHaveAccessibleDescription(`At most ${MAX_TASK_TEMPLATES} templates.`)
   })
 })
+
+describe('SettingsDialog: fields to fix', () => {
+  it('says how many fields keep Save off, and takes you to the first one', async () => {
+    const user = userEvent.setup()
+    render(<SettingsDialog settings={DEFAULT_SETTINGS} onSave={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /to fix/ })).not.toBeInTheDocument()
+    const poll = screen.getByLabelText('Refresh interval')
+    await user.clear(poll)
+    await user.click(screen.getByRole('button', { name: 'Add template' })) // its name is required
+    const save = screen.getByRole('button', { name: 'Save' })
+    expect(save).toBeDisabled()
+    const fix = screen.getByRole('button', { name: '2 fields to fix' })
+    expect(save).toHaveAccessibleDescription('2 fields to fix')
+    await user.click(fix)
+    expect(poll).toHaveFocus()
+    await user.type(poll, '3')
+    expect(screen.getByRole('button', { name: '1 field to fix' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '1 field to fix' }))
+    expect(within(screen.getByRole('group', { name: 'Template 1' })).getByLabelText('Name')).toHaveFocus()
+  })
+})
