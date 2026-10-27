@@ -145,6 +145,11 @@ export interface TmuxApi {
    * every session on our socket, by session name, from one `list-windows -a` call. {} when the server isn't running.
    */
   windowActivity(windowName: string): Promise<Record<string, number>>
+  /**
+   * Every session on our socket, and windowActivity(windowName), from the same single `list-windows -a` call (a
+   * session always has a window): what the status poll needs. Empty when the server isn't running.
+   */
+  sessionActivity(windowName: string): Promise<{ sessions: string[]; activity: Record<string, number> }>
   /** The visible text of a window's active pane (`capture-pane -p`), or null when there is no such window. */
   capturePane(session: string, windowName: string): Promise<string | null>
   /**

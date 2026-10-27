@@ -158,6 +158,7 @@ async function bootstrap(): Promise<void> {
   })
   notificationWatcher = new NotificationWatcher({
     getStatus: () => orchestrator.getStatus(),
+    lastStatus: () => orchestrator.lastStatus,
     getState: () => orchestrator.getState(),
     getSettings: () => settings.get(),
     currentTarget: () => orchestrator.currentTarget(),

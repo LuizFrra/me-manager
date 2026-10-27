@@ -35,6 +35,7 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await expect(svc.listSessions()).resolves.toEqual([])
     await expect(svc.hasSession('nope')).resolves.toBe(false)
     await expect(svc.windowActivity('claude')).resolves.toEqual({})
+    await expect(svc.sessionActivity('claude')).resolves.toEqual({ sessions: [], activity: {} })
   })
 
   it('applies the config again to a running server, without piling up array entries', async () => {
@@ -134,6 +135,10 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     expect(Object.keys(activity).sort()).toEqual(['mmt_a_b_c', 'mmt_act_x_y'])
     expect(activity['mmt_act_x_y']).toBeGreaterThanOrEqual(before - 1)
     expect(activity['mmt_act_x_y']).toBeLessThanOrEqual(Math.floor(Date.now() / 1000))
+    // The same call lists every session, those without a claude window too.
+    const both = await svc.sessionActivity('claude')
+    expect(both.sessions.sort()).toEqual(['mmf_act_shell', 'mmt_a_b_c', 'mmt_act_x_y'])
+    expect(both.activity).toEqual(activity)
 
     // Output moves the activity time forward (tmux reports whole seconds).
     await new Promise((r) => setTimeout(r, 1100))

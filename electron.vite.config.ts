@@ -11,6 +11,10 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src')
       }
     },
-    plugins: [react()]
+    plugins: [react()],
+    // electron-vite leaves the renderer unminified; minified, the startup bundle is parsed and compiled faster.
+    build: {
+      minify: true
+    }
   }
 })

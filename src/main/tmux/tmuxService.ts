@@ -118,15 +118,25 @@ export class TmuxService implements TmuxApi {
     }
   }
 
-  async windowActivity(windowName: string): Promise<Record<string, number>> {
-    let out: string
+  /** Every window on our socket, one `<session>\t<activity>\t<name>` line each; '' when the server isn't running. */
+  private async allWindows(): Promise<string> {
     try {
-      out = await this.tmux(['list-windows', '-a', '-F', '#{session_name}\t#{window_activity}\t#{window_name}'])
+      return await this.tmux(['list-windows', '-a', '-F', '#{session_name}\t#{window_activity}\t#{window_name}'])
     } catch (err) {
-      if (isNoServer(err)) return {}
+      if (isNoServer(err)) return ''
       throw err
     }
-    return parseWindowActivity(out, windowName)
+  }
+
+  async windowActivity(windowName: string): Promise<Record<string, number>> {
+    return parseWindowActivity(await this.allWindows(), windowName)
+  }
+
+  async sessionActivity(windowName: string): Promise<{ sessions: string[]; activity: Record<string, number> }> {
+    const out = await this.allWindows()
+    const sessions = new Set(out.split('\n').map((line) => line.split('\t', 1)[0]))
+    sessions.delete('')
+    return { sessions: [...sessions], activity: parseWindowActivity(out, windowName) }
   }
 
   async capturePane(session: string, windowName: string): Promise<string | null> {

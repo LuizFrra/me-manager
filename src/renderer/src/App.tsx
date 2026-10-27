@@ -259,6 +259,11 @@ export const ZOOM_SAVE_MS = 500
 export const UI_SAVE_MS = 500
 /** The header's usage badge refreshes this often: reading transcripts costs more than the status poll. */
 export const USAGE_POLL_MS = 10_000
+/**
+ * The git badges of tasks neither selected nor busy are read again this often; the others' at every status poll.
+ * Each read runs several git commands per task, and a quiet worktree nobody is looking at seldom changes.
+ */
+export const GIT_QUIET_POLL_MS = 30_000
 
 /**
  * What the budgets depend on besides the usage, so they are read again when it changes: the daily and default
@@ -643,23 +648,54 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     return targets
   }, [state, collapsed, sidebarFilter, selected])
   const gitTargetsRef = useRef<Target[]>([])
-  // Responses can arrive out of order; only a newer request's answer replaces what is shown.
-  const gitSeq = useRef({ sent: 0, shown: 0 })
-  const refreshGit = useCallback(() => {
-    const targets = gitTargetsRef.current
-    const seq = ++gitSeq.current.sent
-    const show = (next: Record<string, TaskGitStatus>): void => {
-      if (seq < gitSeq.current.shown) return
-      gitSeq.current.shown = seq
-      setGitStatus(keepIfEqual(next))
-    }
-    if (targets.length === 0) return show({})
-    // Main reads each worktree at most every few seconds, so this is cheap at any poll interval.
-    api.getGitStatus(targets).then(show, () => {}) // the badges keep their last values
-  }, [api])
+  // Tasks whose Claude was busy at the last status poll or the one before: their files are changing.
+  const recentlyBusy = useRef<ReadonlySet<string>>(new Set())
+  // Responses can arrive out of order: each task's badge takes only an answer newer than the one it shows.
+  const gitSeq = useRef({ sent: 0, shown: new Map<string, number>(), fullAt: -Infinity })
+  /**
+   * Reads the git status of gitTargets: all of them, or with `onlyLive` just the selected task and the recently
+   * busy ones, unless the others were last read GIT_QUIET_POLL_MS ago. Main also reads each worktree at most every
+   * few seconds.
+   */
+  const refreshGit = useCallback(
+    (onlyLive = false) => {
+      const seqs = gitSeq.current
+      const now = Date.now()
+      const full = !onlyLive || now - seqs.fullAt >= GIT_QUIET_POLL_MS
+      const shownKey = selectedRef.current ? targetKey(selectedRef.current) : null
+      const live = (t: Target): boolean => targetKey(t) === shownKey || recentlyBusy.current.has(targetKey(t))
+      const targets = full ? gitTargetsRef.current : gitTargetsRef.current.filter(live)
+      if (!full && targets.length === 0) return
+      if (full) seqs.fullAt = now
+      const seq = ++seqs.sent
+      const keys = targets.map(targetKey)
+      const show = (next: Record<string, TaskGitStatus>): void => {
+        const fresh = keys.filter((k) => (seqs.shown.get(k) ?? 0) < seq)
+        for (const k of fresh) seqs.shown.set(k, seq)
+        // A full answer also drops the tasks no longer shown; a partial one leaves the others' badges as they are.
+        const kept = full ? new Set(keys) : null
+        setGitStatus((prev) => {
+          const merged: Record<string, TaskGitStatus> = {}
+          for (const [k, v] of Object.entries(prev)) if (!kept || kept.has(k)) merged[k] = v
+          for (const k of fresh) {
+            if (next[k]) merged[k] = next[k]
+            else delete merged[k]
+          }
+          return keepIfEqual(merged)(prev)
+        })
+      }
+      if (targets.length === 0) return show({})
+      api.getGitStatus(targets).then(show, () => {}) // the badges keep their last values
+    },
+    [api],
+  )
   useEffect(() => {
+    // The same tasks with another one selected (they always include it): only that one needs reading now.
+    const same =
+      gitTargets.length === gitTargetsRef.current.length &&
+      gitTargets.every((t, i) => targetKey(t) === targetKey(gitTargetsRef.current[i]))
     gitTargetsRef.current = gitTargets
-    refreshGit()
+    refreshGit(same)
   }, [gitTargets, refreshGit])
 
   const refresh = useCallback(() => {
@@ -671,6 +707,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         if (seq < statusApplied.current) return
         statusApplied.current = seq
         const finished = finishedIds(lastActivity.current, next.activity)
+        const busy = (activity: LiveStatus['activity']): string[] =>
+          Object.keys(activity).filter((id) => activity[id] === 'busy')
+        recentlyBusy.current = new Set([...busy(lastActivity.current), ...busy(next.activity)])
         lastActivity.current = next.activity
         const shown = selectedRef.current ? targetKey(selectedRef.current) : null
         const marked = finished.filter((id) => id !== shown)
@@ -684,7 +723,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       },
       () => {},
     )
-    refreshGit()
+    refreshGit(true)
     const current = selectedRef.current
     if (!current || isArchivedTarget(stateRef.current, current)) return
     api.listTabs(current).then(

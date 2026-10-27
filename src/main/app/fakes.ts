@@ -341,6 +341,12 @@ export class FakeTmux implements TmuxApi {
   panes = new Map<string, string>()
   captureCalls: string[] = []
   async windowActivity(windowName: string): Promise<Record<string, number>> {
+    return this.activityOf(windowName)
+  }
+  async sessionActivity(windowName: string): Promise<{ sessions: string[]; activity: Record<string, number> }> {
+    return { sessions: [...this.sessions.keys()], activity: this.activityOf(windowName) }
+  }
+  private activityOf(windowName: string): Record<string, number> {
     const out: Record<string, number> = {}
     for (const [session, at] of this.activity) {
       if (this.sessions.get(session)?.windows.some((w) => w.name === windowName)) out[session] = at

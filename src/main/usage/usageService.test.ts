@@ -3,27 +3,65 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTempDirs, makeTempDir } from '../files/testRepos'
 
-// Wraps the real stat so tests can see how many run at once.
-const statFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
+// Wraps the real open so tests can see how many transcripts are read at once.
+const openFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
-  const stat = (async (...args: Parameters<typeof real.stat>) => {
-    statFlight.peak = Math.max(statFlight.peak, ++statFlight.now)
+  const open = (async (...args: Parameters<typeof real.open>) => {
+    openFlight.peak = Math.max(openFlight.peak, ++openFlight.now)
     try {
-      return await real.stat(...args)
+      return await real.open(...args)
     } finally {
-      statFlight.now--
+      openFlight.now--
     }
-  }) as typeof real.stat
-  return { ...real, stat, default: { ...real, stat } }
+  }) as typeof real.open
+  return { ...real, open, default: { ...real, open } }
 })
+// Wraps the real statSync and readdirSync so tests can see when each ran, as counted by `ticks` (see below).
+const statLog = vi.hoisted(() => ({ ticks: 0, calls: [] as number[], dirs: [] as number[] }))
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  const statSync = ((...args: Parameters<typeof real.statSync>) => {
+    statLog.calls.push(statLog.ticks)
+    return real.statSync(...args)
+  }) as typeof real.statSync
+  const readdirSync = ((...args: Parameters<typeof real.readdirSync>) => {
+    statLog.dirs.push(statLog.ticks)
+    return real.readdirSync(...args)
+  }) as typeof real.readdirSync
+  return { ...real, statSync, readdirSync, default: { ...real, statSync, readdirSync } }
+})
+
+/** Counts turns of the event loop in statLog.ticks while `fn` runs. */
+async function ticking<T>(fn: () => Promise<T>): Promise<T> {
+  let on = true
+  const tick = (): void => {
+    statLog.ticks++
+    if (on) setImmediate(tick)
+  }
+  setImmediate(tick)
+  try {
+    return await fn()
+  } finally {
+    on = false
+  }
+}
+
+/** The largest number of calls in `log` made without a turn of the event loop in between. */
+const largestRun = (log: number[]): number => {
+  const runs = new Map<number, number>()
+  for (const t of log) runs.set(t, (runs.get(t) ?? 0) + 1)
+  return Math.max(0, ...runs.values())
+}
 
 import {
   claudeConfigDir,
-  STAT_CONCURRENCY,
   encodeProjectPath,
   parseUsageLine,
   projectDirMatches,
+  DIR_SLICE,
+  READ_CONCURRENCY,
+  STAT_SLICE,
   streamLines,
   UsageService,
 } from './usageService'
@@ -163,6 +201,23 @@ describe('streamLines', () => {
     expect(lines).toEqual([big, 'short'])
     expect(result.tail).toBeNull()
   })
+
+  it('passes on only the lines containing the filter, short or spanning several reads', async () => {
+    const big = (word: string): string => `${'é'.repeat(200_000)}${word}${'é'.repeat(200_000)}`
+    const content = ['a "usage" b', 'nothing', big('"usage"'), big('"usag'), 'last "usage"', 'x'].join('\n') + '\n'
+    const file = await put('/x', 'a.jsonl', content + 'tail without')
+    const lines: [string, number][] = []
+    const filter = Buffer.from('"usage"')
+    const result = await streamLines(file, 0, Buffer.byteLength(content) + 12, (l, at) => lines.push([l, at]), filter)
+    const at = (l: string): number => Buffer.byteLength(content.slice(0, content.indexOf(l)))
+    expect(lines).toEqual([
+      ['a "usage" b', 0],
+      [big('"usage"'), at(big('"usage"'))],
+      ['last "usage"', at('last "usage"')],
+    ])
+    // The tail is returned as it is: it may still be growing into a matching line.
+    expect(result).toEqual({ offset: Buffer.byteLength(content), tail: 'tail without' })
+  })
 })
 
 describe('UsageService', () => {
@@ -189,6 +244,25 @@ describe('UsageService', () => {
     await put('/p/proj', 's1.jsonl', msg)
     await put('/p/proj', 's2.jsonl', msg + line({ output: 1 }))
     expect((await usageOf(service(), '/p/proj')).all).toMatchObject({ messages: 2, output: 101 })
+  })
+
+  it('keeps a message shared by two transcripts once as either grows, and after either goes', async () => {
+    const a = await put('/p/proj', 's1.jsonl', line({ id: 'm1', req: 'r1', output: 5 }))
+    const b = await put('/p/proj', 's2.jsonl', line({ input: 1 }))
+    const svc = service()
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 2, output: 5, input: 1 })
+    // The other transcript gets a fuller copy, then the first a stale one: the fullest counts, once.
+    await appendFile(b, line({ id: 'm1', req: 'r1', output: 50, input: 2 }))
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 2, output: 50, input: 3 })
+    await appendFile(a, line({ id: 'm1', req: 'r1', output: 7 }))
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 2, output: 50, input: 3 })
+    // Without the fuller copy, the first transcript's own lines count again.
+    const { rm } = await import('node:fs/promises')
+    await rm(b)
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 1, output: 7, input: 0 })
+    // A copy rewritten smaller is read from the start, so its old numbers go too.
+    await writeFile(a, line({ id: 'm1', req: 'r1', output: 6 }))
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 1, output: 6 })
   })
 
   it('reads only the bytes appended since the last read', async () => {
@@ -361,18 +435,71 @@ describe('UsageService', () => {
     expect(tomorrow.week.input).toBe(3)
   })
 
+  it('keeps a week that starts last month apart from the month, in roots, groups and models alike', async () => {
+    const at = (month: number, day: number, hour = 12): string => new Date(2026, month, day, hour).toISOString()
+    await put(
+      '/p/a',
+      's1.jsonl',
+      line({ cwd: '/p/a', session: 'a1', ts: at(9, 3), input: 1 }) + // today
+        line({ cwd: '/p/a', session: 'a2', ts: at(9, 1), input: 2, model: 'claude-sonnet-5' }) + // week and month
+        line({ cwd: '/p/a', session: 'a3', ts: at(8, 28), input: 4 }) + // this week, last month
+        line({ cwd: '/p/a', session: 'a3', ts: at(8, 20), input: 8 }), // neither
+    )
+    await put(
+      '/p/b',
+      's2.jsonl',
+      line({ cwd: '/p/b', session: 'b1', ts: at(8, 29), input: 16, model: 'claude-sonnet-5' }),
+    )
+    const result = await service(new Date(2026, 9, 3, 15)).summarize(['/p/a', '/p/b'], { both: ['/p/a', '/p/b'] })
+    const a = result.roots['/p/a']
+    expect([a.today.input, a.week.input, a.month.input, a.all.input]).toEqual([1, 7, 3, 15])
+    expect([a.today.sessions, a.week.sessions, a.month.sessions, a.all.sessions]).toEqual([1, 3, 2, 3])
+    expect(a.week.firstSeen).toBe(at(8, 28))
+    expect(a.month.firstSeen).toBe(at(9, 1))
+    const both = result.groups.both
+    expect([both.today.input, both.week.input, both.month.input, both.all.input]).toEqual([1, 23, 3, 31])
+    expect(both.week.models.map((m) => [m.model, m.input, m.sessions])).toEqual([
+      ['claude-sonnet-5', 18, 2],
+      ['claude-opus-5-5', 5, 2],
+    ])
+    expect(both.all).toMatchObject({ messages: 5, sessions: 4, lastSeen: at(9, 3) })
+  })
+
   it('returns empty usage when there are no transcripts at all', async () => {
     const usage = await usageOf(service(), '/p/none')
     expect(usage.all).toMatchObject({ messages: 0, cost: 0, firstSeen: null, models: [] })
   })
 
-  it(`checks the transcripts ${STAT_CONCURRENCY} at a time, not one by one`, async () => {
-    expect(STAT_CONCURRENCY).toBe(16)
+  it(`reads changed transcripts ${READ_CONCURRENCY} at a time, not one by one`, async () => {
+    expect(READ_CONCURRENCY).toBe(16)
     for (let i = 0; i < 40; i++) await put('/p/proj', `s${i}.jsonl`, line({ input: 1 }))
-    statFlight.peak = 0
+    openFlight.peak = 0
     const all = (await usageOf(service(), '/p/proj')).all
     expect(all.messages).toBe(40)
-    expect(statFlight.peak).toBe(STAT_CONCURRENCY)
+    expect(openFlight.peak).toBe(READ_CONCURRENCY)
+  })
+
+  it(`checks the transcripts at most ${STAT_SLICE} at a time between turns of the event loop`, async () => {
+    const count = STAT_SLICE * 2 + 10
+    for (let i = 0; i < count; i++) await put('/p/proj', `s${i}.jsonl`, line({ input: 1 }))
+    const svc = service()
+    await usageOf(svc, '/p/proj')
+    statLog.calls = []
+    expect((await ticking(() => usageOf(svc, '/p/proj'))).all.messages).toBe(count)
+    expect(statLog.calls).toHaveLength(count)
+    expect(largestRun(statLog.calls)).toBeLessThanOrEqual(STAT_SLICE)
+    expect(new Set(statLog.calls).size).toBeGreaterThanOrEqual(3)
+  })
+
+  it(`lists the folders at most ${DIR_SLICE} at a time between turns of the event loop`, async () => {
+    const count = DIR_SLICE + 5
+    for (let i = 0; i < count; i++) await put('/p/proj', `s${i}/subagents/agent-a.jsonl`, line({ input: 1 }))
+    const svc = service()
+    await usageOf(svc, '/p/proj')
+    statLog.dirs = []
+    expect((await ticking(() => usageOf(svc, '/p/proj'))).all.messages).toBe(count)
+    expect(statLog.dirs).toHaveLength(1 + count * 2) // the project folder, each session's and its subagents'
+    expect(largestRun(statLog.dirs)).toBeLessThanOrEqual(DIR_SLICE)
   })
 
   it('reuses the cached result while nothing changed', async () => {
