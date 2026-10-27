@@ -831,7 +831,7 @@ export class Orchestrator implements AppService {
   }
 
   async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<RemoveTaskResult> {
-    return this.afterTaskActions(taskId, () => this.removeTaskNow(themeId, repoId, taskId, deleteBranch))
+    return this.afterTaskActions(taskId, () => this.removeTaskNow(themeId, repoId, taskId, deleteBranch === true))
   }
 
   private async removeTaskNow(

@@ -694,6 +694,14 @@ describe('Orchestrator: removeTask', () => {
     await orch.removeTask(themeId, repoId, task.id, false)
     expect(git.calls).not.toContain('deleteBranch claude/client-x/fix')
   })
+  it('deletes the branch only when asked with true, not any other value from the renderer', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    for (const ask of ['false', 1, {}]) {
+      const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+      await orch.removeTask(themeId, repoId, task.id, ask as unknown as boolean)
+    }
+    expect(git.calls).not.toContain('deleteBranch claude/client-x/fix')
+  })
   it('removes a task whose original repo was moved or deleted, then its repo and theme', async () => {
     const { orch, git, themeId, repoId, deps } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
