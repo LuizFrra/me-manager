@@ -925,6 +925,16 @@ describe('Orchestrator: sessions and tabs', () => {
     expect(tmux.calls).toContain(`newSession mmt_client-x_my-api_fix ${CLAUDE_CONTINUE_CMD}`)
   })
 
+  it('starts the session once and attaches when the same target is opened twice at once', async () => {
+    const { orch, tmux, pty, target } = await withTask()
+    tmux.sessions.clear()
+    const tabs = await Promise.all([orch.openTarget(target), orch.openTarget(target)])
+    expect(tabs).toEqual([[{ index: 0, name: 'claude', active: true }], [{ index: 0, name: 'claude', active: true }]])
+    expect(tmux.sessions.get('mmt_client-x_my-api_fix')?.windows).toHaveLength(1)
+    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+    expect(orch.currentTarget()).toEqual(target)
+  })
+
   it('detaches the terminal on request, cancelling an open still in flight', async () => {
     const { orch, tmux, pty, target } = await withTask()
     await orch.openTarget(target)

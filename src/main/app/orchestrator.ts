@@ -794,7 +794,12 @@ export class Orchestrator implements AppService {
     const { session, cwd, label } = this.resolve(target)
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     if (!(await this.deps.tmux.hasSession(session))) {
-      await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+      try {
+        await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+      } catch (err) {
+        // Another open of the same target (a double click) started it meanwhile, and tmux refused this one.
+        if (!(await this.deps.tmux.hasSession(session))) throw err
+      }
     }
     // Latest wins: if the user opened something else meanwhile, attaching here would send
     // their keystrokes to a session the UI is not showing.

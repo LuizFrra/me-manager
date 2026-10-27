@@ -233,6 +233,7 @@ export class FakeTmux implements TmuxApi {
   async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
     this.calls.push(`newSession ${name} ${command}`)
     if (this.failNewSession) throw new Error('tmux failed')
+    if (this.sessions.has(name)) throw new Error(`duplicate session: ${name}`) // as tmux refuses it
     this.sessions.set(name, { cwd, windows: [{ name: windowName, command }], active: 0 })
   }
   async killSession(name: string): Promise<void> {
