@@ -61,8 +61,14 @@ export const PANEL_POLL_MS = 3000
 const FILES_EVERY_N_POLLS = 5
 
 type Alive = () => boolean
-/** What the viewer shows for `key`: the file's content or diff, or why it couldn't be read. */
-type Loaded = { key: string; value: FileContent | string; error?: undefined } | { key: string; error: string }
+/**
+ * What the viewer shows for `key`: the file's content or diff, or why it couldn't be read. `deleted`: the file is
+ * missing but was listed or shown, so it was deleted (otherwise it never existed, e.g. a link to a wrong path).
+ */
+type Loaded =
+  { key: string; value: FileContent | string; error?: undefined; deleted?: boolean } | { key: string; error: string }
+
+const isMissing = (value: FileContent | string): boolean => typeof value === 'object' && value.kind === 'missing'
 
 /** Stores the JSON of `value` under `slot`; true if it differs from what was stored before. */
 function changed(cache: Map<string, string>, slot: string, value: unknown): boolean {
@@ -150,9 +156,14 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             ? await api.fileDiff(target, shownPath)
             : await api.fileDiff(target, shownPath, oldPath)
       if (!alive() || !changed(lastJson.current, 'view', { key: viewKey, value })) return
-      setView({ key: viewKey, value })
+      const listed = Boolean(shownPath && shownFiles.current?.paths.includes(shownPath))
+      setView((last) => {
+        if (!isMissing(value)) return { key: viewKey, value }
+        const shown = last?.key === viewKey && last.error === undefined && !isMissing(last.value)
+        return { key: viewKey, value, deleted: listed || shown }
+      })
       // Gone: the tree drops it now, not at the next file-list poll (once, not on every poll while it is shown).
-      if (typeof value === 'object' && value.kind === 'missing') await fetchFiles(alive)
+      if (isMissing(value)) await fetchFiles(alive)
     },
     [api, target, tab, shownPath, oldPath, viewKey, fetchFiles],
   )
@@ -475,6 +486,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             diff={tab === 'changes' && typeof loaded === 'string' ? loaded : undefined}
             change={change}
             error={shown?.error}
+            deleted={shown?.error === undefined && shown?.deleted}
             mdMode={state.mdMode}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}

@@ -199,6 +199,29 @@ describe('SidePanel', () => {
     expect(codeText()).toBe('start')
   })
 
+  it('says a linked file is not found when it never existed, and that a shown file no longer exists once deleted', async () => {
+    const user = userEvent.setup()
+    let deleted = false
+    const api = createMockApi()
+    const readFile = api.readFile.bind(api)
+    api.readFile = async (t, path) =>
+      path === 'docs/guide.md' || (deleted && path === 'README.md') ? { kind: 'missing' } : readFile(t, path)
+    const listFiles = api.listFiles.bind(api)
+    api.listFiles = async (t) => {
+      const list = await listFiles(t)
+      return { ...list, paths: list.paths.filter((p) => p !== 'docs/guide.md' && !(deleted && p === 'README.md')) }
+    }
+    render(<Harness api={api} initial={{ selected: 'README.md' }} />)
+    await screen.findByRole('button', { name: 'README.md' })
+    await user.click(await screen.findByRole('button', { name: 'link from README.md' }))
+    expect(await screen.findByText('File not found')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    await screen.findByTestId('markdown')
+    deleted = true
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await screen.findByText('File no longer exists')).toBeInTheDocument()
+  })
+
   it('renders Markdown, toggles Raw, follows links and goes back', async () => {
     const user = userEvent.setup()
     render(<Harness api={createMockApi()} />)
@@ -628,7 +651,7 @@ describe('SidePanel', () => {
         await vi.advanceTimersByTimeAsync(ms)
       })
     await flush()
-    expect(screen.getByText('File no longer exists')).toBeInTheDocument()
+    expect(screen.getByText('File not found')).toBeInTheDocument() // never listed
     // The first load, and once more as the file is missing.
     expect(listFiles).toHaveBeenCalledTimes(2)
     await flush(4_000)

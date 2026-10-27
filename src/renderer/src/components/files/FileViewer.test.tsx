@@ -330,3 +330,13 @@ describe('FileViewer Markdown images', () => {
     expect(readFile).toHaveBeenCalledWith(TARGET, 'img/a.png')
   })
 })
+
+describe('FileViewer missing files', () => {
+  it('says a deleted file no longer exists, and that a file never there is not found', () => {
+    const { unmount } = renderViewer({ path: 'docs/nope.md', content: { kind: 'missing' } })
+    expect(screen.getByText('File not found')).toBeInTheDocument()
+    unmount()
+    renderViewer({ path: 'docs/gone.md', content: { kind: 'missing' }, deleted: true })
+    expect(screen.getByText('File no longer exists')).toBeInTheDocument()
+  })
+})

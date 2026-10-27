@@ -32,6 +32,8 @@ export interface FileViewerProps {
   change?: ChangedFile
   /** Why the file or diff couldn't be read (instead of `content` or `diff`). */
   error?: string
+  /** A missing file was there before (listed or shown): it was deleted, rather than never there. */
+  deleted?: boolean
   mdMode: PanelState['mdMode']
   /** Changes tab: how the diff is laid out; unified by default. */
   diffLayout?: DiffLayout
@@ -199,7 +201,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   } else if (!p.content) {
     body = <p className="panel-hint">Loading…</p>
   } else if (p.content.kind === 'missing') {
-    body = <p className="viewer-message">File no longer exists</p>
+    body = <p className="viewer-message">{p.deleted ? 'File no longer exists' : 'File not found'}</p>
   } else if (p.content.kind === 'symlinkToFolder') {
     body = <p className="viewer-message">Symlink to a folder</p>
   } else if (image && (p.content.kind === 'binary' || (p.content.kind === 'text' && p.mdMode === 'view'))) {
