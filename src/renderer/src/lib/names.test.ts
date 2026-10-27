@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { newTaskNameError } from './taskName'
+import { newTaskNameError, newThemeNameError, renameError } from './names'
 
 const tasks = [
   { name: 'fix login bug', slug: 'fix-login-bug' },
@@ -31,5 +31,29 @@ describe('newTaskNameError', () => {
     )
     expect(newTaskNameError('write docs', tasks)).toMatch(/“Docs” already uses the branch/)
     expect(newTaskNameError('docs', tasks)).toBe('A task named “Docs” already exists.')
+  })
+})
+
+describe('newThemeNameError', () => {
+  const themes = [{ name: 'Client X', slug: 'client-x' }]
+
+  it('needs letters or numbers, and a name and slug no theme has', () => {
+    expect(newThemeNameError('Acme', themes)).toBeNull()
+    expect(newThemeNameError('', themes)).toBeNull()
+    expect(newThemeNameError('✨', themes)).toMatch(/letters or numbers/)
+    expect(newThemeNameError(' client x ', themes)).toBe('A theme named “Client X” already exists.')
+    expect(newThemeNameError('Client-X', themes)).toBe('A theme named “Client X” already exists.')
+  })
+})
+
+describe('renameError', () => {
+  const others = [{ name: 'task A' }, { name: 'Old', archived: true }]
+
+  it('refuses only a name another one has, ignoring case', () => {
+    expect(renameError('task C', others, 'task')).toBeNull()
+    expect(renameError('!!!', others, 'task')).toBeNull() // a display name only: the branch keeps its name
+    expect(renameError('TASK A', others, 'task')).toBe('A task named “task A” already exists.')
+    expect(renameError('old', others, 'task')).toBe('A task named “Old” already exists (archived).')
+    expect(renameError('task a', others, 'theme')).toBe('A theme named “task A” already exists.')
   })
 })

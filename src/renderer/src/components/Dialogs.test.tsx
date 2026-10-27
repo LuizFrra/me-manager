@@ -93,6 +93,39 @@ describe('RemoveTaskDialog', () => {
   })
 })
 
+describe('NameDialog', () => {
+  it('explains a name `validate` refuses as it is typed, with the button and Enter off', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn(async () => {})
+    render(
+      <NameDialog
+        title="Rename theme"
+        placeholder=""
+        initial="Client X"
+        submitLabel="Rename"
+        note="The branch and folder keep their original name."
+        validate={(name) => (name.trim().toLowerCase() === 'acme' ? 'A theme named “Acme” already exists.' : null)}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    )
+    const box = screen.getByRole('textbox', { name: 'Name' })
+    expect(box).toHaveAccessibleDescription('The branch and folder keep their original name.')
+    await user.clear(box)
+    await user.type(box, 'ACME{Enter}')
+    expect(screen.getByRole('alert')).toHaveTextContent('A theme named “Acme” already exists.')
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    expect(box).toHaveAccessibleDescription(
+      'A theme named “Acme” already exists. The branch and folder keep their original name.',
+    )
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled()
+    expect(onSubmit).not.toHaveBeenCalled()
+    await user.type(box, ' Corp{Enter}')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(onSubmit).toHaveBeenCalledWith('ACME Corp')
+  })
+})
+
 describe('ArchiveTaskDialog', () => {
   it('lists the files that would be discarded and archives anyway only on the explicit button, once', async () => {
     const user = userEvent.setup()

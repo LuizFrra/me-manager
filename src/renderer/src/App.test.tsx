@@ -1000,6 +1000,19 @@ describe('App rename', () => {
     )
   })
 
+  it('refuses a new theme named like another one, or without letters or numbers, as it is typed', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createTheme(user, 'Client X')
+    await user.click(screen.getByRole('button', { name: 'New theme' }))
+    await user.type(nameBox(), 'client-x')
+    expect(screen.getByRole('alert')).toHaveTextContent('A theme named “Client X” already exists.')
+    await user.clear(nameBox())
+    await user.type(nameBox(), '***')
+    expect(screen.getByRole('alert')).toHaveTextContent(/letters or numbers/)
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+  })
+
   it('renames a theme', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
@@ -1014,14 +1027,17 @@ describe('App rename', () => {
     expect(screen.queryByRole('button', { name: 'Remove theme Client X' })).not.toBeInTheDocument()
   })
 
-  it('keeps the dialog open and shows the error for a duplicate name', async () => {
+  it('says a name is taken as it is typed, without sending it', async () => {
     const user = userEvent.setup()
-    render(<App api={repoApi()} />)
+    const api = repoApi()
+    const renameTask = vi.spyOn(api, 'renameTask')
+    render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B')
     await user.click(screen.getByRole('button', { name: 'Rename task task B' }))
     await user.clear(nameBox())
     await user.type(nameBox(), 'TASK A{Enter}')
-    expect(await screen.findByRole('alert')).toHaveTextContent('A task named "TASK A" already exists')
+    expect(screen.getByRole('alert')).toHaveTextContent('A task named “task A” already exists.')
+    expect(renameTask).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'Rename task' })).toBeInTheDocument()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Rename task' })).not.toBeInTheDocument()

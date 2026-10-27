@@ -24,7 +24,7 @@ import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
-import { newTaskNameError, type ExistingTask } from '../lib/taskName'
+import { newTaskNameError, type ExistingTask } from '../lib/names'
 
 /** A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. */
 const cancelOnEscape =
@@ -45,6 +45,8 @@ export function NameDialog(props: {
   submitLabel?: string
   /** A short explanation shown under the field. */
   note?: string
+  /** Why main would refuse the name (see lib/names), shown as it is typed with the button off; null when fine. */
+  validate?: (name: string) => string | null
   onSubmit: (name: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
@@ -52,7 +54,10 @@ export function NameDialog(props: {
   const [name, setName] = useState(props.initial ?? '')
   const [busy, setBusy] = useState(false)
   const unchanged = props.initial !== undefined && name.trim() === props.initial
+  const error = props.validate?.(name) ?? null
   const noteId = useId()
+  const errorId = useId()
+  const describedBy = [error && errorId, props.note && noteId].filter(Boolean).join(' ') || undefined
   return (
     <div className="overlay">
       <form
@@ -63,7 +68,7 @@ export function NameDialog(props: {
         onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={async (e) => {
           e.preventDefault()
-          if (!name.trim() || unchanged) return
+          if (!name.trim() || unchanged || error) return
           setBusy(true)
           try {
             await props.onSubmit(name.trim())
@@ -76,12 +81,18 @@ export function NameDialog(props: {
         <input
           autoFocus
           aria-label="Name"
-          aria-describedby={props.note ? noteId : undefined}
+          aria-describedby={describedBy}
+          aria-invalid={error ? true : undefined}
           placeholder={props.placeholder}
           value={name}
           onFocus={(e) => props.initial !== undefined && e.currentTarget.select()}
           onChange={(e) => setName(e.target.value)}
         />
+        {error && (
+          <p id={errorId} className="dialog-field-hint dialog-field-error" role="alert">
+            {error}
+          </p>
+        )}
         {props.note && (
           <p id={noteId} className="dialog-note">
             {props.note}
@@ -91,7 +102,7 @@ export function NameDialog(props: {
           <button type="button" onClick={props.onCancel}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || !name.trim() || unchanged}>
+          <button type="submit" disabled={busy || !name.trim() || unchanged || error !== null}>
             {busy ? 'Working…' : (props.submitLabel ?? 'Create')}
           </button>
         </div>
