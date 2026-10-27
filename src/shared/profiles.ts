@@ -16,9 +16,23 @@ const isText = (v: unknown): v is string => typeof v === 'string' && v.trim() !=
  */
 export const normalizeConfigDir = (dir: string): string => dir.replace(/\/+/g, '/').replace(/(.)\/$/, '$1')
 
-/** A profile's folder as typed or loaded: trimmed and normalized when it is absolute text, else null. */
-const profileFolder = (dir: unknown): string | null =>
-  isText(dir) && dir.trim().startsWith('/') ? normalizeConfigDir(dir.trim()) : null
+/**
+ * A profile's folder as typed or loaded, trimmed and normalized, or why it can't be one: it must be absolute text,
+ * not the root, and not end in `;` (as CLAUDE_CONFIG_DIR, it would end the tmux command it is passed in).
+ */
+function checkFolder(dir: unknown): { folder: string } | { error: string } {
+  if (!isText(dir) || !dir.trim().startsWith('/')) return { error: 'Choose an absolute folder (starting with /)' }
+  const folder = normalizeConfigDir(dir.trim())
+  if (folder === '/') return { error: 'Choose a folder other than /' }
+  if (folder.endsWith(';')) return { error: 'A folder can’t end in ;' }
+  return { folder }
+}
+
+/** checkFolder's folder, or null. */
+const profileFolder = (dir: unknown): string | null => {
+  const checked = checkFolder(dir)
+  return 'folder' in checked ? checked.folder : null
+}
 
 /** Every profile, Default first; Default's folder is `defaultDir` (CLAUDE_CONFIG_DIR or ~/.claude, from main). */
 export function allProfiles(
@@ -49,7 +63,7 @@ export function effectiveProfileId(
 
 /**
  * Why a new or edited profile is refused, or null: an empty name, a name another profile (`others`, Default
- * included and the edited one left out) has, ignoring case and surrounding spaces, a folder that isn't absolute, or
+ * included and the edited one left out) has, ignoring case and surrounding spaces, a folder checkFolder refuses, or
  * one another profile already uses, once trimmed and normalized. The same checks as normalizeProfiles, so what is
  * accepted here is kept when saved.
  */
@@ -61,15 +75,16 @@ export function profileError(
   const name = p.name.trim().toLowerCase()
   const namesake = others.find((o) => o.name.trim().toLowerCase() === name)
   if (namesake) return `Another account is named “${namesake.name}”`
-  const dir = profileFolder(p.configDir)
-  if (dir === null) return 'Choose an absolute folder (starting with /)'
+  const checked = checkFolder(p.configDir)
+  if ('error' in checked) return checked.error
+  const dir = checked.folder
   const owner = others.find((o) => normalizeConfigDir(o.configDir) === dir)
   return owner ? `“${owner.name}” already uses this folder` : null
 }
 
 /**
- * Settings.profiles from untrusted input: entries with an id and a name (trimmed) and an absolute folder (trimmed
- * and normalized), in order. Dropped: anything else, Default's id, and an id or folder an earlier entry has. A billing
+ * Settings.profiles from untrusted input: entries with an id and a name (trimmed) and a folder checkFolder accepts
+ * (trimmed and normalized), in order. Dropped: anything else, Default's id, and an id or folder an earlier entry has. A billing
  * that isn't one of PROFILE_BILLINGS is `own`. At most MAX_PROFILES.
  */
 export function normalizeProfiles(raw: readonly unknown[]): ClaudeProfile[] {

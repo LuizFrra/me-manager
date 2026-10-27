@@ -100,6 +100,14 @@ describe('profileError', () => {
     expect(profileError({ name: 'Home', configDir: '  /home/me/.claude-home/ ' }, others)).toBeNull()
   })
 
+  it('refuses the root folder and a folder ending in ;, which tmux would cut short', () => {
+    expect(profileError({ name: 'Home', configDir: '/' }, others)).toBe('Choose a folder other than /')
+    expect(profileError({ name: 'Home', configDir: '//' }, others)).toBe('Choose a folder other than /')
+    expect(profileError({ name: 'Home', configDir: '/home/me/x;' }, others)).toBe('A folder can’t end in ;')
+    expect(profileError({ name: 'Home', configDir: '/home/me/x;/' }, others)).toBe('A folder can’t end in ;')
+    expect(profileError({ name: 'Home', configDir: '/home/me/a;b' }, others)).toBeNull()
+  })
+
   it('accepts only what normalizeProfiles keeps, as the Settings dialog saves it', () => {
     const cases = [
       ['Home', '/home/me/.claude-home'],
@@ -111,6 +119,10 @@ describe('profileError', () => {
       ['Home', '   '],
       ['Home', ' relative'],
       ['Home', '/a\0b'],
+      ['Home', '/'],
+      ['Home', ' // '],
+      ['Home', '/home/me/x;'],
+      ['Home', '/home/me/x;/'],
     ]
     for (const [name, configDir] of cases) {
       const kept = normalizeProfiles([{ id: 'p', name, configDir, billing: 'own' }])
