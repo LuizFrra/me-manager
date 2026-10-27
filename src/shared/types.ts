@@ -306,6 +306,11 @@ export interface Settings {
   profiles: ClaudeProfile[]
   /** Who pays for the Default profile's usage. */
   defaultProfileBilling: ProfileBilling
+  /**
+   * How the terminal shows a session: `direct` reads each pane's output through tmux control mode; `classic`
+   * attaches a tmux client, as before.
+   */
+  terminalMode: TerminalMode
 }
 
 /** Who pays for a profile's usage: estimated cost and budgets count `own` profiles only. */
@@ -379,6 +384,11 @@ export const UPDATE_STRATEGIES: readonly UpdateStrategy[] = ['rebase', 'merge']
 export type Appearance = 'system' | 'dark' | 'light'
 
 export const APPEARANCES: readonly Appearance[] = ['system', 'dark', 'light']
+
+/** Settings.terminalMode. */
+export type TerminalMode = 'direct' | 'classic'
+
+export const TERMINAL_MODES: readonly TerminalMode[] = ['direct', 'classic']
 
 /** What the UI is drawn in: an Appearance with `system` resolved. */
 export type ResolvedAppearance = Exclude<Appearance, 'system'>

@@ -182,6 +182,12 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     expect(args).toEqual(['-L', socket, '-f', join(cwd, 'tmux.conf'), '-u', 'attach-session', '-t', '=mmt_a_b_c'])
   })
 
+  it('builds a control-mode command on our socket', () => {
+    const { file, args } = svc.controlCommand('mmt_a_b_c')
+    expect(file).toBe('tmux')
+    expect(args).toEqual(['-L', socket, '-f', join(cwd, 'tmux.conf'), '-u', '-C', 'attach-session', '-t', '=mmt_a_b_c'])
+  })
+
   it('does not expand tmux formats or run #() commands in the cwd', async () => {
     // tmux format-expands -c; #(cmd) would run a shell command and #S would become the session name.
     const marker = join(cwd, 'PWNED')

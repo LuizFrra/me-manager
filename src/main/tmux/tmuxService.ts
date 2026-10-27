@@ -417,4 +417,9 @@ export class TmuxService implements TmuxApi {
   attachCommand(session: string): { file: string; args: string[] } {
     return { file: 'tmux', args: [...this.baseArgs(), '-u', 'attach-session', '-t', `=${session}`] }
   }
+
+  /** Like attachCommand, but a control-mode client (-C): tmux reports each pane's output as text, it draws nothing. */
+  controlCommand(session: string): { file: string; args: string[] } {
+    return { file: 'tmux', args: [...this.baseArgs(), '-u', '-C', 'attach-session', '-t', `=${session}`] }
+  }
 }

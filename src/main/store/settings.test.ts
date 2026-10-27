@@ -30,6 +30,7 @@ const custom: Settings = {
   appearance: 'light',
   profiles: [{ id: 'p1', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }],
   defaultProfileBilling: 'company',
+  terminalMode: 'classic',
 }
 
 describe('SettingsStore', () => {

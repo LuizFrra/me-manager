@@ -4,11 +4,13 @@ import { normalizeTaskTemplates } from './templates'
 import {
   APPEARANCES,
   PROFILE_BILLINGS,
+  TERMINAL_MODES,
   UPDATE_STRATEGIES,
   type Appearance,
   type EffectiveClaudeFlags,
   type ProfileBilling,
   type Settings,
+  type TerminalMode,
   type UpdateStrategy,
 } from './types'
 
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   appearance: 'system',
   profiles: [],
   defaultProfileBilling: 'own',
+  terminalMode: 'direct',
 })
 
 type ClaudeFlagSettings = Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'>
@@ -123,5 +126,8 @@ export function normalizeSettings(
     defaultProfileBilling: PROFILE_BILLINGS.includes(r.defaultProfileBilling as ProfileBilling)
       ? (r.defaultProfileBilling as ProfileBilling)
       : base.defaultProfileBilling,
+    terminalMode: TERMINAL_MODES.includes(r.terminalMode as TerminalMode)
+      ? (r.terminalMode as TerminalMode)
+      : base.terminalMode,
   }
 }

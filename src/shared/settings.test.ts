@@ -23,6 +23,7 @@ describe('normalizeSettings', () => {
       appearance: 'system',
       profiles: [],
       defaultProfileBilling: 'own',
+      terminalMode: 'direct',
     })
   })
 
@@ -44,6 +45,7 @@ describe('normalizeSettings', () => {
       appearance: 'light',
       profiles: [{ id: 'p1', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }],
       defaultProfileBilling: 'company',
+      terminalMode: 'classic',
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -64,6 +66,7 @@ describe('normalizeSettings', () => {
       appearance: 'light',
       profiles: [{ id: 'p1', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }],
       defaultProfileBilling: 'company',
+      terminalMode: 'classic',
     })
     expect(Object.keys(s).sort()).toEqual([
       'appearance',
@@ -81,6 +84,7 @@ describe('normalizeSettings', () => {
       'taskBudgetUsd',
       'taskTemplates',
       'terminalFontSize',
+      'terminalMode',
       'updateStrategy',
     ])
   })
@@ -189,6 +193,16 @@ describe('normalizeSettings', () => {
     }
     const merging: Settings = { ...DEFAULT_SETTINGS, updateStrategy: 'merge' }
     expect(normalizeSettings({ updateStrategy: 'bogus' }, merging).updateStrategy).toBe('merge')
+  })
+
+  it('accepts only known terminal modes, and loads an older file without one as "direct"', () => {
+    expect(normalizeSettings({}).terminalMode).toBe('direct')
+    expect(normalizeSettings({ terminalMode: 'classic' }).terminalMode).toBe('classic')
+    for (const terminalMode of ['x', 'Classic', '', 3, null]) {
+      expect(normalizeSettings({ terminalMode }).terminalMode).toBe('direct')
+    }
+    const classic: Settings = { ...DEFAULT_SETTINGS, terminalMode: 'classic' }
+    expect(normalizeSettings({ terminalMode: 'x' }, classic).terminalMode).toBe('classic')
   })
 
   it('accepts only known appearances, and loads an older file without one as "system"', () => {

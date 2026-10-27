@@ -3,7 +3,7 @@ import { FONT_SIZE_LIMITS, POLL_INTERVAL_LIMITS } from '../../../shared/settings
 import { commandBasename, isTerminalEditor } from '../../../shared/editor'
 import { joinShellWords, splitShellWords } from '../../../shared/shell'
 import { templateListErrors, toTaskTemplate, type TemplateErrors, type TemplateFields } from '../../../shared/templates'
-import type { Appearance, Settings, TaskTemplate, UpdateStrategy } from '../../../shared/types'
+import type { Appearance, Settings, TaskTemplate, TerminalMode, UpdateStrategy } from '../../../shared/types'
 
 /** A task template as edited: its fields as typed, and a key that stays with it while the list is reordered. */
 export interface TemplateForm extends TemplateFields {
@@ -37,6 +37,7 @@ export interface SettingsForm {
   dailyBudget: string
   taskBudget: string
   appearance: Appearance
+  terminalMode: TerminalMode
 }
 
 /**
@@ -80,6 +81,7 @@ export function toForm(s: Settings): SettingsForm {
     dailyBudget: budgetText(s.dailyBudgetUsd),
     taskBudget: budgetText(s.taskBudgetUsd),
     appearance: s.appearance,
+    terminalMode: s.terminalMode,
   }
 }
 
@@ -135,6 +137,7 @@ export function parseForm(
       dailyBudgetUsd,
       taskBudgetUsd,
       appearance: form.appearance,
+      terminalMode: form.terminalMode,
     },
   }
 }

@@ -21,6 +21,7 @@ describe('settings form', () => {
         dailyBudget: '',
         taskBudget: '',
         appearance: 'system',
+        terminalMode: 'direct',
       },
     )
     expect(toForm({ ...DEFAULT_SETTINGS, dailyBudgetUsd: 20, taskBudgetUsd: 2.5 })).toMatchObject({
@@ -86,6 +87,7 @@ describe('settings form', () => {
           updateStrategy: 'merge',
           showStatusBar: false,
           appearance: 'dark',
+          terminalMode: 'classic',
         }),
       ),
     ).toEqual({
@@ -103,6 +105,7 @@ describe('settings form', () => {
         dailyBudgetUsd: null,
         taskBudgetUsd: null,
         appearance: 'dark',
+        terminalMode: 'classic',
       },
     })
     // toEqual skips the undefined keys: the dialog's fields never edit the clone folder or the profiles.
