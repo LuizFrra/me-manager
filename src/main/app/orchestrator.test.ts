@@ -780,6 +780,54 @@ describe('Orchestrator: archiving tasks', () => {
     expect(git.calls.at(-1)).toBe(`removeWorktree ${WT}`)
   })
 
+  it('refuses to open a task while it is being archived or removed, leaving no session behind', async () => {
+    for (const close of ['archive', 'remove'] as const) {
+      const { orch, git, tmux, pty, themeId, repoId, target, task } = await withTask()
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const removeWorktree = git.removeWorktree.bind(git)
+      git.removeWorktree = async (repo: string, wt: string): Promise<void> => {
+        await gate // a big worktree takes a while to delete
+        return removeWorktree(repo, wt)
+      }
+      const closing =
+        close === 'archive'
+          ? orch.archiveTask(themeId, repoId, task.id)
+          : orch.removeTask(themeId, repoId, task.id, false)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(tmux.sessions.has(SESSION)).toBe(false)
+      await expect(orch.openTarget(target)).rejects.toThrow(
+        `"fix" is being ${close === 'archive' ? 'archived' : 'removed'}`,
+      )
+      release()
+      await closing
+      expect(tmux.sessions.has(SESSION)).toBe(false)
+      expect(pty.attached).toBeNull()
+      expect(orch.currentTarget()).toBeNull()
+    }
+  })
+
+  it('kills the session an open started while the task was archived, and does not attach', async () => {
+    const { orch, tmux, pty, themeId, repoId, target, task } = await withTask()
+    await orch.detachTerminal()
+    tmux.sessions.clear()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const hasSession = tmux.hasSession.bind(tmux)
+    tmux.hasSession = async (name: string): Promise<boolean> => {
+      await gate // tmux is slow to answer
+      return hasSession(name)
+    }
+    const opening = orch.openTarget(target)
+    const archiving = orch.archiveTask(themeId, repoId, task.id)
+    release()
+    await archiving
+    await expect(opening).rejects.toThrow(/"fix" is (being )?archived/)
+    expect(tmux.sessions.has(SESSION)).toBe(false)
+    expect(pty.attached).toBeNull()
+    expect(orch.currentTarget()).toBeNull()
+  })
+
   it('runs concurrent archive and restore calls one at a time, so only one archive takes effect', async () => {
     const { orch, git, themeId, repoId, task } = await withTask()
     const results = await Promise.allSettled([

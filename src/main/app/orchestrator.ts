@@ -265,6 +265,11 @@ export class Orchestrator implements AppService {
   private devUrlScans: { session: string; tabs: Map<string, DevUrlScan> } | null = null
   /** The search running for each target (by targetKey): a newer one there aborts it. */
   private readonly searches = new Map<string, AbortController>()
+  /**
+   * Tasks and folders (by targetKey) whose session and folder are being taken away, with what is happening to them:
+   * openTarget refuses them, as a session started meanwhile would outlive its folder.
+   */
+  private readonly closing = new Map<string, 'archived' | 'removed'>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -326,12 +331,13 @@ export class Orchestrator implements AppService {
     }
   }
 
-  /** The tmux session, working folder and Remote Control label (`<theme>/<repo>/<task>`) of a target. */
-  private resolve(target: Target): { session: string; cwd: string; label: string } {
+  /** The tmux session, working folder, Remote Control label (`<theme>/<repo>/<task>`) and name of a target. */
+  private resolve(target: Target): { session: string; cwd: string; label: string; name: string } {
     const theme = m.getTheme(this.state, target.themeId)
     const item = m.getItem(this.state, target.themeId, target.itemId)
     if (item.kind === 'folder') {
-      return { session: sessionName(theme.slug, item.slug), cwd: item.path, label: `${theme.slug}/${item.slug}` }
+      const label = `${theme.slug}/${item.slug}`
+      return { session: sessionName(theme.slug, item.slug), cwd: item.path, label, name: item.name }
     }
     if (!target.taskId) throw new Error('Choose a task to open')
     const task = m.getTask(this.state, theme.id, item.id, target.taskId)
@@ -340,6 +346,25 @@ export class Orchestrator implements AppService {
       session: sessionName(theme.slug, item.slug, task.slug),
       cwd: task.worktreePath,
       label: `${theme.slug}/${item.slug}/${task.slug}`,
+      name: task.name,
+    }
+  }
+
+  /** resolve, also refusing a target that is being archived or removed (see `closing`). */
+  private resolveOpenable(target: Target): ReturnType<Orchestrator['resolve']> {
+    const resolved = this.resolve(target)
+    const what = this.closing.get(targetKey(target))
+    if (what) throw new Error(`"${resolved.name}" is being ${what}`)
+    return resolved
+  }
+
+  /** Runs `op` with the targets `keys` marked as being archived or removed (see `closing`). */
+  private async whileClosing<T>(keys: string[], what: 'archived' | 'removed', op: () => Promise<T>): Promise<T> {
+    for (const key of keys) this.closing.set(key, what)
+    try {
+      return await op()
+    } finally {
+      for (const key of keys) this.closing.delete(key)
     }
   }
 
@@ -519,11 +544,16 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => {
       const next = m.removeTheme(this.state, themeId) // throws if tasks remain
       const theme = m.getTheme(this.state, themeId)
-      this.detachIf((t) => t.themeId === themeId)
-      for (const item of theme.items) {
-        if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
-      }
-      return this.commit(next)
+      const folders = theme.items.filter((i) => i.kind === 'folder')
+      return this.whileClosing(
+        folders.map((f) => f.id),
+        'removed',
+        async () => {
+          this.detachIf((t) => t.themeId === themeId)
+          for (const folder of folders) await this.deps.tmux.killSession(sessionName(theme.slug, folder.slug))
+          return this.commit(next)
+        },
+      )
     })
   }
 
@@ -580,9 +610,11 @@ export class Orchestrator implements AppService {
       const next = m.removeItem(this.state, themeId, itemId) // throws if repo has tasks
       const theme = m.getTheme(this.state, themeId)
       const item = m.getItem(this.state, themeId, itemId)
-      this.detachIf((t) => t.itemId === itemId)
-      if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
-      return this.commit(next)
+      return this.whileClosing([itemId], 'removed', async () => {
+        this.detachIf((t) => t.itemId === itemId)
+        if (item.kind === 'folder') await this.deps.tmux.killSession(sessionName(theme.slug, item.slug))
+        return this.commit(next)
+      })
     })
   }
 
@@ -715,18 +747,20 @@ export class Orchestrator implements AppService {
     const theme = m.getTheme(this.state, themeId)
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)
-    this.detachIf((t) => t.taskId === taskId)
-    // An archived task's session and worktree are gone already; whatever is at its path now isn't its own.
-    if (!isArchived(task)) {
-      await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
-      // GitService deletes the folder directly when the original repo was moved or deleted.
-      await this.deps.git.removeWorktree(repo.path, task.worktreePath)
-    }
-    // The branch lived in the original repo; if that is gone there is nothing to delete.
-    if (deleteBranch && this.deps.pathExists(repo.path)) {
-      await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
-    }
-    return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+    return this.whileClosing([taskId], 'removed', async () => {
+      this.detachIf((t) => t.taskId === taskId)
+      // An archived task's session and worktree are gone already; whatever is at its path now isn't its own.
+      if (!isArchived(task)) {
+        await this.deps.tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+        // GitService deletes the folder directly when the original repo was moved or deleted.
+        await this.deps.git.removeWorktree(repo.path, task.worktreePath)
+      }
+      // The branch lived in the original repo; if that is gone there is nothing to delete.
+      if (deleteBranch && this.deps.pathExists(repo.path)) {
+        await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+      }
+      return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+    })
   }
 
   /** Like removeTask, after the task's queued git actions, so nothing runs in a worktree being removed. */
@@ -759,12 +793,14 @@ export class Orchestrator implements AppService {
       }
       if (work.warning) throw new Error(`${work.warning} ${ARCHIVE_REFUSAL}`)
     }
-    this.detachIf((t) => t.taskId === taskId)
-    await tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
-    // Prunes the worktree entry when its folder is already gone.
-    await git.removeWorktree(repo.path, task.worktreePath)
-    this.gitStatusCache.delete(task.worktreePath)
-    return this.commit(m.archiveTask(this.state, themeId, repoId, taskId, new Date(this.now()).toISOString()))
+    return this.whileClosing([taskId], 'archived', async () => {
+      this.detachIf((t) => t.taskId === taskId)
+      await tmux.killSession(sessionName(theme.slug, repo.slug, task.slug))
+      // Prunes the worktree entry when its folder is already gone.
+      await git.removeWorktree(repo.path, task.worktreePath)
+      this.gitStatusCache.delete(task.worktreePath)
+      return this.commit(m.archiveTask(this.state, themeId, repoId, taskId, new Date(this.now()).toISOString()))
+    })
   }
 
   /** On the task's queue too, like archiveTask. The session is started by the next openTarget, as for any task. */
@@ -791,15 +827,23 @@ export class Orchestrator implements AppService {
 
   async openTarget(target: Target): Promise<TabInfo[]> {
     const seq = ++this.openSeq
-    const { session, cwd, label } = this.resolve(target)
+    const { session, cwd, label } = this.resolveOpenable(target)
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
+    let started = false
     if (!(await this.deps.tmux.hasSession(session))) {
       try {
         await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+        started = true
       } catch (err) {
         // Another open of the same target (a double click) started it meanwhile, and tmux refused this one.
         if (!(await this.deps.tmux.hasSession(session))) throw err
       }
+    }
+    try {
+      this.resolveOpenable(target) // archived or removed meanwhile, or on its way
+    } catch (err) {
+      if (started) await this.deps.tmux.killSession(session).catch(() => {}) // it would outlive the folder
+      throw err
     }
     // Latest wins: if the user opened something else meanwhile, attaching here would send
     // their keystrokes to a session the UI is not showing.
