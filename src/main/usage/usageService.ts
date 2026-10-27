@@ -456,21 +456,43 @@ const normalizeRoot = (root: string): string => {
 const contains = (root: string, cwd: string): boolean =>
   cwd === root || cwd.startsWith(root.endsWith(sep) ? root : root + sep)
 
+/** Totals by period mask (sparse): today implies this week and this month, but a week can start last month. */
+type Cells = Accumulator[]
+
+/** Adds a record to its cell for the periods it falls in; NaN (no timestamp) is in no period but `all`. */
+function addToCells(cells: Cells, r: UsageRecord, starts: Record<UsagePeriod, number>): void {
+  const mask =
+    (r.ts >= starts.today ? PERIOD_BIT.today : 0) |
+    (r.ts >= starts.week ? PERIOD_BIT.week : 0) |
+    (r.ts >= starts.month ? PERIOD_BIT.month : 0)
+  ;(cells[mask] ??= new Accumulator(true)).add(r)
+}
+
+/** Each cwd's totals by period mask, for the day of `now`. */
+export function cellsByCwd(records: Iterable<UsageRecord>, now: Date): Map<string, Cells> {
+  const starts = periodStarts(now)
+  const out = new Map<string, Cells>()
+  for (const r of records) {
+    let cells = out.get(r.cwd)
+    if (!cells) out.set(r.cwd, (cells = []))
+    addToCells(cells, r, starts)
+  }
+  return out
+}
+
 /**
- * Sums usage per root and per group. Each message counts for the most specific root containing its cwd (a task
- * worktree inside a folder counts for the task), and for every group listing that root.
+ * Sums usage per root and per group from each cwd's totals (see cellsByCwd). Each message counts for the most
+ * specific root containing its cwd (a task worktree inside a folder counts for the task), and for every group
+ * listing that root.
  *
- * Each record is added once, to its root's cell for the periods it falls in (a bit mask: today implies this week
- * and this month, but a week can start last month). The periods, roots and groups are then sums of those few cells,
- * instead of every record being added to every period of its root and of each of its groups.
+ * Each record was added once, to its cwd's cell for the periods it falls in. The periods, roots and groups are sums
+ * of those few cells, instead of every record being added to every period of its root and of each of its groups.
  */
-export function aggregateUsage(
-  records: Iterable<UsageRecord>,
+export function summarizeCells(
+  cells: ReadonlyMap<string, Cells>,
   roots: readonly string[],
   groups: Readonly<Record<string, readonly string[]>>,
-  now: Date,
 ): UsageSummaries {
-  const starts = periodStarts(now)
   type Sink = Record<UsagePeriod, Accumulator>
   const groupRoots = Object.entries(groups).map(
     ([name, members]) => [name, new Set(members.map(normalizeRoot))] as const,
@@ -478,38 +500,24 @@ export function aggregateUsage(
   const known = new Set(roots.map(normalizeRoot))
   for (const [, members] of groupRoots) for (const n of members) known.add(n)
   const ordered = [...known].sort((a, b) => b.length - a.length)
-  const rootOfCwd = new Map<string, string | null>()
-  const match = (cwd: string): string | null => {
-    let hit = rootOfCwd.get(cwd)
-    if (hit === undefined) {
-      hit = ordered.find((r) => contains(r, cwd)) ?? null
-      rootOfCwd.set(cwd, hit)
-    }
-    return hit
-  }
-
-  // Normalized root -> its records' totals, by period mask.
-  const cellsOf = new Map<string, Accumulator[]>()
-  for (const r of records) {
-    const root = match(r.cwd)
-    if (root === null) continue
-    let cells = cellsOf.get(root)
-    if (!cells) cellsOf.set(root, (cells = []))
-    // NaN (no timestamp) is in no period but `all`.
-    const mask =
-      (r.ts >= starts.today ? PERIOD_BIT.today : 0) |
-      (r.ts >= starts.week ? PERIOD_BIT.week : 0) |
-      (r.ts >= starts.month ? PERIOD_BIT.month : 0)
-    const cell = (cells[mask] ??= new Accumulator(true))
-    cell.add(r)
+  // Normalized root -> the totals of the cwds it is the most specific root of.
+  const cellsOf = new Map<string, Cells[]>()
+  for (const [cwd, c] of cells) {
+    const root = ordered.find((r) => contains(r, cwd))
+    if (root === undefined) continue
+    let list = cellsOf.get(root)
+    if (!list) cellsOf.set(root, (list = []))
+    list.push(c)
   }
 
   const summaryOf = (members: Iterable<string>): UsageSummary => {
     const sink = Object.fromEntries(USAGE_PERIODS.map((p) => [p, new Accumulator(true)])) as Sink
     for (const n of members) {
-      cellsOf.get(n)?.forEach((cell, mask) => {
-        for (const p of USAGE_PERIODS) if (p === 'all' || mask & PERIOD_BIT[p]) sink[p].merge(cell)
-      })
+      for (const c of cellsOf.get(n) ?? []) {
+        c.forEach((cell, mask) => {
+          for (const p of USAGE_PERIODS) if (p === 'all' || mask & PERIOD_BIT[p]) sink[p].merge(cell)
+        })
+      }
     }
     return Object.fromEntries(USAGE_PERIODS.map((p) => [p, sink[p].bucket()])) as Record<UsagePeriod, UsageBucket>
   }
@@ -518,6 +526,14 @@ export function aggregateUsage(
     groups: Object.fromEntries(groupRoots.map(([name, members]) => [name, summaryOf(members)])),
   }
 }
+
+/** Sums usage per root and per group (see summarizeCells). */
+export const aggregateUsage = (
+  records: Iterable<UsageRecord>,
+  roots: readonly string[],
+  groups: Readonly<Record<string, readonly string[]>>,
+  now: Date,
+): UsageSummaries => summarizeCells(cellsByCwd(records, now), roots, groups)
 
 /**
  * Reads Claude Code's transcripts (`<claudeDir>/projects/<encoded cwd>/**.jsonl`), read-only, and sums their
@@ -544,6 +560,14 @@ export class UsageService implements UsageApi {
   private merged = new Map<string, UsageRecord>()
   /** Set when a file's records were dropped (deleted, replaced, out of scope): `merged` is then rebuilt. */
   private mergedStale = false
+  /** `merged` by cwd, so that a change sums again only the messages of its cwd. */
+  private mergedByCwd = new Map<string, Map<string, UsageRecord>>()
+  /**
+   * Each cwd's totals for the day `cellsDay` (see cellsByCwd); a cwd whose messages changed since is left out, and
+   * summed again on the next summarize.
+   */
+  private cells = new Map<string, Cells>()
+  private cellsDay = NaN
   private cache: { key: string; result: UsageSummaries } | null = null
   private lastScan: { at: number; dirsKey: string } | null = null
   private scanning: Promise<void> | null = null
@@ -580,25 +604,47 @@ export class UsageService implements UsageApi {
     const now = this.now()
     const key = JSON.stringify([this.generation, startOfDay(now), roots, groups])
     if (this.cache?.key === key) return this.cache.result
-    const result = aggregateUsage(this.mergedRecords(), roots, groups, now)
+    const result = summarizeCells(this.cwdCells(now), roots, groups)
     this.cache = { key, result }
     return result
   }
 
-  private mergedRecords(): Iterable<UsageRecord> {
+  /** Every cwd's totals, summing again only the cwds whose messages changed (all of them on a new day). */
+  private cwdCells(now: Date): ReadonlyMap<string, Cells> {
     if (this.mergedStale) {
       this.mergedStale = false
       this.merged.clear()
+      this.mergedByCwd.clear()
+      this.cells.clear()
       for (const [path, state] of this.files) for (const [key, record] of state.records) this.mergeIn(path, key, record)
     }
-    return this.merged.values()
+    const day = startOfDay(now)
+    if (day !== this.cellsDay) {
+      this.cells.clear()
+      this.cellsDay = day
+    }
+    const starts = periodStarts(now)
+    for (const [cwd, records] of this.mergedByCwd) {
+      if (this.cells.has(cwd)) continue
+      const cells: Cells = []
+      for (const r of records.values()) addToCells(cells, r, starts)
+      this.cells.set(cwd, cells)
+    }
+    return this.cells
   }
 
   private mergeIn(path: string, key: string, record: UsageRecord): void {
     // Keyless lines are unique to their file and offset.
     const k = key.startsWith('@') ? `${path}${key}` : key
     const prev = this.merged.get(k)
-    this.merged.set(k, prev ? mergeRecords(prev, record) : record)
+    const next = prev ? mergeRecords(prev, record) : record
+    if (next === prev) return
+    this.merged.set(k, next)
+    // A merged record keeps the first one's cwd, so a key never moves to another cwd.
+    let byCwd = this.mergedByCwd.get(next.cwd)
+    if (!byCwd) this.mergedByCwd.set(next.cwd, (byCwd = new Map()))
+    byCwd.set(k, next)
+    this.cells.delete(next.cwd)
   }
 
   private intern(s: string): string {

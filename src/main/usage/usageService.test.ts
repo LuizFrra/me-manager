@@ -467,6 +467,48 @@ describe('UsageService', () => {
     expect(both.all).toMatchObject({ messages: 5, sessions: 4, lastSeen: at(9, 3) })
   })
 
+  it('moves usage out of today, this week and this month as the clock passes midnight, with no transcript changed', async () => {
+    const at = (month: number, day: number, hour = 12): string => new Date(2026, month, day, hour).toISOString()
+    await put(
+      '/p/proj',
+      's1.jsonl',
+      line({ ts: at(9, 31, 23), input: 1 }) + line({ ts: at(9, 25, 1), input: 2 }) + line({ ts: at(9, 1), input: 4 }),
+    )
+    let now = new Date(2026, 9, 31, 23, 59)
+    const svc = new UsageService({ claudeDir, now: () => now, minRefreshMs: 0 })
+    const periods = async (): Promise<number[]> => {
+      const u = await usageOf(svc, '/p/proj')
+      return [u.today.input, u.week.input, u.month.input, u.all.input]
+    }
+    expect(await periods()).toEqual([1, 3, 7, 7])
+    now = new Date(2026, 10, 1, 0, 1) // a new day, week and month
+    expect(await periods()).toEqual([0, 1, 0, 7])
+  })
+
+  it('sums each change into the same totals as reading everything afresh', async () => {
+    const at = (day: number, hour = 12): string => new Date(2026, 9, day, hour).toISOString()
+    const roots = ['/p/a', '/p/a/wt', '/p/b']
+    const groups = { total: roots, t1: ['/p/a', '/p/a/wt'], t2: ['/p/b'] }
+    const a = await put('/p/a', 's1.jsonl', line({ cwd: '/p/a', ts: at(18), input: 1, session: 'a' }))
+    const wt = await put('/p/a/wt', 's2.jsonl', line({ cwd: '/p/a/wt', ts: at(12), output: 2, session: 'w' }))
+    const b = await put('/p/b', 's3.jsonl', line({ cwd: '/p/b', ts: at(1), cacheRead: 4, model: 'claude-sonnet-5' }))
+    const svc = service()
+    const same = async (): Promise<void> => {
+      expect(await svc.summarize(roots, groups)).toEqual(await service().summarize(roots, groups))
+    }
+    await same()
+    await appendFile(wt, line({ id: 'm1', req: 'r1', cwd: '/p/a/wt/pkg', output: 8, session: 'w2' }))
+    await same()
+    await appendFile(b, line({ id: 'm1', req: 'r1', cwd: '/p/a/wt/pkg', output: 16, session: 'w2' })) // fuller copy
+    await same()
+    await appendFile(a, line({ cwd: '/p/a', ts: at(17), input: 32, model: 'claude-future-9' }))
+    await same()
+    const { rm } = await import('node:fs/promises')
+    await rm(b)
+    await same()
+    expect((await svc.summarize(roots, groups)).groups.t1.all).toMatchObject({ input: 33, output: 10, messages: 4 })
+  })
+
   it('returns empty usage when there are no transcripts at all', async () => {
     const usage = await usageOf(service(), '/p/none')
     expect(usage.all).toMatchObject({ messages: 0, cost: 0, firstSeen: null, models: [] })
