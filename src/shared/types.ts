@@ -69,6 +69,13 @@ export interface PushResult {
   branch: string
 }
 
+/** What removeTask did. */
+export interface RemoveTaskResult {
+  state: AppState
+  /** Set when the task went but its branch could not be deleted (e.g. it is checked out in the repo): why it stayed. */
+  warning?: string
+}
+
 export interface PullRequestResult {
   url: string
   /** False when the branch already had a pull request. */
@@ -86,7 +93,11 @@ export type ChangeScope = 'base' | 'uncommitted'
 
 /** The branches a new task can start from. */
 export interface BranchList {
-  /** The base a task gets when none is chosen, e.g. "origin/main". Always one of `branches`. */
+  /**
+   * The base to offer first: the repo's default, e.g. "origin/main" (what a task gets when none is chosen), or,
+   * when the repo has none (a detached HEAD and no main or master), the first listed branch, as a task can then
+   * only start from a chosen one. Always one of `branches`.
+   */
   default: string
   /** `default` first, then origin's branches (`origin/…`, without `origin/HEAD`), then local ones. */
   branches: string[]
@@ -455,9 +466,10 @@ export interface MeManagerApi {
   checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork>
   /**
    * Kills the session, removes the worktree and drops the task, deleting its branch too when asked. An archived
-   * task has no worktree or session left, so only the branch (when asked) and the task go.
+   * task has no worktree or session left, so only the branch (when asked) and the task go. A branch git won't
+   * delete doesn't stop the removal: the result's `warning` says it was kept, and why.
    */
-  removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState>
+  removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<RemoveTaskResult>
   /**
    * Kills the task's session and removes its worktree, keeping its branch; the task stays, with `archivedAt` set.
    * Refuses ("Commit or discard the changes first") while the worktree has uncommitted or untracked files, or

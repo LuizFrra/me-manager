@@ -49,6 +49,17 @@ describe('run', () => {
     expect(err.timedOut).toBe(true)
     expect(Date.now() - started).toBeLessThan(300 + KILL_GRACE_MS + 2000)
   })
+  it('kills the command and rejects when its signal aborts', async () => {
+    const controller = new AbortController()
+    const started = Date.now()
+    const result = run('sleep', ['30'], { signal: controller.signal })
+    setTimeout(() => controller.abort(new Error('quitting')), 50)
+    await expect(result).rejects.toThrow('quitting')
+    expect(Date.now() - started).toBeLessThan(5_000)
+    await expect(run('sleep', ['30'], { signal: AbortSignal.abort(new Error('before start')) })).rejects.toThrow(
+      'before start',
+    )
+  })
   it('explains a missing binary', async () => {
     const err = await run('definitely-not-a-real-binary-xyz', []).catch((e) => e)
     expect(err).toBeInstanceOf(CommandError)

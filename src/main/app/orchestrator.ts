@@ -26,6 +26,7 @@ import type {
   NewTaskOptions,
   PullRequestResult,
   PushResult,
+  RemoveTaskResult,
   Repo,
   SearchOptions,
   SearchResult,
@@ -203,6 +204,15 @@ export function claudeMessage(text: unknown): string {
   return clean
 }
 
+/**
+ * A tab index from the renderer: tmux reads a target that isn't a window index (`=session:x`) as a window name or
+ * pattern, so anything but a non-negative whole number is refused.
+ */
+function tabIndex(index: unknown): number {
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) throw new Error('Invalid tab')
+  return index
+}
+
 /** The usage group of a theme's targets. */
 const themeGroup = (themeId: string): string => `theme:${themeId}`
 
@@ -270,6 +280,11 @@ export class Orchestrator implements AppService {
    * openTarget refuses them, as a session started meanwhile would outlive its folder.
    */
   private readonly closing = new Map<string, 'archived' | 'removed'>()
+  /**
+   * The clones running (see cloneRepo), each until its repo is added, with what cancels it: they run outside the
+   * queues, and quitting cancels them rather than wait (see cancelClones). Keyed by a tail that always resolves.
+   */
+  private readonly clones = new Map<Promise<void>, AbortController>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -316,9 +331,18 @@ export class Orchestrator implements AppService {
     return run
   }
 
-  /** Whether a change is running or queued (see exclusive). */
+  /** Whether a change is running or queued (see exclusive), or a clone is running. */
   busy(): boolean {
-    return this.queues.size > 0
+    return this.queues.size > 0 || this.clones.size > 0
+  }
+
+  /**
+   * Cancels the clones running, for quitting: git is stopped and the folder it was cloning into removed, rather
+   * than left to finish after the app is gone (a big clone takes minutes) and never be added. whenIdle then
+   * resolves once they have stopped.
+   */
+  cancelClones(): void {
+    for (const controller of this.clones.values()) controller.abort(new Error('The app is quitting'))
   }
 
   /**
@@ -331,8 +355,9 @@ export class Orchestrator implements AppService {
       timer = setTimeout(() => resolve('timeout'), maxMs)
     })
     try {
-      while (this.queues.size > 0) {
-        if ((await Promise.race([Promise.all(this.queues.values()), timeout])) === 'timeout') return
+      while (this.busy()) {
+        const running = Promise.all([...this.queues.values(), ...this.clones.keys()])
+        if ((await Promise.race([running, timeout])) === 'timeout') return
       }
     } finally {
       clearTimeout(timer)
@@ -604,7 +629,7 @@ export class Orchestrator implements AppService {
   /**
    * Everything is checked before git runs: the URL, the name, the parent folder, and that the theme will take the
    * repo (its path and name are free). The clone itself runs outside the state queue, so a slow one doesn't hold
-   * up other changes; the repo is added once it is done.
+   * up other changes; the repo is added once it is done. Quitting cancels it (see cancelClones).
    */
   async cloneRepo(themeId: string, url: string, parentDir: string, name: string): Promise<AppState> {
     const checkedUrl = checkCloneUrl(url)
@@ -616,7 +641,25 @@ export class Orchestrator implements AppService {
     const dest = join(parentDir, folder)
     if (this.deps.pathExists(dest)) throw new Error(`${dest} already exists; choose another folder name`)
     m.addRepo(this.state, themeId, dest) // throws now, not after the clone, if the theme won't take it
-    await this.deps.git.clone(checkedUrl, dest)
+    const controller = new AbortController()
+    const cloning = this.cloneAndAdd(themeId, checkedUrl, parentDir, dest, controller.signal)
+    const tail = cloning.then(
+      () => {},
+      () => {},
+    )
+    this.clones.set(tail, controller)
+    void tail.then(() => this.clones.delete(tail))
+    return cloning
+  }
+
+  private async cloneAndAdd(
+    themeId: string,
+    url: string,
+    parentDir: string,
+    dest: string,
+    signal: AbortSignal,
+  ): Promise<AppState> {
+    await this.deps.git.clone(url, dest, signal)
     const root = (await this.deps.git.repoRoot(dest)) ?? dest
     const next = await this.exclusive(async () => this.commit(m.addRepo(this.state, themeId, root))).catch((err) => {
       // The theme changed while cloning; the clone is complete, so it stays where it is.
@@ -628,7 +671,10 @@ export class Orchestrator implements AppService {
     return next
   }
 
+  /** The path comes from the renderer: it must be an absolute one that exists (it is the session's folder). */
   async addFolder(themeId: string, path: string): Promise<AppState> {
+    if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) throw new Error('Choose a folder to add')
+    if (!this.deps.pathExists(path)) throw new Error(`Folder not found: ${path}`)
     return this.exclusive(async () => this.commit(m.addFolder(this.state, themeId, path)))
   }
 
@@ -788,8 +834,8 @@ export class Orchestrator implements AppService {
     return this.exclusive(() => this.exclusive(op), taskQueue(taskId))
   }
 
-  async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState> {
-    return this.afterTaskActions(taskId, () => this.removeTaskNow(themeId, repoId, taskId, deleteBranch))
+  async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<RemoveTaskResult> {
+    return this.afterTaskActions(taskId, () => this.removeTaskNow(themeId, repoId, taskId, deleteBranch === true))
   }
 
   private async removeTaskNow(
@@ -797,7 +843,7 @@ export class Orchestrator implements AppService {
     repoId: string,
     taskId: string,
     deleteBranch: boolean,
-  ): Promise<AppState> {
+  ): Promise<RemoveTaskResult> {
     const theme = m.getTheme(this.state, themeId)
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)
@@ -809,11 +855,17 @@ export class Orchestrator implements AppService {
         // GitService deletes the folder directly when the original repo was moved or deleted.
         await this.deps.git.removeWorktree(repo.path, task.worktreePath)
       }
-      // The branch lived in the original repo; if that is gone there is nothing to delete.
+      // The branch lived in the original repo; if that is gone there is nothing to delete. A branch git won't
+      // delete (checked out in the repo itself) is kept, and the task still goes: its worktree is gone already.
+      let warning: string | undefined
       if (deleteBranch && this.deps.pathExists(repo.path)) {
-        await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+        await this.deps.git.deleteBranch(repo.path, task.branch).catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err)
+          warning = `Removed "${task.name}" but kept its branch ${task.branch}: ${reason}`
+        })
       }
-      return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+      const state = await this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+      return warning === undefined ? { state } : { state, warning }
     })
   }
 
@@ -928,13 +980,13 @@ export class Orchestrator implements AppService {
 
   async selectTab(target: Target, index: number): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
-    await this.deps.tmux.selectWindow(session, index)
+    await this.deps.tmux.selectWindow(session, tabIndex(index))
     return this.deps.tmux.listWindows(session)
   }
 
   async closeTab(target: Target, index: number): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
-    await this.deps.tmux.killWindow(session, index)
+    await this.deps.tmux.killWindow(session, tabIndex(index))
     return this.listTabs(target)
   }
 

@@ -19,6 +19,9 @@ import { isHttpUrl } from './urls'
 
 type Handler = (...args: unknown[]) => unknown
 
+/** A terminal's columns or rows as the renderer sends them: a positive whole number a pty can take. */
+const isTermSize = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0 && n <= 0xffff
+
 /** Electron's save dialog for a transcript, on the window when there is one; asks before replacing a file. */
 async function askTranscriptPath(win: BrowserWindow | null, defaultPath: string): Promise<string | null> {
   const options: SaveDialogOptions = {
@@ -74,8 +77,14 @@ export function registerIpc(opts: { app: AppService; pty: PtyApi; getWindow: () 
     ipcMain.handle(invokeChannel(method), (_event, ...args: unknown[]) => handler(...args))
   }
 
-  ipcMain.on(PTY_WRITE, (_event, data: string) => pty.write(data))
-  ipcMain.on(PTY_RESIZE, (_event, cols: number, rows: number) => pty.resize(cols, rows))
+  // Checked first: node-pty throws on a size that isn't a positive number, and a throw in a listener here is an
+  // uncaught exception in the main process.
+  ipcMain.on(PTY_WRITE, (_event, data: unknown) => {
+    if (typeof data === 'string') pty.write(data)
+  })
+  ipcMain.on(PTY_RESIZE, (_event, cols: unknown, rows: unknown) => {
+    if (isTermSize(cols) && isTermSize(rows)) pty.resize(cols, rows)
+  })
   pty.onData((data) => getWindow()?.webContents.send(PTY_DATA, data))
   pty.onExit((code) => getWindow()?.webContents.send(PTY_EXIT, code))
 }

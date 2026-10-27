@@ -147,6 +147,14 @@ describe('clone', () => {
     return { url: `file://${join(root, 'origin.git')}`, parent }
   }
 
+  it('stops and removes the folder when the clone is cancelled', async () => {
+    const { url, parent } = await origin()
+    const dest = join(parent, 'my-api')
+    const cancelled = AbortSignal.abort(new Error('The app is quitting'))
+    await expect(svc.clone(url, dest, cancelled)).rejects.toThrow('The app is quitting')
+    expect(existsSync(dest)).toBe(false)
+  })
+
   it('clones a file:// repository into a new folder', async () => {
     const { url, parent } = await origin()
     const dest = join(parent, 'my-api')
@@ -358,6 +366,19 @@ describe('removeWorktree / deleteBranch', () => {
     await svc.deleteBranch(clone, branch)
     expect(existsSync(wt)).toBe(false)
     expect((await run('git', ['-C', clone, 'branch', '--list', branch])).trim()).toBe('')
+  })
+  it('resolves for a branch that is already gone', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await svc.deleteBranch(clone, branch)
+    await expect(svc.deleteBranch(clone, branch)).resolves.toBeUndefined()
+  })
+  it('refuses, saying why, to delete a branch checked out in the repo', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await run('git', ['-C', clone, 'checkout', '-q', branch])
+    await expect(svc.deleteBranch(clone, branch)).rejects.toThrow(/^git branch -D failed: .*cannot delete branch/i)
+    expect((await run('git', ['-C', clone, 'branch', '--list', branch])).trim()).not.toBe('')
   })
   it('prunes when the folder was deleted manually', async () => {
     const { clone, wt } = await withTask()

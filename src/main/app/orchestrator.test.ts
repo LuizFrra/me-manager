@@ -87,6 +87,17 @@ describe('Orchestrator: themes and items', () => {
     const { orch, themeId } = await setup()
     await expect(orch.addRepo(themeId, '/not/a/repo')).rejects.toThrow(/Not a git repository/)
   })
+  it('refuses a folder path that is not absolute, or not there, before adding it', async () => {
+    const { orch, store, deps, themeId } = await setup()
+    deps.pathExists = (p) => p !== '/docs/gone'
+    const saves = store.saved.length
+    for (const path of ['docs/notes', '', 'C:', '/docs/a\0b', 42 as unknown as string, null as unknown as string]) {
+      await expect(orch.addFolder(themeId, path)).rejects.toThrow('Choose a folder to add')
+    }
+    await expect(orch.addFolder(themeId, '/docs/gone')).rejects.toThrow('Folder not found: /docs/gone')
+    expect(store.saved.length).toBe(saves)
+  })
+
   it('kills the folder session when removing a folder', async () => {
     const { orch, tmux, themeId } = await setup()
     const s = await orch.addFolder(themeId, '/docs/notes')
@@ -277,7 +288,8 @@ describe('Orchestrator: cloneRepo', () => {
   })
 
   it('refuses a name the theme already has before cloning', async () => {
-    const { orch, git, themeId } = await cloneSetup()
+    const { orch, git, existing, themeId } = await cloneSetup()
+    existing.add('/docs/my-api')
     await orch.addFolder(themeId, '/docs/my-api')
     await expect(orch.cloneRepo(themeId, URL, '/code', 'my-api')).rejects.toThrow(/already exists in this theme/)
     expect(git.calls).toEqual([])
@@ -659,12 +671,22 @@ describe('Orchestrator: removeTask', () => {
     const { orch, git, tmux, pty, themeId, repoId } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
     await orch.openTarget({ themeId, itemId: repoId, taskId: task.id })
-    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    const result = await orch.removeTask(themeId, repoId, task.id, true)
     expect(pty.detached).toBeGreaterThan(0)
     expect(tmux.sessions.size).toBe(0)
     expect(git.calls).toContain('removeWorktree /wt/client-x/my-api/fix')
     expect(git.calls).toContain('deleteBranch claude/client-x/fix')
-    expect(taskOf(s)).toBeUndefined()
+    expect(result).toEqual({ state: await orch.getState() })
+    expect(taskOf(result.state)).toBeUndefined()
+  })
+  it('removes the task but says so when its branch could not be deleted', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    git.failDeleteBranch = "git branch -D failed: Cannot delete branch 'claude/client-x/fix' checked out at '/code'"
+    const result = await orch.removeTask(themeId, repoId, task.id, true)
+    expect(taskOf(result.state)).toBeUndefined()
+    expect(result.warning).toBe(`Removed "fix" but kept its branch claude/client-x/fix: ${git.failDeleteBranch}`)
+    expect(taskOf(await orch.getState())).toBeUndefined()
   })
   it('keeps the branch when asked', async () => {
     const { orch, git, themeId, repoId } = await setup()
@@ -672,12 +694,20 @@ describe('Orchestrator: removeTask', () => {
     await orch.removeTask(themeId, repoId, task.id, false)
     expect(git.calls).not.toContain('deleteBranch claude/client-x/fix')
   })
+  it('deletes the branch only when asked with true, not any other value from the renderer', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    for (const ask of ['false', 1, {}]) {
+      const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+      await orch.removeTask(themeId, repoId, task.id, ask as unknown as boolean)
+    }
+    expect(git.calls).not.toContain('deleteBranch claude/client-x/fix')
+  })
   it('removes a task whose original repo was moved or deleted, then its repo and theme', async () => {
     const { orch, git, themeId, repoId, deps } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
     deps.pathExists = (p) => p !== '/code/my-api'
     git.calls = []
-    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    const { state: s } = await orch.removeTask(themeId, repoId, task.id, true)
     expect(taskOf(s)).toBeUndefined()
     expect(git.calls).toEqual(['removeWorktree /wt/client-x/my-api/fix'])
     await expect(orch.removeItem(themeId, repoId)).resolves.toBeDefined()
@@ -920,7 +950,7 @@ describe('Orchestrator: archiving tasks', () => {
     git.unsaved = { uncommittedFiles: [], unpushedCommits: ['abc1234 wip'] }
     await expect(orch.checkTaskRemoval(themeId, repoId, task.id)).resolves.toEqual(git.unsaved)
     git.calls = []
-    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    const { state: s } = await orch.removeTask(themeId, repoId, task.id, true)
     expect(git.calls).toEqual([`deleteBranch ${BRANCH}`])
     expect(tmux.calls).toEqual([])
     expect(taskOf(s)).toBeUndefined()
@@ -1100,6 +1130,19 @@ describe('Orchestrator: sessions and tabs', () => {
     await orch.closeTab(target, 0)
     const tabs = await orch.restartClaude(target)
     expect(tabs.map((t) => t.name)).toEqual(['shell', 'claude'])
+  })
+
+  it('refuses a tab index that is not a whole number, before tmux reads it as a window name', async () => {
+    const { orch, target } = await withTask()
+    await orch.newTab(target)
+    for (const index of [-1, 1.5, Number.NaN, '1' as unknown as number, 'claude' as unknown as number, null]) {
+      await expect(orch.selectTab(target, index as number)).rejects.toThrow('Invalid tab')
+      await expect(orch.closeTab(target, index as number)).rejects.toThrow('Invalid tab')
+    }
+    expect((await orch.listTabs(target)).map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['shell', true],
+    ])
   })
 
   it('returns no tabs after the last window closes', async () => {
@@ -1369,6 +1412,41 @@ describe('Orchestrator: quitting', () => {
     await Promise.all([creating, renaming, waiting])
     expect(orch.busy()).toBe(false)
     expect(store.saved.at(-1)?.themes[0].name).toBe('Client Y')
+  })
+
+  it('counts a clone as busy, and cancels it for quitting, adding nothing', async () => {
+    const { orch, git, store, deps, themeId } = await setup()
+    deps.pathExists = (p) => p !== '/code/web'
+    git.cloneGate = new Promise(() => {}) // a big repository
+    const cloning = orch.cloneRepo(themeId, 'git@github.com:acme/web.git', '/code', 'web')
+    void cloning.catch(() => {})
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch.busy()).toBe(true)
+    let idle = false
+    const waiting = orch.whenIdle(60_000).then(() => (idle = true))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(idle).toBe(false)
+    const saves = store.saved.length
+    orch.cancelClones()
+    await expect(cloning).rejects.toThrow('The app is quitting')
+    await waiting
+    expect(orch.busy()).toBe(false)
+    expect(store.saved.length).toBe(saves)
+  })
+
+  it('waits for a finished clone to be added', async () => {
+    const { orch, git, deps, themeId } = await setup()
+    deps.pathExists = (p) => p !== '/code/web'
+    let release = (): void => {}
+    git.cloneGate = new Promise<void>((r) => (release = r))
+    const cloning = orch.cloneRepo(themeId, 'git@github.com:acme/web.git', '/code', 'web')
+    await new Promise((r) => setTimeout(r, 0))
+    const waiting = orch.whenIdle(60_000)
+    release()
+    await waiting
+    expect(orch.busy()).toBe(false)
+    expect((await orch.getState()).themes[0].items.map((i) => i.path)).toContain('/code/web')
+    await cloning
   })
 
   it('gives up waiting after the time given', async () => {

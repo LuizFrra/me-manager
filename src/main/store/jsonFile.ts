@@ -1,7 +1,17 @@
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, open, readFile, rename } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 const isNotFound = (err: unknown): boolean => (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+
+/** Flushes a file, or a folder's entries, to disk: a rename can reach the disk before the data it points to. */
+async function syncPath(path: string): Promise<void> {
+  const handle = await open(path, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
 
 /**
  * A JSON file written atomically (temp file + rename) that keeps the previous version as `<file>.bak`.
@@ -38,13 +48,23 @@ export class JsonFile<T> {
     if (!this.skipNextBackup) {
       try {
         await copyFile(this.file, this.file + '.bak')
+        await syncPath(this.file + '.bak')
       } catch (err) {
         if (!isNotFound(err)) throw err
       }
     }
     const tmp = `${this.file}.${process.pid}.tmp`
-    await writeFile(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8')
+    // Flushed before the rename: after a power loss the file is then the old or the new version, never empty.
+    const handle = await open(tmp, 'w')
+    try {
+      await handle.writeFile(JSON.stringify(value, null, 2) + '\n', 'utf8')
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await rename(tmp, this.file)
+    // So the rename itself survives one; best effort, as not every system can open a folder.
+    await syncPath(dirname(this.file)).catch(() => {})
     this.skipNextBackup = false
   }
 }

@@ -25,7 +25,7 @@ export interface RunOptions {
   maxBuffer?: number
   /** Written to the command's stdin, which is then closed (`run` only). */
   input?: string | Buffer
-  /** Kills the command when it aborts, rejecting with the signal's reason (`streamNul` only). */
+  /** Kills the command when it aborts, rejecting with the signal's reason (`run` and `streamNul`). */
   signal?: AbortSignal
 }
 
@@ -45,6 +45,8 @@ const abortReason = (signal: AbortSignal): Error =>
 /** Runs a binary without a shell and resolves with stdout. Rejects with CommandError. */
 export function run(file: string, args: string[], opts: RunOptions = {}): Promise<string> {
   const command = [file, ...args].join(' ')
+  const { signal } = opts
+  if (signal?.aborted) return Promise.reject(abortReason(signal))
   return new Promise((resolve, reject) => {
     let forceKill: ReturnType<typeof setTimeout> | undefined
     const child = execFile(
@@ -55,11 +57,16 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
         timeout: opts.timeoutMs ?? 0,
         maxBuffer: opts.maxBuffer ?? DEFAULT_MAX_BUFFER,
         env: childEnv(opts),
+        signal,
       },
       (err, stdout, stderr) => {
         clearTimeout(forceKill)
         if (!err) {
           resolve(String(stdout))
+          return
+        }
+        if (signal?.aborted) {
+          reject(abortReason(signal))
           return
         }
         const errno = (err as NodeJS.ErrnoException).code

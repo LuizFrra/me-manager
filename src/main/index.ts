@@ -14,6 +14,7 @@ import { APPEARANCE_BACKGROUND } from '../shared/appearance'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
+import { loadPage } from './pageLoad'
 import { BudgetWatcher } from './notify/budgetWatcher'
 import { NotificationWatcher } from './notify/watcher'
 import {
@@ -77,11 +78,15 @@ function createWindow(): BrowserWindow {
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppUrl(url, win.webContents.getURL())) event.preventDefault()
   })
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  const devUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+  // Without its page the window would never show: say why, and quit rather than linger as an invisible process.
+  void loadPage(
+    () => (devUrl ? win.loadURL(devUrl) : win.loadFile(join(__dirname, '../renderer/index.html'))),
+    (message) => {
+      dialog.showErrorBox('me-manager could not load its window', message)
+      app.quit()
+    },
+  )
   return win
 }
 
@@ -133,7 +138,7 @@ async function bootstrap(): Promise<void> {
   const orchestrator = new Orchestrator({
     store: new FileStore(stateFile()),
     git: new GitService(),
-    gh: new GhService(), // looks gh up on PATH once, on first use (after loadLoginShellPath)
+    gh: new GhService(), // looks gh up on PATH when asked (after loadLoginShellPath), until found
     tmux,
     pty: ptyService,
     files: new FilesService(),
@@ -199,8 +204,8 @@ app
   })
 
 // Detach only: tmux sessions (and Claude) keep running after the app closes. A change still running (a task being
-// created, archived or removed) is waited for, up to QUIT_WAIT_MS, so it isn't left half done; quitting again
-// doesn't wait.
+// created, archived or removed) is waited for, up to QUIT_WAIT_MS, so it isn't left half done; a clone is cancelled
+// (it may take minutes), and waited for until git has stopped. Quitting again doesn't wait.
 app.on('before-quit', (event) => {
   notificationWatcher?.stop()
   budgetWatcher?.stop()
@@ -208,6 +213,7 @@ app.on('before-quit', (event) => {
   if (quitReady || !started?.busy()) return
   event.preventDefault()
   quitReady = true
+  started.cancelClones()
   void started.whenIdle(QUIT_WAIT_MS).finally(() => app.quit())
 })
 

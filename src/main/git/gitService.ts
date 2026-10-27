@@ -257,7 +257,7 @@ export class GitService implements GitApi {
     return false
   }
 
-  async clone(url: string, dest: string): Promise<void> {
+  async clone(url: string, dest: string, signal?: AbortSignal): Promise<void> {
     const checked = checkCloneUrl(url)
     if (!isAbsolute(dest)) throw new Error(`Invalid clone destination: ${dest}`)
     // Created here, not by git: mkdir fails on a folder that exists, so a failed clone only ever removes ours.
@@ -274,6 +274,7 @@ export class GitService implements GitApi {
         cwd: dirname(dest),
         env: { ...GIT_ENV, ...NON_INTERACTIVE_ENV },
         timeoutMs: this.cloneTimeoutMs,
+        signal,
       })
     } catch (err) {
       await rm(dest, { recursive: true, force: true }).catch(() => {})
@@ -351,7 +352,10 @@ export class GitService implements GitApi {
   }
 
   async deleteBranch(repoPath: string, branch: string): Promise<void> {
-    await this.git(repoPath, ['branch', '-D', branch])
+    if (!(await this.refExists(repoPath, `refs/heads/${branch}`))) return
+    await this.git(repoPath, ['branch', '-D', branch]).catch((err) => {
+      throw commandFailure('git branch -D', err)
+    })
   }
 
   async getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork> {

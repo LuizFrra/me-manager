@@ -45,7 +45,7 @@ describe('gh argv', () => {
 })
 
 describe('GhService', () => {
-  it('looks gh up on PATH once', () => {
+  it('looks gh up on PATH until it is found, then keeps its path', () => {
     const { deps, which } = fakeDeps()
     const gh = new GhService(deps)
     expect(gh.available()).toBe(true)
@@ -56,7 +56,11 @@ describe('GhService', () => {
     const none = new GhService(missing.deps)
     expect(none.available()).toBe(false)
     expect(none.available()).toBe(false)
-    expect(missing.which).toHaveBeenCalledTimes(1)
+    expect(missing.which).toHaveBeenCalledTimes(2)
+    missing.which.mockReturnValue('/usr/local/bin/gh') // installed while the app runs
+    expect(none.available()).toBe(true)
+    expect(none.available()).toBe(true)
+    expect(missing.which).toHaveBeenCalledTimes(3)
   })
 
   it('creates the pull request in the worktree, then reads its URL', async () => {

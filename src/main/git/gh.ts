@@ -50,13 +50,16 @@ const notPushed = (err: unknown): boolean =>
   err instanceof CommandError && /head sha can't be blank|head ref must be a branch|must first push/i.test(err.stderr)
 
 export class GhService implements GhApi {
-  /** gh's full path, null when it isn't on PATH; undefined until first asked (PATH comes from the login shell). */
-  private path: string | null | undefined
+  /**
+   * gh's full path once found (looked up when first asked: PATH comes from the login shell). A miss isn't kept, so
+   * gh installed while the app runs is found next time.
+   */
+  private path: string | null = null
 
   constructor(private readonly deps: GhDeps = SYSTEM) {}
 
   available(): boolean {
-    if (this.path === undefined) this.path = this.deps.which('gh')
+    this.path ??= this.deps.which('gh')
     return this.path !== null
   }
 

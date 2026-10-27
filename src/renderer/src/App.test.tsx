@@ -147,6 +147,18 @@ describe('App', () => {
     expect(removeTask).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.any(String), true)
   })
 
+  it('says when a removed task kept its branch', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const remove = api.removeTask
+    api.removeTask = async (...args) => ({ ...(await remove(...args)), warning: 'Removed "fix login bug" but kept it' })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Remove task fix login bug' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Removed "fix login bug" but kept it')
+    expect(screen.queryByRole('button', { name: 'Remove task fix login bug' })).not.toBeInTheDocument()
+  })
+
   it('asks before removing a task with unsaved work', async () => {
     const user = userEvent.setup()
     const api = repoApi({
@@ -2541,6 +2553,22 @@ describe('App git actions', () => {
     expect(createPullRequest).not.toHaveBeenCalled()
   })
 
+  it('opens the pull request when gh was installed after the app started', async () => {
+    const user = userEvent.setup()
+    let installed = false
+    const api = repoApi({ getGitTools: async () => ({ gh: installed }) })
+    const createPullRequest = vi.spyOn(api, 'createPullRequest')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const pr = git().getByRole('button', { name: 'Open pull request' })
+    expect(pr).toHaveAttribute('aria-disabled', 'true')
+    installed = true
+    await user.click(pr)
+    await waitFor(() => expect(createPullRequest).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(pr).not.toHaveAttribute('aria-disabled')
+  })
+
   it('runs the git actions from the palette, for tasks only', async () => {
     const user = userEvent.setup()
     const api = repoApi()
@@ -4565,6 +4593,22 @@ describe('App bulk actions', () => {
     await user.click(confirm.getByRole('button', { name: 'Remove 2 tasks' }))
     expect(await screen.findByRole('status')).toHaveTextContent('Removed 2 tasks')
     expect(removeTask.mock.calls.map((c) => c[3])).toEqual([true, true])
+  })
+
+  it('says which removed tasks kept their branch', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const remove = api.removeTask
+    api.removeTask = async (themeId, repoId, taskId, deleteBranch) => {
+      const name = await nameOf(api, { themeId, itemId: repoId, taskId })
+      const result = await remove(themeId, repoId, taskId, deleteBranch)
+      return name === 'task A' ? { ...result, warning: 'Removed "task A" but kept its branch' } : result
+    }
+    render(<App api={api} />)
+    await selectAll(user, 'task A', 'task B')
+    await user.click(bar().getByRole('button', { name: 'Remove the selected tasks…' }))
+    await user.click(dialog('Remove 2 tasks').getByRole('button', { name: 'Remove 2 tasks' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Removed 2 tasks. Removed "task A" but kept its branch')
   })
 
   it('says a task could not be checked for unsaved work', async () => {
