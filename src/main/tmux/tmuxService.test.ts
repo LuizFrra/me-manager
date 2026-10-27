@@ -424,6 +424,15 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
       [0, 'claude'],
       [1, 'dev'],
     ])
+    // The same tabs as listWindows reports, from the same one call.
+    const tabs = windows.map((w) => ({
+      index: w.index,
+      name: w.name,
+      active: w.active,
+      ...(w.dead ? { dead: w.dead } : {}),
+    }))
+    expect(tabs).toEqual(await svc.listWindows(session))
+    expect(windows[1].active).toBe(true)
     expect(windows[1].activity).toBeGreaterThanOrEqual(before - 1)
     expect(windows[1].activity).toBeLessThanOrEqual(Math.floor(Date.now() / 1000))
     expect(windows[1].id).toMatch(/^@\d+$/)

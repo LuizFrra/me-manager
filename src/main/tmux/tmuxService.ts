@@ -289,7 +289,7 @@ export class TmuxService implements TmuxApi {
         '-t',
         `=${session}`,
         '-F',
-        '#{window_index}\t#{window_id}\t#{window_activity}\t#{window_name}',
+        '#{window_index}\t#{window_id}\t#{window_activity}\t#{window_active}\t#{pane_dead}\t#{window_name}',
       ])
     } catch (err) {
       if (err instanceof CommandError) return [] // no such session, or no server
@@ -297,9 +297,17 @@ export class TmuxService implements TmuxApi {
     }
     const windows: WindowActivity[] = []
     for (const line of out.split('\n')) {
-      const [index, id, activity, ...name] = line.split('\t')
+      const [index, id, activity, active, dead, ...name] = line.split('\t')
       if (!/^\d+$/.test(index ?? '') || !/^@\d+$/.test(id ?? '') || !/^\d+$/.test(activity ?? '')) continue
-      windows.push({ index: Number(index), id, name: name.join('\t'), activity: Number(activity) })
+      const w: WindowActivity = {
+        index: Number(index),
+        name: name.join('\t'),
+        active: active === '1',
+        id,
+        activity: +activity,
+      }
+      if (dead === '1') w.dead = true
+      windows.push(w)
     }
     return windows
   }

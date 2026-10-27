@@ -55,7 +55,7 @@ import { shellQuote } from '../../shared/shell'
 import { RUN_WINDOW } from '../../shared/runCommand'
 import { findDevUrls, MAX_DEV_URLS } from '../../shared/devUrls'
 import { mapLimit } from '../concurrency'
-import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries } from '../contracts'
+import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries, WindowActivity } from '../contracts'
 import { baseBranchName } from '../git/gh'
 import { taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
@@ -263,6 +263,11 @@ export class Orchestrator implements AppService {
    * polled, so one session's are kept.
    */
   private devUrlScans: { session: string; tabs: Map<string, DevUrlScan> } | null = null
+  /**
+   * The `list-windows` in flight for each session, shared by listTabs and getDevUrls: a poll asks both at once.
+   * Dropped once it settles, so the next poll (or a change to the tabs) lists them again.
+   */
+  private readonly windowReads = new Map<string, Promise<WindowActivity[]>>()
   /** The search running for each target (by targetKey): a newer one there aborts it. */
   private readonly searches = new Map<string, AbortController>()
   /**
@@ -914,7 +919,22 @@ export class Orchestrator implements AppService {
 
   async listTabs(target: Target): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
-    return this.deps.tmux.listWindows(session).catch(() => [])
+    return (await this.readWindows(session)).map(({ index, name, active, dead }) =>
+      dead ? { index, name, active, dead } : { index, name, active },
+    )
+  }
+
+  /** The session's windows ([] without one), joining a read already in flight (see windowReads). */
+  private readWindows(session: string): Promise<WindowActivity[]> {
+    let read = this.windowReads.get(session)
+    if (!read) {
+      read = this.deps.tmux
+        .listWindowActivity(session)
+        .catch(() => [])
+        .finally(() => this.windowReads.delete(session))
+      this.windowReads.set(session, read)
+    }
+    return read
   }
 
   async newTab(target: Target): Promise<TabInfo[]> {
@@ -935,7 +955,8 @@ export class Orchestrator implements AppService {
   async closeTab(target: Target, index: number): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
     await this.deps.tmux.killWindow(session, index)
-    return this.listTabs(target)
+    // Not listTabs: a poll's listing in flight may predate the kill.
+    return this.deps.tmux.listWindows(session).catch(() => [])
   }
 
   async restartClaude(target: Target): Promise<TabInfo[]> {
@@ -1031,12 +1052,13 @@ export class Orchestrator implements AppService {
   }
 
   /**
-   * Read-only, so it skips the queues. One `list-windows`, plus a capture of each tab that printed something since
-   * its last one (see mayHaveChanged), at most every DEV_URL_RESCAN_MS. Closed tabs drop out with their URLs.
+   * Read-only, so it skips the queues. One `list-windows` (shared with listTabs), plus a capture of each tab that
+   * printed something since its last one (see mayHaveChanged), at most every DEV_URL_RESCAN_MS. Closed tabs drop out
+   * with their URLs.
    */
   async getDevUrls(target: Target): Promise<DevUrl[]> {
     const { session } = this.resolve(target)
-    const windows = await this.deps.tmux.listWindowActivity(session).catch(() => [])
+    const windows = await this.readWindows(session)
     if (this.devUrlScans?.session !== session) this.devUrlScans = { session, tabs: new Map() }
     const scans = this.devUrlScans.tabs
     const live = new Set(windows.map((w) => w.id))

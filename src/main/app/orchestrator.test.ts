@@ -2572,6 +2572,23 @@ describe('Orchestrator: dev-server URLs', () => {
     expect(ctx.tmux.tailCalls).toEqual([])
   })
 
+  it("lists a poll's tabs and scans its URLs with one list-windows call, never kept for the next poll", async () => {
+    const ctx = await withTask()
+    ctx.tmux.windowListCalls = 0
+    const [tabs] = await Promise.all([ctx.orch.listTabs(ctx.target), ctx.orch.getDevUrls(ctx.target)])
+    expect(tabs).toEqual([
+      { index: 0, name: 'claude', active: false },
+      { index: 1, name: 'shell', active: false },
+      { index: 2, name: 'shell 2', active: true },
+    ])
+    expect(ctx.tmux.windowListCalls).toBe(1)
+    await ctx.orch.closeTab(ctx.target, 1)
+    await expect(ctx.orch.listTabs(ctx.target)).resolves.toEqual([
+      { index: 0, name: 'claude', active: true },
+      { index: 1, name: 'shell 2', active: false },
+    ])
+  })
+
   it('drops the URLs of a tab once it is closed', async () => {
     const ctx = await withTask()
     print(ctx, 'shell 2', 'http://localhost:8000/', 990)

@@ -127,8 +127,8 @@ export interface TmuxApi {
   /** Leaves copy mode (or another mode) in the session's active pane, if it is in one. */
   leaveCopyMode(session: string): Promise<void>
   /**
-   * The session's windows with their `#{window_id}` and `#{window_activity}` (the last time each printed anything,
-   * in Unix seconds); [] when the session or the server isn't running.
+   * The session's windows as listWindows has them, with their `#{window_id}` and `#{window_activity}` (the last time
+   * each printed anything, in Unix seconds), from the same one call; [] when the session or the server isn't running.
    */
   listWindowActivity(session: string): Promise<WindowActivity[]>
   /**
@@ -173,12 +173,10 @@ export interface NewWindowOptions {
   remainOnExit?: boolean
 }
 
-/** A window as listWindowActivity reports it. */
-export interface WindowActivity {
-  index: number
+/** A window as listWindowActivity reports it: a tab, with what getDevUrls needs too. */
+export interface WindowActivity extends TabInfo {
   /** tmux's id for the window (`@3`), unique on the server and never reused while it runs. */
   id: string
-  name: string
   /** `#{window_activity}`, in Unix seconds. */
   activity: number
 }
