@@ -361,6 +361,36 @@ describe('UsageService', () => {
     expect(tomorrow.week.input).toBe(3)
   })
 
+  it('keeps a week that starts last month apart from the month, in roots, groups and models alike', async () => {
+    const at = (month: number, day: number, hour = 12): string => new Date(2026, month, day, hour).toISOString()
+    await put(
+      '/p/a',
+      's1.jsonl',
+      line({ cwd: '/p/a', session: 'a1', ts: at(9, 3), input: 1 }) + // today
+        line({ cwd: '/p/a', session: 'a2', ts: at(9, 1), input: 2, model: 'claude-sonnet-5' }) + // week and month
+        line({ cwd: '/p/a', session: 'a3', ts: at(8, 28), input: 4 }) + // this week, last month
+        line({ cwd: '/p/a', session: 'a3', ts: at(8, 20), input: 8 }), // neither
+    )
+    await put(
+      '/p/b',
+      's2.jsonl',
+      line({ cwd: '/p/b', session: 'b1', ts: at(8, 29), input: 16, model: 'claude-sonnet-5' }),
+    )
+    const result = await service(new Date(2026, 9, 3, 15)).summarize(['/p/a', '/p/b'], { both: ['/p/a', '/p/b'] })
+    const a = result.roots['/p/a']
+    expect([a.today.input, a.week.input, a.month.input, a.all.input]).toEqual([1, 7, 3, 15])
+    expect([a.today.sessions, a.week.sessions, a.month.sessions, a.all.sessions]).toEqual([1, 3, 2, 3])
+    expect(a.week.firstSeen).toBe(at(8, 28))
+    expect(a.month.firstSeen).toBe(at(9, 1))
+    const both = result.groups.both
+    expect([both.today.input, both.week.input, both.month.input, both.all.input]).toEqual([1, 23, 3, 31])
+    expect(both.week.models.map((m) => [m.model, m.input, m.sessions])).toEqual([
+      ['claude-sonnet-5', 18, 2],
+      ['claude-opus-5-5', 5, 2],
+    ])
+    expect(both.all).toMatchObject({ messages: 5, sessions: 4, lastSeen: at(9, 3) })
+  })
+
   it('returns empty usage when there are no transcripts at all', async () => {
     const usage = await usageOf(service(), '/p/none')
     expect(usage.all).toMatchObject({ messages: 0, cost: 0, firstSeen: null, models: [] })

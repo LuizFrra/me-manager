@@ -238,6 +238,9 @@ const periodStarts = (now: Date): Record<UsagePeriod, number> => ({
   all: -Infinity,
 })
 
+/** A period's bit in a record's period mask; `all` has none, as every record is in it. */
+const PERIOD_BIT: Record<UsagePeriod, number> = { today: 1, week: 2, month: 4, all: 0 }
+
 /** Running totals for one bucket (a target or group in one period). */
 class Accumulator implements Omit<UsageTotals, 'sessions' | 'firstSeen' | 'lastSeen'> {
   input = 0
@@ -278,6 +281,28 @@ class Accumulator implements Omit<UsageTotals, 'sessions' | 'firstSeen' | 'lastS
     }
   }
 
+  /** Adds what `o` counted, as if its records had been added here. */
+  merge(o: Accumulator): void {
+    this.input += o.input
+    this.output += o.output
+    this.cacheRead += o.cacheRead
+    this.cacheWrite5m += o.cacheWrite5m
+    this.cacheWrite1h += o.cacheWrite1h
+    this.cost += o.cost
+    this.unpricedTokens += o.unpricedTokens
+    this.messages += o.messages
+    for (const s of o.sessions) this.sessions.add(s)
+    if (o.first < this.first) this.first = o.first
+    if (o.last > this.last) this.last = o.last
+    if (this.models && o.models) {
+      for (const [model, acc] of o.models) {
+        let m = this.models.get(model)
+        if (!m) this.models.set(model, (m = new Accumulator(false)))
+        m.merge(acc)
+      }
+    }
+  }
+
   totals(): UsageTotals {
     return {
       input: this.input,
@@ -315,6 +340,10 @@ const contains = (root: string, cwd: string): boolean =>
 /**
  * Sums usage per root and per group. Each message counts for the most specific root containing its cwd (a task
  * worktree inside a folder counts for the task), and for every group listing that root.
+ *
+ * Each record is added once, to its root's cell for the periods it falls in (a bit mask: today implies this week
+ * and this month, but a week can start last month). The periods, roots and groups are then sums of those few cells,
+ * instead of every record being added to every period of its root and of each of its groups.
  */
 export function aggregateUsage(
   records: Iterable<UsageRecord>,
@@ -324,30 +353,12 @@ export function aggregateUsage(
 ): UsageSummaries {
   const starts = periodStarts(now)
   type Sink = Record<UsagePeriod, Accumulator>
-  const newSink = (): Sink =>
-    Object.fromEntries(USAGE_PERIODS.map((p) => [p, new Accumulator(true)])) as Record<UsagePeriod, Accumulator>
-  // Normalized root -> every sink fed by it (the root's own entries, then its groups).
-  const sinksOf = new Map<string, Sink[]>()
-  const rootSinks = new Map<string, Sink>()
-  const groupSinks = new Map<string, Sink>()
-  const sinksFor = (root: string): Sink[] => {
-    const n = normalizeRoot(root)
-    let list = sinksOf.get(n)
-    if (!list) sinksOf.set(n, (list = []))
-    return list
-  }
-  for (const root of roots) {
-    if (rootSinks.has(root)) continue
-    const sink = newSink()
-    rootSinks.set(root, sink)
-    sinksFor(root).push(sink)
-  }
-  for (const [name, members] of Object.entries(groups)) {
-    const sink = newSink()
-    groupSinks.set(name, sink)
-    for (const n of new Set(members.map(normalizeRoot))) sinksFor(n).push(sink)
-  }
-  const ordered = [...sinksOf.keys()].sort((a, b) => b.length - a.length)
+  const groupRoots = Object.entries(groups).map(
+    ([name, members]) => [name, new Set(members.map(normalizeRoot))] as const,
+  )
+  const known = new Set(roots.map(normalizeRoot))
+  for (const [, members] of groupRoots) for (const n of members) known.add(n)
+  const ordered = [...known].sort((a, b) => b.length - a.length)
   const rootOfCwd = new Map<string, string | null>()
   const match = (cwd: string): string | null => {
     let hit = rootOfCwd.get(cwd)
@@ -358,18 +369,34 @@ export function aggregateUsage(
     return hit
   }
 
+  // Normalized root -> its records' totals, by period mask.
+  const cellsOf = new Map<string, Accumulator[]>()
   for (const r of records) {
     const root = match(r.cwd)
     if (root === null) continue
-    for (const sink of sinksOf.get(root)!) {
-      for (const p of USAGE_PERIODS) if (p === 'all' || r.ts >= starts[p]) sink[p].add(r)
-    }
+    let cells = cellsOf.get(root)
+    if (!cells) cellsOf.set(root, (cells = []))
+    // NaN (no timestamp) is in no period but `all`.
+    const mask =
+      (r.ts >= starts.today ? PERIOD_BIT.today : 0) |
+      (r.ts >= starts.week ? PERIOD_BIT.week : 0) |
+      (r.ts >= starts.month ? PERIOD_BIT.month : 0)
+    const cell = (cells[mask] ??= new Accumulator(true))
+    cell.add(r)
   }
-  const finish = (sink: Sink): UsageSummary =>
-    Object.fromEntries(USAGE_PERIODS.map((p) => [p, sink[p].bucket()])) as Record<UsagePeriod, UsageBucket>
+
+  const summaryOf = (members: Iterable<string>): UsageSummary => {
+    const sink = Object.fromEntries(USAGE_PERIODS.map((p) => [p, new Accumulator(true)])) as Sink
+    for (const n of members) {
+      cellsOf.get(n)?.forEach((cell, mask) => {
+        for (const p of USAGE_PERIODS) if (p === 'all' || mask & PERIOD_BIT[p]) sink[p].merge(cell)
+      })
+    }
+    return Object.fromEntries(USAGE_PERIODS.map((p) => [p, sink[p].bucket()])) as Record<UsagePeriod, UsageBucket>
+  }
   return {
-    roots: Object.fromEntries([...rootSinks].map(([k, s]) => [k, finish(s)])),
-    groups: Object.fromEntries([...groupSinks].map(([k, s]) => [k, finish(s)])),
+    roots: Object.fromEntries([...new Set(roots)].map((root) => [root, summaryOf([normalizeRoot(root)])])),
+    groups: Object.fromEntries(groupRoots.map(([name, members]) => [name, summaryOf(members)])),
   }
 }
 
