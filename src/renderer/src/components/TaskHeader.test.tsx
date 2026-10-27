@@ -248,3 +248,19 @@ describe('TaskHeader long names', () => {
     expect(screen.getByText(subtitle)).toHaveAttribute('title', subtitle)
   })
 })
+
+describe('TaskHeader budget', () => {
+  it("offers the task's budget in the More actions menu, for tasks only", async () => {
+    const user = userEvent.setup()
+    const onEditBudget = vi.fn()
+    const { unmount } = render(<TaskHeader {...base} onEditNotes={vi.fn()} onEditBudget={onEditBudget} />)
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Set budget…' }))
+    expect(onEditBudget).toHaveBeenCalledTimes(1)
+    unmount()
+
+    render(<TaskHeader {...base} />) // a folder
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    expect(screen.queryByRole('menuitem', { name: 'Set budget…' })).not.toBeInTheDocument()
+  })
+})

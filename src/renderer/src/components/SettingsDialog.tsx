@@ -572,7 +572,7 @@ export function SettingsDialog(props: {
             </Field>
             <Field
               label="Task budget"
-              hint="Each task's estimated cost, all time. A task can have its own: “Set budget for current task…” in the palette."
+              hint="Each task's estimated cost, all time. A task can have its own: “Set budget…” in its header's ⋯ menu, or the palette."
               error={errors.taskBudget}
               suffix="USD"
             >

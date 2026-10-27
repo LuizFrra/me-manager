@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import {
   ArrowUp,
+  CircleDollarSign,
   Code,
   Copy,
   Ellipsis,
@@ -212,7 +213,7 @@ function RunControls(props: RunControlsProps): React.JSX.Element {
   )
 }
 
-/** "⋯": the header's less frequent actions (file manager, copies, notes) in a menu. */
+/** "⋯": the header's less frequent actions (file manager, copies, notes, budget) in a menu. */
 function MoreActions({ items }: { items: MenuItem[] }): React.JSX.Element {
   const [at, setAt] = useState<{ x: number; y: number; trigger: HTMLElement } | null>(null)
   const close = useCallback(() => setAt(null), [])
@@ -258,6 +259,8 @@ export function TaskHeader(props: {
   notes?: string
   /** Set for tasks: shows the "Edit notes" button. */
   onEditNotes?: () => void
+  /** Set for tasks: "Set budget…" in the More actions menu, which opens the task's budget dialog. */
+  onEditBudget?: () => void
   /** Copy buttons (branch, path, attach command). */
   copies: CopyEntry[]
   onCopy: (entry: CopyEntry) => void
@@ -363,6 +366,9 @@ export function TaskHeader(props: {
                 })),
                 ...(props.onEditNotes
                   ? [{ label: 'Edit notes', icon: <StickyNote {...ICON} />, run: props.onEditNotes }]
+                  : []),
+                ...(props.onEditBudget
+                  ? [{ label: 'Set budget…', icon: <CircleDollarSign {...ICON} />, run: props.onEditBudget }]
                   : []),
               ]}
             />

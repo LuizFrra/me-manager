@@ -2100,6 +2100,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               subtitle={header.subtitle}
               notes={selectedTask?.notes}
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
+              onEditBudget={selectedTask ? editTaskBudget : undefined}
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}

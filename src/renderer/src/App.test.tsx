@@ -1957,6 +1957,13 @@ describe('App usage', () => {
         'budget-warn',
       )
 
+      // Also from the header's ⋯ menu.
+      await user.click(screen.getByRole('button', { name: 'More actions' }))
+      await user.click(screen.getByRole('menuitem', { name: 'Set budget…' }))
+      const fromHeader = await screen.findByRole('dialog', { name: 'Budget for fix login bug' })
+      expect(within(fromHeader).getByRole('textbox', { name: 'Budget' })).toHaveValue('3.50')
+      await user.keyboard('{Escape}')
+
       await palette('edit budget')
       const again = await screen.findByRole('dialog', { name: 'Budget for fix login bug' })
       await user.clear(within(again).getByRole('textbox', { name: 'Budget' }))
