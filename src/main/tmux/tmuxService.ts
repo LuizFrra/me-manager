@@ -24,18 +24,33 @@ export const shellCommandArg = (command: string): string => (command.endsWith(';
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
 
-function checkEnvName(name: string): void {
+/**
+ * Refuses a variable tmux can't be handed as is: a name that isn't a shell variable name, or a value ending in `;`,
+ * which tmux would read as the end of its command. Anything else is one execFile argument, never seen by a shell,
+ * in which tmux expands no formats: it needs no escaping.
+ */
+function checkEnv(name: string, value: string | null): void {
   if (!ENV_NAME.test(name)) throw new Error(`Invalid environment variable name: ${JSON.stringify(name)}`)
+  if (value?.endsWith(';')) throw new Error(`The value of ${name} can't end in ;`)
+}
+
+/** `-e NAME=value` per variable (see checkEnv). */
+function envArgs(env: Record<string, string> = {}): string[] {
+  return Object.entries(env).flatMap(([name, value]) => {
+    checkEnv(name, value)
+    return ['-e', `${name}=${value}`]
+  })
 }
 
 /**
- * `-e NAME=value` per variable. The value is one execFile argument, never seen by a shell, and tmux expands no
- * formats in it, so it needs no escaping. A name that isn't a shell variable name is refused.
+ * `set-environment` per variable on the session (`-u` for null, see checkEnv), each ending with `;`: put before
+ * new-window or respawn-window in the same tmux call, so no other call changes the session's environment between
+ * the two.
  */
-function envArgs(env: Record<string, string> = {}): string[] {
+function sessionEnvCommands(session: string, env: Record<string, string | null> = {}): string[] {
   return Object.entries(env).flatMap(([name, value]) => {
-    checkEnvName(name)
-    return ['-e', `${name}=${value}`]
+    checkEnv(name, value)
+    return ['set-environment', '-t', `=${session}`, ...(value === null ? ['-u', name] : [name, value]), ';']
   })
 }
 
@@ -294,6 +309,7 @@ export class TmuxService implements TmuxApi {
     options: NewWindowOptions = {},
   ): Promise<void> {
     await this.tmux([
+      ...sessionEnvCommands(session, options.env),
       'new-window',
       '-t',
       `=${session}:`,
@@ -301,7 +317,6 @@ export class TmuxService implements TmuxApi {
       escapeFormat(cwd),
       '-n',
       windowName,
-      ...envArgs(options.env),
       ...(command ? [shellCommandArg(command)] : []),
       // In the same tmux call, so it is set before a command that exits at once is reaped: tmux runs a call's
       // commands in one go. The new window is the session's current one (`=session:`), as it was not made with -d.
@@ -314,24 +329,18 @@ export class TmuxService implements TmuxApi {
     windowName: string,
     cwd: string,
     command: string,
-    env?: Record<string, string>,
+    env?: Record<string, string | null>,
   ): Promise<void> {
     await this.tmux([
+      ...sessionEnvCommands(session, env),
       'respawn-window',
       '-k',
       '-t',
       `=${session}:=${windowName}`,
       '-c',
       escapeFormat(cwd),
-      ...envArgs(env),
       shellCommandArg(command),
     ])
-  }
-
-  async setSessionEnv(session: string, name: string, value: string | null): Promise<void> {
-    checkEnvName(name)
-    // Without -F, set-environment expands no formats either.
-    await this.tmux(['set-environment', '-t', `=${session}`, ...(value === null ? ['-u', name] : [name, value])])
   }
 
   async sendInterrupt(session: string, windowName: string): Promise<void> {

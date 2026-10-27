@@ -468,15 +468,13 @@ export class Orchestrator implements AppService {
   }
 
   /**
-   * sessionEnv, also set on the target's running `session` (or removed from it, for Default) before a window is
-   * opened or respawned in it. A window's own -e can't remove a variable, and every window gets the session's
-   * environment, which tmux set when the session started: without this, a session started in a profile would keep
-   * it in new tabs after a switch to Default. Processes already running keep theirs.
+   * sessionEnv for a window opened or respawned in the target's running session (NewWindowOptions.env): set on the
+   * session, or removed from it for Default, in the same tmux call. Every window gets the session's environment,
+   * which tmux set when the session started, and a window's own -e can't remove a variable: without this, a
+   * session started in a profile would keep it in new tabs after a switch to Default.
    */
-  private async syncedEnv(target: Target, session: string): Promise<Record<string, string>> {
-    const env = this.sessionEnv(target)
-    await this.deps.tmux.setSessionEnv(session, 'CLAUDE_CONFIG_DIR', env.CLAUDE_CONFIG_DIR ?? null)
-    return env
+  private windowEnv(target: Target): Record<string, string | null> {
+    return { CLAUDE_CONFIG_DIR: this.sessionEnv(target).CLAUDE_CONFIG_DIR ?? null }
   }
 
   /**
@@ -1049,7 +1047,7 @@ export class Orchestrator implements AppService {
     const names = new Set((await this.deps.tmux.listWindows(session)).map((t) => t.name))
     let name = 'shell'
     for (let n = 2; names.has(name); n++) name = `shell ${n}`
-    await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: await this.syncedEnv(target, session) })
+    await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: this.windowEnv(target) })
     return this.deps.tmux.listWindows(session)
   }
 
@@ -1073,7 +1071,7 @@ export class Orchestrator implements AppService {
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
     else {
       const command = claudeContinueCommand(this.claudeArgs(label))
-      const env = await this.syncedEnv(target, session)
+      const env = this.windowEnv(target)
       await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, command, { env })
     }
     return this.deps.tmux.listWindows(session)
@@ -1113,7 +1111,12 @@ export class Orchestrator implements AppService {
     )
   }
 
-  private newRunWindow(session: string, cwd: string, command: string, env: Record<string, string>): Promise<void> {
+  private newRunWindow(
+    session: string,
+    cwd: string,
+    command: string,
+    env: Record<string, string | null>,
+  ): Promise<void> {
     return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true, env })
   }
 
@@ -1122,7 +1125,7 @@ export class Orchestrator implements AppService {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run) await this.deps.tmux.selectWindow(session, run.index)
-      else await this.newRunWindow(session, cwd, command, await this.syncedEnv(target, session))
+      else await this.newRunWindow(session, cwd, command, this.windowEnv(target))
     })
   }
 
@@ -1134,7 +1137,7 @@ export class Orchestrator implements AppService {
   async restartRun(target: Target): Promise<TabInfo[]> {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const { tmux } = this.deps
-      const env = await this.syncedEnv(target, session) // a gone profile folder refuses before the command stops
+      const env = this.windowEnv(target) // a gone profile folder refuses before the command stops
       let run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run && !run.dead) {
         await tmux.sendInterrupt(session, RUN_WINDOW)
@@ -1301,7 +1304,7 @@ export class Orchestrator implements AppService {
     } else {
       // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
       const args = this.claudeArgs(label)
-      const env = await this.syncedEnv(target, session)
+      const env = this.windowEnv(target)
       await this.withPromptFile(text, (file) =>
         this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file), { env }),
       )

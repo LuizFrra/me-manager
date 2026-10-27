@@ -343,6 +343,13 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     return id ? svc.captureTail(id, lines) : null
   }
 
+  /** The last lines of the window named `name` once they include `text` (or after 5 s). */
+  const shownIn = (session: string, name: string, text: string): Promise<string | null> =>
+    until(
+      () => tailOf(session, name),
+      (t) => t?.includes(text) ?? false,
+    )
+
   /** A session of its own with a finished `run` window, so each test stands alone. */
   const withRunWindow = async (session: string): Promise<string> => {
     await svc.newSession(session, cwd, 'claude', 'sh')
@@ -476,68 +483,69 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await expect(svc.listWindowActivity(session)).resolves.toEqual([])
   })
 
-  it('starts sessions and windows with the given environment, taken literally', async () => {
+  it('starts a session with the given environment, taken literally', async () => {
     const session = 'mmt_env_x_y'
     const show = `printf '[%s] [%s]\\n' "$CLAUDE_CONFIG_DIR" "$MM_HASH"; exec cat`
-    // `#` and `#{}` are no tmux formats in -e values: they reach the process as typed.
-    const env = { CLAUDE_CONFIG_DIR: '/x y/z', MM_HASH: 'a ## #{session_name} #S' }
+    // `#` and `#{}` are no tmux formats in -e values, and backslashes are kept: they reach the process as typed.
+    const env = { CLAUDE_CONFIG_DIR: '/x y/z', MM_HASH: 'a ## #{session_name} #S \\; \\' }
     await svc.newSession(session, cwd, 'claude', show, env)
-    const shown = (name: string, text: string): Promise<string | null> =>
-      until(
-        () => tailOf(session, name),
-        (t) => t?.includes(text) ?? false,
-      )
-    expect(await shown('claude', '[/x y/z]')).toContain('[/x y/z] [a ## #{session_name} #S]')
-    // A window of its own environment, over the session's; one without any gets the session's.
-    await svc.newWindow(session, cwd, 'other', show, { env: { CLAUDE_CONFIG_DIR: '/other' } })
-    expect(await shown('other', '[/other]')).toContain('[/other] [a ## #{session_name} #S]')
-    await svc.newWindow(session, cwd, 'run', show, { env: { CLAUDE_CONFIG_DIR: '/run' }, remainOnExit: true })
-    expect(await shown('run', '[/run]')).toContain('[/run]')
+    expect(await shownIn(session, 'claude', '[/x y/z]')).toContain('[/x y/z] [a ## #{session_name} #S \\; \\]')
+    // Its windows get the session's environment.
     await svc.newWindow(session, cwd, 'plain', show)
-    expect(await shown('plain', '[/x y/z]')).toContain('[/x y/z]')
+    expect(await shownIn(session, 'plain', '[/x y/z]')).toContain('[/x y/z] [a ## #{session_name} #S \\; \\]')
     await svc.killSession(session)
   })
 
-  it("changes a running session's environment for the windows it opens or respawns next", async () => {
+  it("sets or removes the session's variables in the same call that opens or respawns a window", async () => {
     const session = 'mmt_envsync_x_y'
     const show = `printf '[%s]\\n' "\${CLAUDE_CONFIG_DIR-unset}"; exec cat`
-    const shown = (name: string, text: string): Promise<string | null> =>
-      until(
-        () => tailOf(session, name),
-        (t) => t?.includes(text) ?? false,
-      )
     await svc.newSession(session, cwd, 'claude', show, { CLAUDE_CONFIG_DIR: '/p' })
-    expect(await shown('claude', '[/p]')).toContain('[/p]')
-    // Back to Default: no CLAUDE_CONFIG_DIR at all, not even an empty one.
-    await svc.setSessionEnv(session, 'CLAUDE_CONFIG_DIR', null)
-    await svc.newWindow(session, cwd, 'default', show)
-    expect(await shown('default', '[unset]')).toContain('[unset]')
-    // Another profile, taken literally like -e values.
-    await svc.setSessionEnv(session, 'CLAUDE_CONFIG_DIR', '/q r/#{session_name} #S')
-    await svc.newWindow(session, cwd, 'other', show)
-    expect(await shown('other', '[/q r/')).toContain('[/q r/#{session_name} #S]')
-    // A respawned window gets the session's too, and its own -e over it.
-    await svc.newWindow(session, cwd, 'run', 'true', { remainOnExit: true })
-    await svc.respawnWindow(session, 'run', cwd, show)
-    expect(await shown('run', '[/q r/')).toContain('[/q r/#{session_name} #S]')
+    expect(await shownIn(session, 'claude', '[/p]')).toContain('[/p]')
+    // One tmux call each, so no other call can change the session's environment in between.
+    const calls = vi.spyOn(svc as unknown as { tmux: (args: string[]) => Promise<string> }, 'tmux')
+    // Back to Default: no CLAUDE_CONFIG_DIR at all, not even an empty one, for this window and the next ones.
+    await svc.newWindow(session, cwd, 'default', show, { env: { CLAUDE_CONFIG_DIR: null } })
+    expect(await shownIn(session, 'default', '[unset]')).toContain('[unset]')
+    await svc.newWindow(session, cwd, 'next', show)
+    expect(await shownIn(session, 'next', '[unset]')).toContain('[unset]')
+    // Another profile, taken literally; with remain-on-exit too.
+    await svc.newWindow(session, cwd, 'run', show, {
+      env: { CLAUDE_CONFIG_DIR: '/q r/#{session_name} #S' },
+      remainOnExit: true,
+    })
+    expect(await shownIn(session, 'run', '[/q r/')).toContain('[/q r/#{session_name} #S]')
     await svc.respawnWindow(session, 'run', cwd, show, { CLAUDE_CONFIG_DIR: '/own' })
-    expect(await shown('run', '[/own]')).toContain('[/own]')
+    expect(await shownIn(session, 'run', '[/own]')).toContain('[/own]')
+    await svc.respawnWindow(session, 'run', cwd, show, { CLAUDE_CONFIG_DIR: null })
+    expect(await shownIn(session, 'run', '[unset]')).toContain('[unset]')
+    const changing = calls.mock.calls.map(([args]) => args).filter((args) => args.includes('set-environment'))
+    expect(changing.map((args) => args.filter((a) => /^(set-environment|new-window|respawn-window)$/.test(a)))).toEqual(
+      [
+        ['set-environment', 'new-window'],
+        ['set-environment', 'new-window'],
+        ['set-environment', 'respawn-window'],
+        ['set-environment', 'respawn-window'],
+      ],
+    )
+    calls.mockRestore()
     await svc.killSession(session)
   })
 
-  it('refuses an environment variable name that is not one', async () => {
+  it('refuses an environment variable name that is not one, and a value ending in ;', async () => {
     for (const key of ['A=B', 'lower', '1ST', '', 'A B']) {
       await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { [key]: 'x' })).rejects.toThrow(
         /environment variable/i,
       )
-      await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { [key]: 'x' } })).rejects.toThrow(
+      await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { [key]: null } })).rejects.toThrow(
         /environment variable/i,
       )
       await expect(svc.respawnWindow('mmt_envbad_x_y', 'w', cwd, 'sh', { [key]: 'x' })).rejects.toThrow(
         /environment variable/i,
       )
-      await expect(svc.setSessionEnv('mmt_envbad_x_y', key, null)).rejects.toThrow(/environment variable/i)
     }
+    // tmux would read the ; as the end of its command.
+    await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { A: '/x;' })).rejects.toThrow(/end in ;/)
+    await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { A: '/x;' } })).rejects.toThrow(/end in ;/)
     await expect(svc.hasSession('mmt_envbad_x_y')).resolves.toBe(false)
   })
 

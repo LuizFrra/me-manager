@@ -1319,6 +1319,10 @@ describe('Orchestrator: Claude profiles', () => {
     // Default: the session's CLAUDE_CONFIG_DIR is removed, so nothing started from now on inherits Work's.
     let orch = await switchTheme(ctx, null)
     await orch.newTab(ctx.target)
+    // Removed in the same tmux call that opens the window (see FakeTmux.newWindow).
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} shell in ${fixTask.worktreePath}: undefined env -CLAUDE_CONFIG_DIR`,
+    )
     expect(envOf(ctx, SESSION)).toBeUndefined()
     expect(envOf(ctx, SESSION, 'shell')).toBeUndefined()
     await orch.closeTab(ctx.target, 0) // Claude's
@@ -2613,6 +2617,8 @@ describe('Orchestrator: sendToClaude', () => {
 
 describe('Orchestrator: run command', () => {
   const SESSION = 'mmt_client-x_my-api_fix'
+  /** How the fake shows a window started in the Default profile: the session's CLAUDE_CONFIG_DIR removed first. */
+  const DEFAULT_ENV = ' env -CLAUDE_CONFIG_DIR'
   async function withTask(): Promise<Ctx & { target: Target; worktree: string }> {
     const ctx = await setup()
     const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
@@ -2648,7 +2654,7 @@ describe('Orchestrator: run command', () => {
     const ctx = await withTask()
     const tabs = await ctx.orch.startRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
-      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}${DEFAULT_ENV}`,
     ])
     expect(tabs).toEqual([
       { index: 0, name: 'claude', active: false },
@@ -2686,7 +2692,7 @@ describe('Orchestrator: run command', () => {
     await ctx.orch.openTarget(folder)
     await ctx.orch.startRun(folder)
     expect(ctx.tmux.calls.at(-1)).toBe(
-      `newWindow mmf_client-x_site run [remain-on-exit] in /docs/site: ${runWindowCommand('hugo server')}`,
+      `newWindow mmf_client-x_site run [remain-on-exit] in /docs/site: ${runWindowCommand('hugo server')}${DEFAULT_ENV}`,
     )
   })
 
@@ -2711,7 +2717,7 @@ describe('Orchestrator: run command', () => {
     const tabs = await ctx.orch.restartRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
       `sendInterrupt ${SESSION} run`,
-      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev -- --port 4000')}`,
+      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev -- --port 4000')}${DEFAULT_ENV}`,
     ])
     expect(tabs.find((t) => t.active)).toEqual({ index: 1, name: 'run', active: true })
   })
@@ -2743,14 +2749,14 @@ describe('Orchestrator: run command', () => {
     ctx.tmux.calls = []
     await ctx.orch.restartRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
-      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev')}${DEFAULT_ENV}`,
     ])
     expect(runWindow(ctx)?.dead).toBeUndefined()
     await ctx.orch.closeTab(ctx.target, 1)
     ctx.tmux.calls = []
     await ctx.orch.restartRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
-      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}${DEFAULT_ENV}`,
     ])
   })
 

@@ -106,8 +106,8 @@ export interface TmuxApi {
   listSessions(): Promise<string[]>
   /**
    * Detached session whose first window runs `command` (a shell string). `env` is the session's environment (tmux
-   * `-e`): its windows' processes get it, unless their own NewWindowOptions.env sets a variable again. Names must be
-   * shell variable names (A-Z, 0-9, _); values are passed as they are.
+   * `-e`): its windows' processes get it. Names must be shell variable names (A-Z, 0-9, _); values are passed as
+   * they are, but can't end in `;`.
    */
   newSession(
     name: string,
@@ -138,14 +138,8 @@ export interface TmuxApi {
     windowName: string,
     cwd: string,
     command: string,
-    env?: Record<string, string>,
+    env?: Record<string, string | null>,
   ): Promise<void>
-  /**
-   * Sets a variable of the session's environment (`set-environment`), or removes it for null, so windows opened or
-   * respawned from then on get it, or the server's own value; running processes keep theirs. Same name rules as
-   * newSession's `env`; the value is taken as it is.
-   */
-  setSessionEnv(session: string, name: string, value: string | null): Promise<void>
   /** Presses Ctrl-C in the window named `windowName` (exactly), after leaving copy mode if it is in it. */
   sendInterrupt(session: string, windowName: string): Promise<void>
   /** Leaves copy mode (or another mode) in the session's active pane, if it is in one. */
@@ -196,8 +190,12 @@ export interface NewWindowOptions {
    * TabInfo is then `dead` until respawnWindow runs a command in it again.
    */
   remainOnExit?: boolean
-  /** Environment for the window's process only, over the session's (see TmuxApi.newSession for the rules). */
-  env?: Record<string, string>
+  /**
+   * Variables to set on the session's environment (null: remove, so the server's own value applies) in the same tmux
+   * call, just before the window starts: it and every window started after it get them, while processes already
+   * running keep theirs. Same rules as TmuxApi.newSession's `env`.
+   */
+  env?: Record<string, string | null>
 }
 
 /** A window as listWindowActivity reports it: a tab, with what getDevUrls needs too. */
