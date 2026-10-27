@@ -172,6 +172,10 @@ export function RunCommandDialog(props: {
   )
 }
 
+/**
+ * Asked before removing a task with unsaved work (or that could not be checked), listing it. Cancel is focused, so
+ * Enter loses nothing; Esc cancels.
+ */
 export function RemoveTaskDialog(props: {
   taskName: string
   work: UnsavedWork
@@ -180,25 +184,22 @@ export function RemoveTaskDialog(props: {
 }): React.JSX.Element {
   useRestoreFocus()
   const [deleteBranch, setDeleteBranch] = useState(false)
-  const [busy, setBusy] = useState(false)
-  // The ref blocks a second click that lands before React re-renders with the buttons disabled.
-  const busyRef = useRef(false)
+  const { busy, run } = useSingleRun(() => props.onConfirm(deleteBranch))
   const { uncommittedFiles, unpushedCommits, warning } = props.work
   const hasChanges = uncommittedFiles.length > 0 || unpushedCommits.length > 0
-  const confirm = async (): Promise<void> => {
-    if (busyRef.current) return
-    busyRef.current = true
-    setBusy(true)
-    try {
-      await props.onConfirm(deleteBranch)
-    } finally {
-      busyRef.current = false
-      setBusy(false)
-    }
-  }
   return (
     <div className="overlay">
-      <div className="dialog" role="dialog" aria-label={`Remove ${props.taskName}`}>
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Remove ${props.taskName}`}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || busy) return
+          e.preventDefault()
+          props.onCancel()
+        }}
+      >
         <h2>Remove “{props.taskName}”?</h2>
         {warning && (
           <div className="dialog-warning" role="alert">
@@ -209,7 +210,7 @@ export function RemoveTaskDialog(props: {
         {hasChanges && <p>This task has work that will be lost:</p>}
         {uncommittedFiles.length > 0 && (
           <>
-            <h3>{uncommittedFiles.length} uncommitted file(s)</h3>
+            <h3>{plural(uncommittedFiles.length, 'uncommitted file')}</h3>
             <ul>
               {uncommittedFiles.map((f) => (
                 <li key={f}>{f}</li>
@@ -219,7 +220,7 @@ export function RemoveTaskDialog(props: {
         )}
         {unpushedCommits.length > 0 && (
           <>
-            <h3>{unpushedCommits.length} unpushed commit(s)</h3>
+            <h3>{plural(unpushedCommits.length, 'unpushed commit')}</h3>
             <ul>
               {unpushedCommits.map((c) => (
                 <li key={c}>{c}</li>
@@ -232,10 +233,10 @@ export function RemoveTaskDialog(props: {
           Also delete the branch
         </label>
         <div className="dialog-actions">
-          <button type="button" onClick={props.onCancel} disabled={busy}>
+          <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="button" className="danger" onClick={() => void confirm()} disabled={busy}>
+          <button type="button" className="danger" onClick={() => void run()} disabled={busy}>
             {busy ? 'Removing…' : 'Remove anyway'}
           </button>
         </div>

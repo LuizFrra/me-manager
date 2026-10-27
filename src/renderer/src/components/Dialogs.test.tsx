@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BranchList, TaskTemplate } from '../../../shared/types'
@@ -59,6 +59,36 @@ describe('RemoveTaskDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('repo missing')
     await user.click(screen.getByRole('button', { name: 'Remove anyway' }))
     expect(onConfirm).toHaveBeenCalledWith(false)
+  })
+
+  it('focuses Cancel so Enter loses nothing, closes with Esc (not while removing), and counts in words', async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    const onConfirm = vi.fn(() => new Promise<void>((r) => (finish = r)))
+    const onCancel = vi.fn()
+    render(
+      <RemoveTaskDialog
+        taskName="fix"
+        work={{ uncommittedFiles: ['src/login.ts'], unpushedCommits: ['abc1234 wip', 'def5678 more'] }}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    )
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove fix' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(within(dialog).getByRole('heading', { name: '1 uncommitted file' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: '2 unpushed commits' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onConfirm).not.toHaveBeenCalled()
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(2)
+
+    await user.click(screen.getByRole('button', { name: 'Remove anyway' }))
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(2) // removing can't be cancelled
+    finish()
   })
 })
 

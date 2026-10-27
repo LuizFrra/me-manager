@@ -143,7 +143,7 @@ describe('App', () => {
     render(<App api={api} />)
     await createRepoAndTask(user)
     await user.click(screen.getByRole('button', { name: 'Remove task fix login bug' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByText('src/login.ts')).toBeInTheDocument()
     expect(removeTask).not.toHaveBeenCalled()
     await user.click(within(dialog).getByRole('button', { name: 'Remove anyway' }))
@@ -259,11 +259,11 @@ describe('App', () => {
     render(<App api={api} />)
     await createRepoAndTask(user)
     await user.click(screen.getByRole('button', { name: 'Remove task fix login bug' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('alert')).toHaveTextContent('repo missing')
     await user.click(within(dialog).getByRole('button', { name: 'Remove anyway' }))
     expect(removeTask).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   })
 
   it('shows backend errors as toasts', async () => {
