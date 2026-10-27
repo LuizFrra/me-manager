@@ -172,7 +172,7 @@ describe('SidePanel', () => {
       listFiles: async () => ({ paths: ['big.log', 'gone.ts', 'blob.bin', 'linked'], truncated: false }),
       readFile: async (_t, path) =>
         path === 'blob.bin'
-          ? { kind: 'binary', size: 2048 }
+          ? { kind: 'binary', size: 2048, mtimeMs: 0 }
           : path === 'big.log'
             ? { kind: 'text', content: 'start', size: 1_500_000, truncated: true }
             : path === 'linked'

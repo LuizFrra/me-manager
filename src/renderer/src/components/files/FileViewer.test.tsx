@@ -32,7 +32,7 @@ function renderViewer(
   return { readImage, ...render(<FileViewer {...props} />) }
 }
 
-const binary = (size: number): FileContent => ({ kind: 'binary', size })
+const binary = (size: number, mtimeMs = 1): FileContent => ({ kind: 'binary', size, mtimeMs })
 
 describe('FileViewer images', () => {
   it('shows a png through readImage, with its size and, once loaded, its dimensions', async () => {
@@ -170,6 +170,36 @@ describe('FileViewer images', () => {
     rerender(at({ tab: 'files', path: 'icon.svg', change: undefined, diff: undefined, content: svg('#00ff00') }))
     await vi.waitFor(() => expect(readImage).toHaveBeenCalledTimes(4))
     expect(await screen.findByRole('img', { name: 'icon.svg' })).toHaveAttribute('src', 'data:image/png;base64,v4')
+  })
+
+  it('reads a binary image again when it is overwritten with one of the same size', async () => {
+    let n = 0
+    const readImage = vi.fn(async () => `data:image/bmp;base64,v${++n}`)
+    const api = { readImage, openExternal: async () => {} }
+    const at = (content: FileContent): React.JSX.Element => (
+      <FileViewer
+        api={api}
+        target={TARGET}
+        tab="files"
+        path="icon.bmp"
+        content={content}
+        mdMode="view"
+        canGoBack={false}
+        onBack={() => {}}
+        onMdMode={() => {}}
+        onOpenLink={() => {}}
+        onOpenFile={() => {}}
+        onError={() => {}}
+      />
+    )
+    const { rerender } = render(at(binary(100, 1000)))
+    expect(await screen.findByRole('img', { name: 'icon.bmp' })).toHaveAttribute('src', 'data:image/bmp;base64,v1')
+    rerender(at(binary(100, 1000)))
+    expect(readImage).toHaveBeenCalledTimes(1)
+    rerender(at(binary(100, 2000)))
+    await vi.waitFor(() =>
+      expect(screen.getByRole('img', { name: 'icon.bmp' })).toHaveAttribute('src', 'data:image/bmp;base64,v2'),
+    )
   })
 
   it('shows no image for a deleted one', () => {

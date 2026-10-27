@@ -163,8 +163,8 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   } else if (p.content.kind === 'symlinkToFolder') {
     body = <p className="viewer-message">Symlink to a folder</p>
   } else if (image && (p.content.kind === 'binary' || (p.content.kind === 'text' && p.mdMode === 'view'))) {
-    // An SVG's text says which version it is (an edit may keep its size).
-    const version = p.content.kind === 'text' ? p.content.content : undefined
+    // An SVG's text, or a binary image's modification time, says which version it is (an edit may keep its size).
+    const version = p.content.kind === 'text' ? p.content.content : String(p.content.mtimeMs)
     body = <ImageView key={path} path={path} size={p.content.size} load={loadImage} version={version} />
   } else if (p.content.kind === 'binary') {
     body = <p className="viewer-message">Binary file ({formatSize(p.content.size)})</p>

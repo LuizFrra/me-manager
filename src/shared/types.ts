@@ -622,7 +622,8 @@ export interface FileList {
 
 export type FileContent =
   | { kind: 'text'; content: string; size: number; truncated: boolean }
-  | { kind: 'binary'; size: number }
+  /** `mtimeMs` tells versions apart: an image overwritten with the same size is shown again. */
+  | { kind: 'binary'; size: number; mtimeMs: number }
   /** A symlink inside the root that points to a folder (listed as an entry, but there is nothing to show). */
   | { kind: 'symlinkToFolder' }
   | { kind: 'missing' }

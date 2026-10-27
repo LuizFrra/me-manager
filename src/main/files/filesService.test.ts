@@ -244,7 +244,22 @@ describe('readFile', () => {
   it('reports binary for a NUL byte in the first 8 KB', async () => {
     const root = await makeTempDir()
     await put(root, 'img.png', PNG)
-    await expect(svc.readFile(root, 'img.png')).resolves.toEqual({ kind: 'binary', size: PNG.length })
+    await expect(svc.readFile(root, 'img.png')).resolves.toEqual({
+      kind: 'binary',
+      size: PNG.length,
+      mtimeMs: expect.any(Number),
+    })
+  })
+
+  it('gives a binary file its modification time, which an overwrite of the same size changes', async () => {
+    const root = await makeTempDir()
+    await put(root, 'img.bmp', PNG)
+    await utimes(join(root, 'img.bmp'), 1_000, 1_000)
+    const before = await svc.readFile(root, 'img.bmp')
+    await utimes(join(root, 'img.bmp'), 2_000, 2_000)
+    const after = await svc.readFile(root, 'img.bmp')
+    expect(before).toMatchObject({ kind: 'binary', mtimeMs: 1_000_000 })
+    expect(after).toMatchObject({ kind: 'binary', mtimeMs: 2_000_000 })
   })
 
   it('truncates a large file without splitting a multi-byte character', async () => {

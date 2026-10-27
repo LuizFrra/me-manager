@@ -150,7 +150,7 @@ describe('createMockApi', () => {
     expect(files.truncated).toBe(false)
     expect(files.paths).toEqual(expect.arrayContaining(['README.md', 'src/app.ts']))
     await expect(api.readFile(task, 'README.md')).resolves.toMatchObject({ kind: 'text', truncated: false })
-    await expect(api.readFile(task, 'assets/icon.png')).resolves.toEqual({ kind: 'binary', size: 117 })
+    await expect(api.readFile(task, 'assets/icon.png')).resolves.toEqual({ kind: 'binary', size: 117, mtimeMs: 0 })
     await expect(api.readImage(task, 'assets/icon.png')).resolves.toMatch(/^data:image\/png;base64,iVBORw0KGgo/)
     await expect(api.readFile(task, 'nope.ts')).resolves.toEqual({ kind: 'missing' })
     await expect(api.readImage(task, 'assets/logo.svg')).resolves.toMatch(/^data:image\/svg\+xml;base64,/)
