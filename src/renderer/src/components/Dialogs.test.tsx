@@ -1166,6 +1166,32 @@ describe('ProfileDialog', () => {
     expect(onCancel).toHaveBeenCalled()
   })
 
+  it("checks the theme's choice (a task) or Default (a theme) for an account no longer there", () => {
+    const { unmount } = render(
+      <ProfileDialog
+        title="Claude account for fix"
+        profiles={profiles}
+        inherit="Use the theme’s (Work)"
+        initial="gone"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('radio', { name: 'Use the theme’s (Work)' })).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled() // saving it clears the unknown one
+    unmount()
+    render(
+      <ProfileDialog
+        title="Claude account for Acme"
+        profiles={profiles}
+        initial="gone"
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('radio', { name: /^Default/ })).toBeChecked()
+  })
+
   it('says where accounts are added', async () => {
     const user = userEvent.setup()
     const onManage = vi.fn()

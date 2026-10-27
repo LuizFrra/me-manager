@@ -1635,11 +1635,17 @@ export function ProfileDialog(props: {
   onManage?: () => void
 }): React.JSX.Element {
   useRestoreFocus()
-  // A theme's Default is no profile at all: the same, saved as none.
+  // A theme's Default is no profile at all: the same, saved as none. An id no profile has (a hand edit) is
+  // shown as none too, which is what applies (the theme's, or Default), and saving that clears it. (Not while the
+  // profiles aren't known.)
   const asChoice = (id: string | null): string | null =>
-    props.inherit === undefined && id === DEFAULT_PROFILE_ID ? null : id
-  const [choice, setChoice] = useState<string | null>(asChoice(props.initial))
-  const unchanged = choice === asChoice(props.initial)
+    (props.inherit === undefined && id === DEFAULT_PROFILE_ID) ||
+    (props.profiles.length > 0 && !props.profiles.some((p) => p.id === id))
+      ? null
+      : id
+  const [choice, setChoice] = useState<string | null>(() => asChoice(props.initial))
+  const unchanged =
+    choice === props.initial || (choice === null && props.initial === DEFAULT_PROFILE_ID && props.inherit === undefined)
   const save = useSingleRun(() => props.onSave(choice))
   const noteId = useId()
   const options: { value: string | null; label: string; hint?: string }[] = [
