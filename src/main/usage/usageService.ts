@@ -166,8 +166,24 @@ export function parseUsageLine(line: string, fallbackSession = ''): ParsedUsageL
 }
 
 /**
+ * Whether `a` is the copy of a message whose cwd, session and model count, over `b`: the earlier one (a copy without
+ * a time last), then the first by cwd, session and model. A total order, so the copy that counts never depends on
+ * the order transcripts were read in.
+ */
+function countsOver(a: UsageRecord, b: UsageRecord): boolean {
+  const at = Number.isNaN(a.ts) ? Infinity : a.ts
+  const bt = Number.isNaN(b.ts) ? Infinity : b.ts
+  if (at !== bt) return at < bt
+  if (a.cwd !== b.cwd) return a.cwd < b.cwd
+  if (a.session !== b.session) return a.session < b.session
+  return a.model < b.model
+}
+
+/**
  * Two lines of the same message: Claude Code writes one per content block, and an early one can carry partial
- * usage (output still streaming), so each count takes the larger value.
+ * usage (output still streaming), so each count takes the larger value. A resumed or forked session repeats
+ * earlier messages in another transcript, maybe another cwd: the earliest copy says where it counts (countsOver).
+ * The result is the same whatever order the copies are merged in.
  */
 export function mergeRecords(a: UsageRecord, b: UsageRecord): UsageRecord {
   if (a === b) return a
@@ -178,17 +194,17 @@ export function mergeRecords(a: UsageRecord, b: UsageRecord): UsageRecord {
     cacheWrite5m: Math.max(a.cacheWrite5m, b.cacheWrite5m),
     cacheWrite1h: Math.max(a.cacheWrite1h, b.cacheWrite1h),
   }
-  const same =
-    tokens.input === a.input &&
-    tokens.output === a.output &&
-    tokens.cacheRead === a.cacheRead &&
-    tokens.cacheWrite5m === a.cacheWrite5m &&
-    tokens.cacheWrite1h === a.cacheWrite1h &&
-    (a.fast || !b.fast)
-  if (same) return a
   const fast = a.fast || b.fast
-  const ts = Number.isNaN(a.ts) ? b.ts : Number.isNaN(b.ts) ? a.ts : Math.min(a.ts, b.ts)
-  return usageRecord(tokens, ts, a.cwd, a.session, a.model, fast)
+  const first = countsOver(b, a) ? b : a
+  const holds = (r: UsageRecord): boolean =>
+    tokens.input === r.input &&
+    tokens.output === r.output &&
+    tokens.cacheRead === r.cacheRead &&
+    tokens.cacheWrite5m === r.cacheWrite5m &&
+    tokens.cacheWrite1h === r.cacheWrite1h &&
+    fast === r.fast
+  if (holds(first)) return first
+  return usageRecord(tokens, first.ts, first.cwd, first.session, first.model, fast)
 }
 
 /**
@@ -640,7 +656,13 @@ export class UsageService implements UsageApi {
     const next = prev ? mergeRecords(prev, record) : record
     if (next === prev) return
     this.merged.set(k, next)
-    // A merged record keeps the first one's cwd, so a key never moves to another cwd.
+    if (prev && prev.cwd !== next.cwd) {
+      // An earlier copy, from another cwd.
+      const old = this.mergedByCwd.get(prev.cwd)
+      old?.delete(k)
+      if (old?.size === 0) this.mergedByCwd.delete(prev.cwd)
+      this.cells.delete(prev.cwd)
+    }
     let byCwd = this.mergedByCwd.get(next.cwd)
     if (!byCwd) this.mergedByCwd.set(next.cwd, (byCwd = new Map()))
     byCwd.set(k, next)
@@ -857,10 +879,12 @@ export class UsageService implements UsageApi {
     let current = known!
     this.cacheDirty = true
     if (replaced) {
-      if (known) this.mergedStale = true // its old records are merged in
+      // Its old records are merged in: the merged set is rebuilt from the files, with the new records once they are
+      // read, or still the old ones if the read fails (it is tried again next time).
+      if (known) this.mergedStale = true
       current = { ino: st.ino, size: 0, mtimeMs: 0, offset: 0, records: new Map() }
-      // Kept before reading, so that whatever a failed read merged in is accounted for.
-      this.files.set(path, current)
+      // A new transcript is tracked before reading, so that whatever a failed read merged in is accounted for.
+      if (!known) this.files.set(path, current)
     }
     const session = basename(path, '.jsonl')
     let changed = replaced && known !== undefined
@@ -887,6 +911,7 @@ export class UsageService implements UsageApi {
       current.offset = offset
       current.size = st.size
       current.mtimeMs = st.mtimeMs
+      this.files.set(path, current)
     } finally {
       if (changed) this.generation++
     }

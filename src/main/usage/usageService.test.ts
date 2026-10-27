@@ -1,4 +1,4 @@
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTempDirs, makeTempDir } from '../files/testRepos'
@@ -58,6 +58,7 @@ const largestRun = (log: number[]): number => {
 import {
   claudeConfigDir,
   encodeProjectPath,
+  mergeRecords,
   parseUsageLine,
   projectDirMatches,
   DIR_SLICE,
@@ -66,6 +67,7 @@ import {
   streamLines,
   USAGE_CACHE_VERSION,
   UsageService,
+  type UsageRecord,
 } from './usageService'
 
 interface Msg {
@@ -265,6 +267,66 @@ describe('UsageService', () => {
     // A copy rewritten smaller is read from the start, so its old numbers go too.
     await writeFile(a, line({ id: 'm1', req: 'r1', output: 6 }))
     expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 1, output: 6 })
+  })
+
+  it('merges the copies of a message the same way whatever order they are read in', () => {
+    const rec = (m: Msg, at: number | null = null): UsageRecord => {
+      const r = parseUsageLine(line({ id: 'm1', req: 'r1', ...m }))!.record
+      if (at !== null) r.ts = at
+      return r
+    }
+    const copies = [
+      rec({ cwd: '/p/b', session: 'b', output: 5 }),
+      rec({ cwd: '/p/a', session: 'a', output: 5 }), // the same time: the first path wins
+      rec({ cwd: '/p/c', session: 'c', output: 2, speed: 'fast' }, NaN), // no time: never the one that counts
+      rec({ cwd: '/p/d', session: 'd', input: 1 }, Date.parse(TODAY) + 1000),
+    ]
+    const results = [
+      copies.reduce(mergeRecords),
+      [...copies].reverse().reduce(mergeRecords),
+      [copies[2], copies[0], copies[3], copies[1]].reduce(mergeRecords),
+    ]
+    for (const r of results) {
+      expect(r).toEqual(results[0])
+      expect(r).toMatchObject({ cwd: '/p/a', session: 'a', ts: Date.parse(TODAY), output: 5, input: 1, fast: true })
+    }
+  })
+
+  it('counts a message copied into two tasks’ transcripts for the same task whichever is read first', async () => {
+    const msg = { id: 'm1', req: 'r1', output: 5 }
+    await put('/p/a', 's1.jsonl', line({ ...msg, cwd: '/p/a', session: 'sa' }))
+    await put('/p/b', 's2.jsonl', line({ ...msg, cwd: '/p/b', session: 'sb' }) + line({ cwd: '/p/b', input: 1 }))
+    const extra = await put('/p/b', 's3.jsonl', line({ cwd: '/p/b', input: 2 }))
+    const both = ['/p/a', '/p/b']
+    const aFirst = service()
+    await aFirst.summarize(['/p/a'])
+    const bFirst = service()
+    await bFirst.summarize(['/p/b'])
+    const expected = await service().summarize(both)
+    expect(expected.roots['/p/a'].all).toMatchObject({ messages: 1, output: 5, sessions: 1 })
+    expect(await aFirst.summarize(both)).toEqual(expected)
+    expect(await bFirst.summarize(both)).toEqual(expected)
+
+    // A transcript deleted: the merged messages are summed again from the files, and nothing moves.
+    const { rm } = await import('node:fs/promises')
+    await rm(extra)
+    const rebuilt = await service().summarize(both)
+    expect(rebuilt.roots['/p/a'].all).toMatchObject({ messages: 1, output: 5 })
+    expect(await aFirst.summarize(both)).toEqual(rebuilt)
+    expect(await bFirst.summarize(both)).toEqual(rebuilt)
+  })
+
+  it('keeps counting a transcript replaced by one it cannot read yet, until it can', async () => {
+    const file = await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const svc = service()
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(1)
+    const other = join(claudeDir, 'replacement.jsonl')
+    await writeFile(other, line({ input: 20 }))
+    await chmod(other, 0)
+    await rename(other, file)
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(1)
+    await chmod(file, 0o644)
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(20)
   })
 
   it('reads only the bytes appended since the last read', async () => {
