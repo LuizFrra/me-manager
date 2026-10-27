@@ -18,6 +18,27 @@ import { useConfirmDiscard } from '../lib/useConfirmDiscard'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 
 /**
+ * A number input the mouse wheel doesn't change. Chromium steps a focused number field's value on wheel, so
+ * scrolling the dialog with the pointer over the field just edited would change it unseen; the wheel scrolls the
+ * dialog (its form) instead. React's onWheel is passive and can't prevent that, hence the listener.
+ */
+function NumberInput(props: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>): React.JSX.Element {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const input = ref.current
+    if (!input) return
+    const onWheel = (e: WheelEvent): void => {
+      if (document.activeElement !== input) return
+      e.preventDefault()
+      if (input.form) input.form.scrollTop += e.deltaY
+    }
+    input.addEventListener('wheel', onWheel, { passive: false })
+    return () => input.removeEventListener('wheel', onWheel)
+  }, [])
+  return <input ref={ref} type="number" {...props} />
+}
+
+/**
  * A labelled field with an optional hint and warning, and its validation message (which also marks the input
  * invalid).
  */
@@ -484,9 +505,8 @@ export function SettingsDialog(props: {
               suffix="s"
             >
               {(aria) => (
-                <input
+                <NumberInput
                   {...aria}
-                  type="number"
                   inputMode="decimal"
                   min={POLL_SECONDS.min}
                   max={POLL_SECONDS.max}
@@ -503,9 +523,8 @@ export function SettingsDialog(props: {
               suffix="px"
             >
               {(aria) => (
-                <input
+                <NumberInput
                   {...aria}
-                  type="number"
                   inputMode="numeric"
                   min={FONT_SIZE_LIMITS.min}
                   max={FONT_SIZE_LIMITS.max}
