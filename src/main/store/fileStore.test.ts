@@ -167,6 +167,32 @@ describe('FileStore', () => {
     expect(items.map((i) => i.runCommand)).toEqual(['npm run dev', 'hugo server', undefined, undefined, undefined])
     expect(items.map((i) => 'runCommand' in i)).toEqual([true, true, false, false, false])
   })
+  it('round-trips the Claude profiles of themes and tasks', async () => {
+    const task = {
+      id: 'k1',
+      name: 'fix',
+      slug: 'fix',
+      branch: 'b/fix',
+      worktreePath: '/wt/fix',
+      baseRef: 'origin/main',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      profileId: 'p-home',
+    }
+    const state = {
+      version: 1 as const,
+      themes: [
+        {
+          id: 't1',
+          name: 'X',
+          slug: 'x',
+          profileId: 'p-work',
+          items: [{ id: 'r1', kind: 'repo' as const, name: 'a', slug: 'a', path: '/a', tasks: [task] }],
+        },
+      ],
+    }
+    await new FileStore(file).save(state)
+    await expect(new FileStore(file).load()).resolves.toEqual(state)
+  })
   it('falls back to .bak when the main file is JSON but not a state the app saves (a hand edit)', async () => {
     const store = new FileStore(file)
     const first = addTheme(emptyState(), 'One')
@@ -174,6 +200,15 @@ describe('FileStore', () => {
     await store.save(addTheme(first, 'Two'))
     const theme = { id: 't', name: 'X', slug: 'x' }
     const item = { id: 'r', kind: 'repo', name: 'a', slug: 'a', path: '/a' }
+    const fullTask = {
+      id: 'k',
+      name: 'fix',
+      slug: 'fix',
+      branch: 'b',
+      worktreePath: '/w',
+      baseRef: 'm',
+      createdAt: 'c',
+    }
     for (const broken of [
       { version: 1, themes: [null] },
       { version: 1, themes: [theme] }, // no items
@@ -181,6 +216,8 @@ describe('FileStore', () => {
       { version: 1, themes: [{ ...theme, items: [{ ...item, kind: 'thing', tasks: [] }] }] },
       { version: 1, themes: [{ ...theme, items: [{ ...item, path: 7, tasks: [] }] }] },
       { version: 1, themes: [{ ...theme, items: [{ ...item, tasks: [{ id: 'k', name: 'fix', slug: 'fix' }] }] }] },
+      { version: 1, themes: [{ ...theme, items: [], profileId: 7 }] }, // a profile that isn't an id
+      { version: 1, themes: [{ ...theme, items: [{ ...item, tasks: [{ ...fullTask, profileId: null }] }] }] },
     ]) {
       await writeFile(file, JSON.stringify(broken), 'utf8')
       await expect(new FileStore(file).load()).resolves.toEqual(first)

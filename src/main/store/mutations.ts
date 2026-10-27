@@ -232,7 +232,8 @@ export function restoreItem(state: AppState, themeId: string, raw: unknown, inde
 }
 
 /**
- * Undoes removeTheme: puts the theme back with its items, ids, names, slugs, paths and style, at `index` if given.
+ * Undoes removeTheme: puts the theme back with its items, ids, names, slugs, paths, style and Claude profile, at
+ * `index` if given.
  * Rejects it when an id is in use, its slug or name is taken by another theme meanwhile, or its items clash.
  */
 export function restoreTheme(state: AppState, raw: unknown, index?: number): AppState {
@@ -252,10 +253,11 @@ export function restoreTheme(state: AppState, raw: unknown, index?: number): App
   if (new Set(items.map((i) => i.path)).size < items.length || new Set(items.map((i) => i.slug)).size < items.length) {
     throw new Error(`Invalid theme to restore: "${name}" lists an item twice`)
   }
-  // The style comes back too; one that doesn't check out (a hand-edited state) is dropped, not refused.
+  // The style and profile come back too; one that doesn't check out (a hand-edited state) is dropped, not refused.
   const theme: Theme = { id, name, slug, items }
   if (isThemeColor(raw.color)) theme.color = raw.color
   if (typeof raw.icon === 'string' && raw.icon.trim() && themeIconError(raw.icon) === null) theme.icon = raw.icon.trim()
+  if (typeof raw.profileId === 'string') theme.profileId = raw.profileId
   const next = clone(state)
   insertAt(next.themes, theme, index)
   return next
@@ -417,5 +419,38 @@ export function setTaskBudget(
   const task = getTask(next, themeId, repoId, taskId)
   if (budget === null) delete task.budgetUsd
   else task.budgetUsd = budget
+  return next
+}
+
+/** A profile id from the renderer: any text, or null for none. Whether a profile has it is checked when it is used. */
+function checkProfile(profileId: unknown): asserts profileId is string | null {
+  if (profileId !== null && typeof profileId !== 'string') throw new Error('Profile must be text')
+}
+
+/** Sets the Claude profile a theme's sessions start in (see shared/profiles.ts); null removes it (Default). */
+export function setThemeProfile(state: AppState, themeId: string, profileId: string | null): AppState {
+  getTheme(state, themeId)
+  checkProfile(profileId)
+  const next = clone(state)
+  const theme = getTheme(next, themeId)
+  if (profileId === null) delete theme.profileId
+  else theme.profileId = profileId
+  return next
+}
+
+/** Sets the Claude profile a task's sessions start in, in place of its theme's; null removes it (the theme's). */
+export function setTaskProfile(
+  state: AppState,
+  themeId: string,
+  repoId: string,
+  taskId: string,
+  profileId: string | null,
+): AppState {
+  getTask(state, themeId, repoId, taskId)
+  checkProfile(profileId)
+  const next = clone(state)
+  const task = getTask(next, themeId, repoId, taskId)
+  if (profileId === null) delete task.profileId
+  else task.profileId = profileId
   return next
 }

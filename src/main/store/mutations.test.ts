@@ -547,3 +547,45 @@ describe('task budgets', () => {
     expect(() => m.setTaskBudget(s, themeId, repoId, 'nope', 5)).toThrow(/Task not found/)
   })
 })
+
+describe('Claude profiles', () => {
+  function withTask(): { s: AppState; themeId: string; repoId: string } {
+    const { s, themeId, repoId } = setup()
+    return { s: m.addTask(s, themeId, repoId, task('fix')), themeId, repoId }
+  }
+
+  it("sets and clears a theme's profile, without touching the input state", () => {
+    const { s, themeId } = setup()
+    const set = m.setThemeProfile(s, themeId, 'p-work')
+    expect(set.themes[0].profileId).toBe('p-work')
+    expect(s.themes[0]).not.toHaveProperty('profileId')
+    expect(m.setThemeProfile(set, themeId, null).themes[0]).not.toHaveProperty('profileId')
+  })
+
+  it("sets and clears a task's profile, without touching the input state", () => {
+    const { s, themeId, repoId } = withTask()
+    const set = m.setTaskProfile(s, themeId, repoId, 'task-fix', 'p-work')
+    expect(m.getTask(set, themeId, repoId, 'task-fix').profileId).toBe('p-work')
+    expect(m.getTask(s, themeId, repoId, 'task-fix')).not.toHaveProperty('profileId')
+    const cleared = m.setTaskProfile(set, themeId, repoId, 'task-fix', null)
+    expect(m.getTask(cleared, themeId, repoId, 'task-fix')).not.toHaveProperty('profileId')
+  })
+
+  it('rejects a profile that is not text, and unknown themes and tasks', () => {
+    const { s, themeId, repoId } = withTask()
+    for (const bad of [7, {}, undefined, true]) {
+      expect(() => m.setThemeProfile(s, themeId, bad as string)).toThrow('Profile must be text')
+      expect(() => m.setTaskProfile(s, themeId, repoId, 'task-fix', bad as string)).toThrow('Profile must be text')
+    }
+    expect(() => m.setThemeProfile(s, 'nope', 'p')).toThrow(/Theme not found/)
+    expect(() => m.setTaskProfile(s, themeId, repoId, 'nope', 'p')).toThrow(/Task not found/)
+  })
+
+  it("keeps a theme's profile when it is restored, dropping one that isn't text", () => {
+    const { s, themeId } = setup()
+    const theme = m.setThemeProfile(s, themeId, 'p-work').themes[0]
+    const removed = m.removeTheme(s, themeId)
+    expect(m.restoreTheme(removed, theme).themes[0]).toEqual(theme)
+    expect(m.restoreTheme(removed, { ...theme, profileId: 3 }).themes[0]).not.toHaveProperty('profileId')
+  })
+})

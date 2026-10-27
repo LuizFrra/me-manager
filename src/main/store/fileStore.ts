@@ -38,13 +38,17 @@ const TASK_TEXT = ['id', 'name', 'slug', 'branch', 'worktreePath', 'baseRef', 'c
 const hasText = (v: Record<string, unknown>, keys: readonly string[]): boolean =>
   keys.every((k) => typeof v[k] === 'string')
 
+/** A theme's or task's Claude profile, when it has one, is an id: anything else would start it in an unclear account. */
+const hasProfile = (v: Record<string, unknown>): boolean => !('profileId' in v) || typeof v.profileId === 'string'
+
 /**
  * Throws, naming the first entry that isn't a theme, repo, folder or task as the app saves them (a hand edit): the
- * app would fail on it everywhere, and the window would show nothing. Only what every version saved is checked.
+ * app would fail on it everywhere, and the window would show nothing. Only what every version saved is checked, and
+ * that a Claude profile, when there is one, is text.
  */
 function checkShape(themes: unknown[]): void {
   for (const [t, theme] of themes.entries()) {
-    if (!isRecord(theme) || !hasText(theme, THEME_TEXT) || !Array.isArray(theme.items)) {
+    if (!isRecord(theme) || !hasText(theme, THEME_TEXT) || !Array.isArray(theme.items) || !hasProfile(theme)) {
       throw new Error(`themes[${t}] is not a theme`)
     }
     for (const [i, item] of (theme.items as unknown[]).entries()) {
@@ -55,7 +59,9 @@ function checkShape(themes: unknown[]): void {
       }
       if (!repo) continue
       for (const [k, task] of (item.tasks as unknown[]).entries()) {
-        if (!isRecord(task) || !hasText(task, TASK_TEXT)) throw new Error(`${at}.tasks[${k}] is not a task`)
+        if (!isRecord(task) || !hasText(task, TASK_TEXT) || !hasProfile(task)) {
+          throw new Error(`${at}.tasks[${k}] is not a task`)
+        }
       }
     }
   }
