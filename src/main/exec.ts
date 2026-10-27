@@ -30,6 +30,11 @@ export interface RunOptions {
 }
 
 const DEFAULT_MAX_BUFFER = 16 * 1024 * 1024
+/**
+ * How long `run` waits after its timeout's SIGTERM before killing the command outright (SIGKILL): an interactive
+ * shell ignores SIGTERM, and the call would otherwise wait for it however long it runs.
+ */
+export const KILL_GRACE_MS = 1_000
 const MAX_STDERR = 64 * 1024
 
 const childEnv = (opts: RunOptions): NodeJS.ProcessEnv => (opts.env ? { ...process.env, ...opts.env } : process.env)
@@ -41,6 +46,7 @@ const abortReason = (signal: AbortSignal): Error =>
 export function run(file: string, args: string[], opts: RunOptions = {}): Promise<string> {
   const command = [file, ...args].join(' ')
   return new Promise((resolve, reject) => {
+    let forceKill: ReturnType<typeof setTimeout> | undefined
     const child = execFile(
       file,
       args,
@@ -51,6 +57,7 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
         env: childEnv(opts),
       },
       (err, stdout, stderr) => {
+        clearTimeout(forceKill)
         if (!err) {
           resolve(String(stdout))
           return
@@ -79,6 +86,7 @@ export function run(file: string, args: string[], opts: RunOptions = {}): Promis
         reject(new CommandError(command, code, String(stderr), `${command} failed: ${detail}`))
       },
     )
+    if (opts.timeoutMs) forceKill = setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs + KILL_GRACE_MS)
     if (opts.input !== undefined) {
       child.stdin?.on('error', () => {}) // EPIPE when the command exits without reading it; its exit code says why
       child.stdin?.end(opts.input)

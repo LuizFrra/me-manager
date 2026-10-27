@@ -1,18 +1,24 @@
 import { run } from './exec'
 
 const MARK = '__ME_MANAGER_PATH__'
+/** How long the app waits for the login shell at startup (its window shows only after). */
+export const LOGIN_SHELL_TIMEOUT_MS = 5000
 
 /**
  * GUI-launched Electron (desktop icon, macOS Dock) gets a minimal PATH that
  * misses nvm, ~/.local/bin and Homebrew. Ask the user's interactive login shell.
+ * Its input is closed, so a start-up file that asks something reads an end of file instead of waiting.
  */
-export async function loadLoginShellPath(): Promise<void> {
+export async function loadLoginShellPath(
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs = LOGIN_SHELL_TIMEOUT_MS,
+): Promise<void> {
   if (process.platform === 'win32') return
-  const shell = process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
+  const shell = env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
   try {
-    const out = await run(shell, ['-ilc', `printf '${MARK}%s${MARK}' "$PATH"`], { timeoutMs: 5000 })
+    const out = await run(shell, ['-ilc', `printf '${MARK}%s${MARK}' "$PATH"`], { timeoutMs, input: '' })
     const match = out.match(new RegExp(`${MARK}(.*)${MARK}`))
-    if (match?.[1]) process.env.PATH = match[1]
+    if (match?.[1]) env.PATH = match[1]
   } catch {
     // Keep the inherited PATH; the prerequisite check will report missing tools.
   }
