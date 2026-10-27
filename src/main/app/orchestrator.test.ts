@@ -1340,6 +1340,47 @@ describe('Orchestrator: serialized mutations', () => {
   })
 })
 
+describe('Orchestrator: quitting', () => {
+  it('is idle at once when nothing runs', async () => {
+    const { orch } = await setup()
+    expect(orch.busy()).toBe(false)
+    await orch.whenIdle(60_000)
+  })
+
+  it('waits for the changes running, and for ones queued while it waits', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const save = store.save.bind(store)
+    store.save = async (state: AppState): Promise<void> => {
+      await gate // a slow disk
+      return save(state)
+    }
+    const creating = orch.createTask(themeId, repoId, 'fix')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch.busy()).toBe(true)
+    let idle = false
+    const waiting = orch.whenIdle(60_000).then(() => (idle = true))
+    const renaming = orch.renameTheme(themeId, 'Client Y')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(idle).toBe(false)
+    release()
+    await Promise.all([creating, renaming, waiting])
+    expect(orch.busy()).toBe(false)
+    expect(store.saved.at(-1)?.themes[0].name).toBe('Client Y')
+  })
+
+  it('gives up waiting after the time given', async () => {
+    const { orch, store, themeId } = await setup()
+    store.save = (): Promise<void> => new Promise(() => {}) // never finishes
+    void orch.renameTheme(themeId, 'Client Y')
+    const started = Date.now()
+    await orch.whenIdle(50)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(orch.busy()).toBe(true)
+  })
+})
+
 describe('Orchestrator: fetch timeout', () => {
   afterEach(() => {
     vi.useRealTimers()

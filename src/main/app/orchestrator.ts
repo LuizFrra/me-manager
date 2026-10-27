@@ -316,6 +316,29 @@ export class Orchestrator implements AppService {
     return run
   }
 
+  /** Whether a change is running or queued (see exclusive). */
+  busy(): boolean {
+    return this.queues.size > 0
+  }
+
+  /**
+   * Resolves once no change is running or queued (including ones queued meanwhile), or after `maxMs`: the app waits
+   * for this when it quits, so that a task isn't left half created or half removed.
+   */
+  async whenIdle(maxMs: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), maxMs)
+    })
+    try {
+      while (this.queues.size > 0) {
+        if ((await Promise.race([Promise.all(this.queues.values()), timeout])) === 'timeout') return
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Fetch, but give up after fetchTimeoutMs (hung network, ssh prompt). Never throws. */
   private async fetchWithTimeout(repoPath: string): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
