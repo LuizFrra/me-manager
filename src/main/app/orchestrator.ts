@@ -112,6 +112,11 @@ export const RUN_RESTART_GRACE_MS = 500
 export const DEV_URL_SCROLLBACK_LINES = 200
 /** A tab that keeps printing (a busy log) is captured again for getDevUrls at most this often. */
 export const DEV_URL_RESCAN_MS = 3_000
+/**
+ * And Claude's window while it works, at most this often: its spinner makes it print every second. It is captured
+ * again as soon as it is quiet (done or waiting), so this only delays a URL printed in the middle of a long turn.
+ */
+export const DEV_URL_BUSY_RESCAN_MS = 30_000
 
 /** One tab's last capture for getDevUrls. */
 interface DevUrlScan {
@@ -1053,8 +1058,8 @@ export class Orchestrator implements AppService {
 
   /**
    * Read-only, so it skips the queues. One `list-windows` (shared with listTabs), plus a capture of each tab that
-   * printed something since its last one (see mayHaveChanged), at most every DEV_URL_RESCAN_MS. Closed tabs drop out
-   * with their URLs.
+   * printed something since its last one (see mayHaveChanged), at most every DEV_URL_RESCAN_MS, or
+   * DEV_URL_BUSY_RESCAN_MS for Claude's window while it works. Closed tabs drop out with their URLs.
    */
   async getDevUrls(target: Target): Promise<DevUrl[]> {
     const { session } = this.resolve(target)
@@ -1064,9 +1069,11 @@ export class Orchestrator implements AppService {
     const live = new Set(windows.map((w) => w.id))
     for (const id of scans.keys()) if (!live.has(id)) scans.delete(id)
     const now = this.now()
-    await mapLimit(windows, PANE_CAPTURE_CONCURRENCY, async ({ id, activity }) => {
+    await mapLimit(windows, PANE_CAPTURE_CONCURRENCY, async ({ id, name, activity }) => {
       const scan = scans.get(id)
-      if (scan && (!mayHaveChanged(scan, activity) || now - scan.at < DEV_URL_RESCAN_MS)) return
+      const every =
+        name === CLAUDE_WINDOW && isRecentlyActive(activity, now) ? DEV_URL_BUSY_RESCAN_MS : DEV_URL_RESCAN_MS
+      if (scan && (!mayHaveChanged(scan, activity) || now - scan.at < every)) return
       const text = await this.deps.tmux.captureTail(id, DEV_URL_SCROLLBACK_LINES).catch(() => null)
       scans.set(id, { activity, at: now, urls: text === null ? [] : findDevUrls(text) })
     })
