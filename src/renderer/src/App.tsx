@@ -544,7 +544,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       }),
     [],
   )
-  const { toasts, showError, showInfo, dismiss } = useToasts()
+  const { toasts, showError, showInfo, dismiss, hold: holdToast, release: releaseToast } = useToasts()
   // What the live region tells screen readers: the last move ("Moved fix-login to position 2 of 5").
   const [announcement, setAnnouncement] = useState('')
   // Counts moves, so only the latest one's answer is shown (see move).
@@ -2516,7 +2516,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onOpenSettings={openSettings}
         />
       )}
-      <Toasts toasts={toasts} onDismiss={dismiss} />
+      <Toasts toasts={toasts} onDismiss={dismiss} onHold={holdToast} onRelease={releaseToast} />
       {/* Outside the sidebar, which is inert (so unheard) while a dialog or overlay is up. */}
       <div className="sr-only" aria-live="polite" data-testid="announcer">
         {announcement}
