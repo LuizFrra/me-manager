@@ -24,6 +24,7 @@ export function ChangesList({ changes, selected, onSelect }: ChangesListProps): 
   const renderRow = (index: number, style: React.CSSProperties | undefined): React.ReactNode => {
     const c = changes[index]
     const [dir, base] = splitPath(c.path)
+    const shownPath = c.oldPath ? `${c.oldPath} → ${c.path}` : c.path
     return (
       <button
         key={c.path}
@@ -31,7 +32,9 @@ export function ChangesList({ changes, selected, onSelect }: ChangesListProps): 
         style={style}
         className={selected === c.path ? 'change-row selected' : 'change-row'}
         aria-current={selected === c.path ? 'true' : undefined}
-        title={`${STATUS_NAMES[c.status]}: ${c.oldPath ? `${c.oldPath} → ${c.path}` : c.path}`}
+        // The status in words, not its letter, as in the file tree.
+        aria-label={`${shownPath}, ${STATUS_NAMES[c.status].toLowerCase()}, ${c.binary ? 'binary' : `+${c.added} −${c.removed}`}`}
+        title={`${STATUS_NAMES[c.status]}: ${shownPath}`}
         onClick={() => onSelect(c.path)}
       >
         <span className={`badge badge-${c.status}`}>{c.status}</span>
