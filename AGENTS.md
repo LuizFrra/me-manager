@@ -88,6 +88,8 @@ Test notes:
 
 - Some tests run **real git and real tmux** on private, uniquely named sockets that they kill afterwards. They
   never touch `~/.me-manager` or the `me-manager` tmux socket.
+- `src/main/tmux/terminal.e2e.test.ts` drives the terminal end to end: a real tmux client (through util-linux
+  `script`) whose output goes to xterm.js. It runs on Linux only and is skipped elsewhere.
 - `vitest.config.ts` points `TMPDIR` at one folder per run and deletes it at the end
   (`src/main/test/globalTmp.ts`). On machines where `/tmp` is a small tmpfs, don't bypass this.
 - On a heavily loaded machine (several suites in parallel) a slow jsdom test can time out; rerun that file alone
@@ -154,6 +156,8 @@ the fake (`cat`), never `claude`.
 - Drive and screenshot the UI through the Chrome DevTools Protocol on the debugging port
   (`Runtime.evaluate`, `Input.dispatchMouseEvent`, `Input.insertText`, `Page.captureScreenshot`).
 - Use a different port per parallel launch.
+- On a Wayland desktop, add `--ozone-platform=x11`: a native Wayland window that is covered or on another workspace
+  gets no frames, so nothing is drawn and CDP mouse events time out.
 - Stop the app by PID found with `pgrep -f "[r]emote-debugging-port=9333"`. The brackets matter: an unbracketed
   `pkill -f` pattern matches your own shell command and kills it.
 
