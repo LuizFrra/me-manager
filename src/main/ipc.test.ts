@@ -2,12 +2,14 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PTY_RESIZE, PTY_WRITE } from '../shared/ipc'
 import type { Target } from '../shared/types'
 import type { AppService, PtyApi } from './contracts'
 
 // Electron stand-ins: the handlers registerIpc installs, and the save dialog it opens.
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
+  listeners: new Map<string, (event: unknown, ...args: unknown[]) => void>(),
   showSaveDialog: vi.fn(),
   getPath: vi.fn((name: string) => `/home/me/${name === 'downloads' ? 'Downloads' : name}`),
 }))
@@ -18,7 +20,7 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) =>
       electron.handlers.set(channel, fn),
-    on: () => {},
+    on: (channel: string, fn: (event: unknown, ...args: unknown[]) => void) => electron.listeners.set(channel, fn),
   },
   shell: { openExternal: vi.fn() },
 }))
@@ -69,5 +71,39 @@ describe('registerIpc: saveTranscript', () => {
   it('leaves copyTranscript to the orchestrator and never exposes captureTranscript', async () => {
     expect(electron.handlers.has('api:copyTranscript')).toBe(true)
     expect(electron.handlers.has('api:captureTranscript')).toBe(false)
+  })
+})
+
+describe('registerIpc: terminal', () => {
+  const pty = { write: vi.fn(), resize: vi.fn(), onData: () => () => {}, onExit: () => () => {} }
+  beforeEach(() => {
+    pty.write.mockReset()
+    pty.resize.mockReset()
+    registerIpc({ app: {} as AppService, pty: pty as unknown as PtyApi, getWindow: () => null })
+  })
+  const send = (channel: string, ...args: unknown[]): void => electron.listeners.get(channel)!({}, ...args)
+
+  it('passes keystrokes and sizes on to the terminal', () => {
+    send(PTY_WRITE, 'ls\r')
+    send(PTY_RESIZE, 120, 40)
+    expect(pty.write).toHaveBeenCalledWith('ls\r')
+    expect(pty.resize).toHaveBeenCalledWith(120, 40)
+  })
+
+  it('drops input that is not text and sizes that are not positive whole numbers, which node-pty throws on', () => {
+    for (const data of [undefined, 42, { a: 1 }]) send(PTY_WRITE, data)
+    for (const [cols, rows] of [
+      [Number.NaN, 40],
+      [120, 0],
+      [-1, 40],
+      [120.5, 40],
+      ['120', 40],
+      [Infinity, 40],
+      [120, undefined],
+    ]) {
+      send(PTY_RESIZE, cols, rows)
+    }
+    expect(pty.write).not.toHaveBeenCalled()
+    expect(pty.resize).not.toHaveBeenCalled()
   })
 })
