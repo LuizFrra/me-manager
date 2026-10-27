@@ -2841,6 +2841,9 @@ kbd {
   text-align: center;
   color: var(--muted);
 }
+.palette-empty:empty {
+  display: none;
+}
 .palette-footer {
   flex: none;
   display: flex;

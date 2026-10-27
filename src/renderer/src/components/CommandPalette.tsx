@@ -228,19 +228,22 @@ export function CommandPalette<C extends PaletteCommand>(props: {
             </li>
           ))}
         </ul>
-        {results.length === 0 && <div className="palette-empty">No results</div>}
-        <div className="palette-footer" aria-hidden="true">
-          <span>
+        {/* Status regions, there before what they say, so screen readers hear it from the combobox. */}
+        <div className="palette-empty" role="status">
+          {results.length === 0 ? 'No results' : ''}
+        </div>
+        <div className="palette-footer">
+          <span aria-hidden="true">
             <kbd>↑</kbd>
             <kbd>↓</kbd> move
           </span>
-          <span>
+          <span aria-hidden="true">
             <kbd>Enter</kbd> open
           </span>
-          <span>
+          <span aria-hidden="true">
             <kbd>Esc</kbd> close
           </span>
-          <span className="palette-footer-status">
+          <span className="palette-footer-status" role="status">
             {loadingFiles
               ? 'Loading files…'
               : filesFailed

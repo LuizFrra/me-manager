@@ -100,6 +100,26 @@ describe('CommandPalette', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('tells screen readers when nothing matches, and when the files could not be listed', async () => {
+    const user = userEvent.setup()
+    render(
+      <CommandPalette
+        commands={[command('One')]}
+        loadFiles={() => Promise.reject(new Error('gone'))}
+        onRun={vi.fn()}
+        onOpenFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    const said = (): string[] => screen.getAllByRole('status').map((el) => el.textContent ?? '')
+    expect(said()).toEqual(['', 'Loading files…'])
+    await waitFor(() => expect(said()).toEqual(['', 'Could not list files']))
+    await user.type(screen.getByRole('combobox'), 'zzz')
+    expect(said()).toEqual(['No results', 'Could not list files'])
+    await user.clear(screen.getByRole('combobox'))
+    expect(said()).toEqual(['', 'Could not list files'])
+  })
+
   it('runs a clicked result and closes on Esc', async () => {
     const user = userEvent.setup()
     const commands = [command('One'), command('Two')]
