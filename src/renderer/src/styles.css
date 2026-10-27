@@ -2829,6 +2829,12 @@ kbd {
   background: none;
   font-weight: 600;
 }
+/* A file: its name, then its folder (cut first when the row is too narrow). */
+.palette-file-dir {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .palette-kind {
   flex: none;
   min-width: 42px;

@@ -154,6 +154,33 @@ describe('CommandPalette', () => {
     expect(loadFiles).toHaveBeenCalledTimes(1)
   })
 
+  it('shows a file by its name first, then its folder, keeping the highlights and the whole path in the tooltip', async () => {
+    const user = userEvent.setup()
+    const path = 'packages/web/src/features/billing/InvoiceTable.tsx'
+    render(
+      <CommandPalette
+        commands={[command('Close the app')]}
+        loadFiles={async () => ({ paths: [path], truncated: false })}
+        onRun={vi.fn()}
+        onOpenFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    await user.type(screen.getByRole('combobox'), 'billinvoice')
+    const option = await screen.findByRole('option', { name: path })
+    expect(option).toHaveAttribute('title', path)
+    expect(option.querySelector('.palette-file-name')).toHaveTextContent(/^InvoiceTable\.tsx$/)
+    expect(option.querySelector('.palette-file-dir')).toHaveTextContent(/^packages\/web\/src\/features\/billing$/)
+    const marks = (selector: string): string[] =>
+      [...(option.querySelector(selector)?.querySelectorAll('mark') ?? [])].map((m) => m.textContent ?? '')
+    expect(marks('.palette-file-name').join('')).toBe('Invoice')
+    expect(marks('.palette-file-dir').join('')).toBe('bill')
+    // Other results keep their label as it is.
+    await user.clear(screen.getByRole('combobox'))
+    expect(screen.getByRole('option', { name: 'Close the app' })).toHaveAttribute('title', 'Close the app')
+    expect(document.querySelector('.palette-file-name')).toBeNull()
+  })
+
   it('says when nothing matches and highlights matched characters', async () => {
     const user = userEvent.setup()
     render(

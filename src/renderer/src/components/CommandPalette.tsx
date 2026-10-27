@@ -65,6 +65,28 @@ function Highlighted({ text, positions }: { text: string; positions: number[] })
 }
 
 /**
+ * A file's path as its name, then its folder, dimmed: a long path cut at its end would hide the name. The matched
+ * characters are highlighted in both.
+ */
+function FileLabel({ path, positions }: { path: string; positions: number[] }): React.JSX.Element {
+  const start = path.lastIndexOf('/') + 1
+  const name = path.slice(start)
+  const folder = path.slice(0, Math.max(0, start - 1))
+  return (
+    <>
+      <span className="palette-file-name">
+        <Highlighted text={name} positions={positions.filter((p) => p >= start).map((p) => p - start)} />
+      </span>
+      {folder && (
+        <span className="palette-file-dir">
+          <Highlighted text={folder} positions={positions.filter((p) => p < folder.length)} />
+        </span>
+      )}
+    </>
+  )
+}
+
+/**
  * Fuzzy "go to anything": tasks, folders and actions, plus the selected target's files, which are fetched when
  * the palette opens and kept while it stays open. Enter or a click runs the active result; Esc closes.
  */
@@ -206,6 +228,7 @@ export function CommandPalette<C extends PaletteCommand>(props: {
               role="option"
               aria-selected={i === current}
               aria-label={item.label}
+              title={item.label}
               className="palette-option"
               onMouseMove={() => {
                 if (i === current) return
@@ -221,7 +244,11 @@ export function CommandPalette<C extends PaletteCommand>(props: {
                 <KindIcon kind={item.kind} emoji={item.icon} />
               </span>
               <span className="palette-label">
-                <Highlighted text={item.label} positions={positions} />
+                {isFile(item) ? (
+                  <FileLabel path={item.label} positions={positions} />
+                ) : (
+                  <Highlighted text={item.label} positions={positions} />
+                )}
               </span>
               {item.shortcut && <kbd>{item.shortcut}</kbd>}
               <span className="palette-kind">{KIND_LABEL[item.kind]}</span>
