@@ -11,6 +11,22 @@ describe('fuzzyMatch', () => {
     expect(fuzzyMatch('readme', 'README.md')).not.toBeNull()
   })
 
+  it('ignores accents, in the text and in the query, keeping the positions on the text', () => {
+    expect(fuzzyMatch('acao', 'Configuração')?.positions).toEqual([8, 9, 10, 11])
+    expect(fuzzyMatch('ção', 'funcao')?.positions).toEqual([3, 4, 5])
+    expect(fuzzyMatch('ÉCOLE', 'école')).not.toBeNull()
+    expect(fuzzyMatch('nino', 'Niño')).not.toBeNull()
+    // Decomposed text: the accent is its own character, which the query skips over.
+    expect(fuzzyMatch('cafe', 'cafe\u0301')?.positions).toEqual([0, 1, 2, 3])
+    expect(fuzzyMatch('café', 'cafe\u0301')?.positions).toEqual([0, 1, 2, 3])
+    expect(fuzzyMatch('ab', 'ä')).toBeNull()
+  })
+
+  it('keeps other scripts and symbols as they are', () => {
+    expect(fuzzyMatch('ログ', 'ログイン')?.positions).toEqual([0, 1])
+    expect(fuzzyMatch('🚀', 'ship 🚀 it')?.positions).toEqual([5, 6])
+  })
+
   it('rejects characters that are missing or out of order', () => {
     expect(fuzzyMatch('xyz', 'fix login bug')).toBeNull()
     expect(fuzzyMatch('bl', 'fix login bug')).toBeNull()

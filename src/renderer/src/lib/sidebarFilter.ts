@@ -1,4 +1,5 @@
 import type { AppState } from '../../../shared/types'
+import { foldText } from './fuzzy'
 
 /** What the sidebar shows while a filter is active, as sets of theme, item (repo or folder) and task ids. */
 export interface SidebarFilter {
@@ -8,15 +9,15 @@ export interface SidebarFilter {
 }
 
 /**
- * Narrows the sidebar to the themes, repos, folders and tasks whose name contains `query` (case-insensitive),
+ * Narrows the sidebar to the themes, repos, folders and tasks whose name contains `query` (ignoring case and accents),
  * plus their ancestors, so every match keeps its place in the tree. A matching theme or repo also keeps its
  * contents: filtering by a theme or repo name shows what is inside it.
  * Returns null for a blank query: no filter, show everything.
  */
 export function filterSidebar(state: AppState, query: string): SidebarFilter | null {
-  const q = query.trim().toLowerCase()
+  const q = foldText(query.trim())
   if (!q) return null
-  const matches = (name: string): boolean => name.toLowerCase().includes(q)
+  const matches = (name: string): boolean => foldText(name).includes(q)
   const themes = new Set<string>()
   const items = new Set<string>()
   const tasks = new Set<string>()
