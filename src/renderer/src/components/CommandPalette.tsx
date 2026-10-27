@@ -143,6 +143,8 @@ export function CommandPalette<C extends PaletteCommand>(props: {
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
+    // An input method (Japanese, Chinese…) uses these keys to pick, confirm or cancel what it composes.
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
       if (results.length === 0) return

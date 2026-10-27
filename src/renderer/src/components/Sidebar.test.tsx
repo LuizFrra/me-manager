@@ -223,6 +223,19 @@ describe('Sidebar keyboard navigation', () => {
     expect(labelOf('Archived')).toHaveFocus()
   })
 
+  it("leaves the filter's ↓ and Esc to an input method while it composes", () => {
+    const onFilterChange = vi.fn()
+    const onMultiSelect = vi.fn()
+    render(<Harness patch={{ onFilterChange, onMultiSelect, multiSelection: new Set(['fix', 'docs']) }} />)
+    const box = screen.getByRole('textbox', { name: 'Filter sidebar' })
+    act(() => box.focus())
+    expect(fireEvent.keyDown(box, { key: 'ArrowDown', isComposing: true })).toBe(true)
+    expect(fireEvent.keyDown(box, { key: 'Escape', isComposing: true })).toBe(true)
+    expect(box).toHaveFocus()
+    expect(onFilterChange).not.toHaveBeenCalled()
+    expect(onMultiSelect).not.toHaveBeenCalled() // nor the sidebar's Esc, which clears the selection
+  })
+
   it('leaves the arrows with modifiers to their own keys, and the row buttons alone', async () => {
     const onMultiSelect = vi.fn()
     render(<Harness patch={{ onMultiSelect }} />)

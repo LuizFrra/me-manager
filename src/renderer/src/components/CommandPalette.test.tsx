@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { CommandPalette, MAX_PALETTE_RESULTS, type PaletteCommand, type PaletteFiles } from './CommandPalette'
@@ -32,6 +32,21 @@ describe('CommandPalette', () => {
     expect(onClose).toHaveBeenCalled()
     expect(onRun).toHaveBeenCalledTimes(1)
     expect(onRun).toHaveBeenCalledWith(commands[2])
+  })
+
+  it('leaves Enter, the arrows and Esc to an input method while it composes (Japanese, Chinese…)', () => {
+    const commands = [command('One'), command('Two')]
+    const onClose = vi.fn()
+    const onRun = vi.fn()
+    render(<CommandPalette commands={commands} onRun={onRun} onOpenFile={vi.fn()} onClose={onClose} />)
+    const input = screen.getByRole('combobox')
+    for (const key of ['ArrowDown', 'Enter', 'Escape'])
+      expect(fireEvent.keyDown(input, { key, isComposing: true })).toBe(true) // not prevented
+    expect(screen.getByRole('option', { name: 'One' })).toHaveAttribute('aria-selected', 'true')
+    expect(onRun).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRun).toHaveBeenCalledWith(commands[0])
   })
 
   it('runs a clicked result and closes on Esc', async () => {

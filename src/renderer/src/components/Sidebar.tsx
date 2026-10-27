@@ -339,7 +339,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
    * ↓ in the filter goes to the first row, ↑ on the first row back to the filter. Enter opens, as a click does.
    */
   const navigate = (e: React.KeyboardEvent): void => {
-    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing) return
     const labels = [...(navRef.current?.querySelectorAll<HTMLElement>('.row-label[data-key]') ?? [])]
     const filterBox = navRef.current?.querySelector<HTMLElement>('.sidebar-filter')
     if (e.target === filterBox && e.key === 'ArrowDown' && labels.length > 0) {
@@ -544,7 +544,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
       inert={p.inert}
       onKeyDown={(e) => {
         // Esc anywhere in the sidebar clears the selection; the filter's Esc clears the filter only.
-        if (e.key !== 'Escape' || e.isDefaultPrevented() || p.multiSelection.size === 0) return
+        if (e.key !== 'Escape' || e.isDefaultPrevented() || e.nativeEvent.isComposing || p.multiSelection.size === 0)
+          return
         e.preventDefault()
         choose(new Set())
       }}
@@ -599,7 +600,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           value={p.filter}
           onChange={(e) => p.onFilterChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== 'Escape') return
+            // An input method's Esc cancels what it composes.
+            if (e.key !== 'Escape' || e.nativeEvent.isComposing) return
             e.preventDefault()
             p.onFilterChange('')
           }}
