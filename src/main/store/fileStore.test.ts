@@ -167,7 +167,7 @@ describe('FileStore', () => {
     expect(items.map((i) => i.runCommand)).toEqual(['npm run dev', 'hugo server', undefined, undefined, undefined])
     expect(items.map((i) => 'runCommand' in i)).toEqual([true, true, false, false, false])
   })
-  it('round-trips the Claude profiles of themes and tasks', async () => {
+  it('round-trips the Claude profiles of themes and tasks, and drops one that is not text', async () => {
     const task = {
       id: 'k1',
       name: 'fix',
@@ -192,6 +192,18 @@ describe('FileStore', () => {
     }
     await new FileStore(file).save(state)
     await expect(new FileStore(file).load()).resolves.toEqual(state)
+    // A hand edit: the theme and task load without it, in Default and in their theme's profile.
+    const [t] = state.themes
+    const edited = {
+      ...state,
+      themes: [{ ...t, profileId: 7, items: [{ ...t.items[0], tasks: [{ ...task, profileId: null }] }] }],
+    }
+    await writeFile(file, JSON.stringify(edited), 'utf8')
+    const loaded = (await new FileStore(file).load()).themes[0]
+    expect(loaded).not.toHaveProperty('profileId')
+    const repo = loaded.items[0]
+    expect(repo.kind === 'repo' && repo.tasks[0]).toEqual({ ...task, profileId: undefined })
+    expect(repo.kind === 'repo' && 'profileId' in repo.tasks[0]).toBe(false)
   })
   it('falls back to .bak when the main file is JSON but not a state the app saves (a hand edit)', async () => {
     const store = new FileStore(file)
@@ -200,15 +212,6 @@ describe('FileStore', () => {
     await store.save(addTheme(first, 'Two'))
     const theme = { id: 't', name: 'X', slug: 'x' }
     const item = { id: 'r', kind: 'repo', name: 'a', slug: 'a', path: '/a' }
-    const fullTask = {
-      id: 'k',
-      name: 'fix',
-      slug: 'fix',
-      branch: 'b',
-      worktreePath: '/w',
-      baseRef: 'm',
-      createdAt: 'c',
-    }
     for (const broken of [
       { version: 1, themes: [null] },
       { version: 1, themes: [theme] }, // no items
@@ -216,8 +219,6 @@ describe('FileStore', () => {
       { version: 1, themes: [{ ...theme, items: [{ ...item, kind: 'thing', tasks: [] }] }] },
       { version: 1, themes: [{ ...theme, items: [{ ...item, path: 7, tasks: [] }] }] },
       { version: 1, themes: [{ ...theme, items: [{ ...item, tasks: [{ id: 'k', name: 'fix', slug: 'fix' }] }] }] },
-      { version: 1, themes: [{ ...theme, items: [], profileId: 7 }] }, // a profile that isn't an id
-      { version: 1, themes: [{ ...theme, items: [{ ...item, tasks: [{ ...fullTask, profileId: null }] }] }] },
     ]) {
       await writeFile(file, JSON.stringify(broken), 'utf8')
       await expect(new FileStore(file).load()).resolves.toEqual(first)

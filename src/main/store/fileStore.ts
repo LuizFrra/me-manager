@@ -7,21 +7,29 @@ import { emptyState } from './mutations'
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
+/** Drops a theme's or task's `profileId` that isn't text (see checkItems). */
+const dropBadProfile = (v: Record<string, unknown>): void => {
+  if ('profileId' in v && typeof v.profileId !== 'string') delete v.profileId
+}
+
 /**
  * Drops an `archivedAt` that isn't a non-empty string (a hand edit), so the task loads as an active one rather
  * than as one whose archived state nothing can rely on, and a `runCommand` that isn't one line of shell as
  * setRunCommand saves it, so "Run" never starts what the app wouldn't have saved, and a task's `budgetUsd` that
- * isn't one setTaskBudget would save (the default budget then applies). Files from before archiving, run commands
- * or budgets have none of them and load unchanged.
+ * isn't one setTaskBudget would save (the default budget then applies), and a theme's or task's `profileId` that
+ * isn't text (the theme's profile, or Default, then applies). Files from before archiving, run commands, budgets or
+ * profiles have none of them and load unchanged.
  */
 function checkItems(state: AppState): void {
   for (const theme of state.themes) {
     if (!isRecord(theme) || !Array.isArray(theme.items)) continue
+    dropBadProfile(theme)
     for (const item of theme.items as unknown[]) {
       if (isRecord(item) && 'runCommand' in item && !isRunCommand(item.runCommand)) delete item.runCommand
       if (!isRecord(item) || !Array.isArray(item.tasks)) continue
       for (const task of item.tasks as unknown[]) {
         if (!isRecord(task)) continue
+        dropBadProfile(task)
         if ('budgetUsd' in task && !isBudget(task.budgetUsd)) delete task.budgetUsd
         if (!('archivedAt' in task)) continue
         if (typeof task.archivedAt !== 'string' || task.archivedAt === '') delete task.archivedAt
@@ -38,17 +46,13 @@ const TASK_TEXT = ['id', 'name', 'slug', 'branch', 'worktreePath', 'baseRef', 'c
 const hasText = (v: Record<string, unknown>, keys: readonly string[]): boolean =>
   keys.every((k) => typeof v[k] === 'string')
 
-/** A theme's or task's Claude profile, when it has one, is an id: anything else would start it in an unclear account. */
-const hasProfile = (v: Record<string, unknown>): boolean => !('profileId' in v) || typeof v.profileId === 'string'
-
 /**
  * Throws, naming the first entry that isn't a theme, repo, folder or task as the app saves them (a hand edit): the
- * app would fail on it everywhere, and the window would show nothing. Only what every version saved is checked, and
- * that a Claude profile, when there is one, is text.
+ * app would fail on it everywhere, and the window would show nothing. Only what every version saved is checked.
  */
 function checkShape(themes: unknown[]): void {
   for (const [t, theme] of themes.entries()) {
-    if (!isRecord(theme) || !hasText(theme, THEME_TEXT) || !Array.isArray(theme.items) || !hasProfile(theme)) {
+    if (!isRecord(theme) || !hasText(theme, THEME_TEXT) || !Array.isArray(theme.items)) {
       throw new Error(`themes[${t}] is not a theme`)
     }
     for (const [i, item] of (theme.items as unknown[]).entries()) {
@@ -59,9 +63,7 @@ function checkShape(themes: unknown[]): void {
       }
       if (!repo) continue
       for (const [k, task] of (item.tasks as unknown[]).entries()) {
-        if (!isRecord(task) || !hasText(task, TASK_TEXT) || !hasProfile(task)) {
-          throw new Error(`${at}.tasks[${k}] is not a task`)
-        }
+        if (!isRecord(task) || !hasText(task, TASK_TEXT)) throw new Error(`${at}.tasks[${k}] is not a task`)
       }
     }
   }
