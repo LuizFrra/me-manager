@@ -47,6 +47,10 @@ let started: Orchestrator | null = null
 let quitReady = false
 /** How long quitting waits for changes still running (a task being created or removed), so none is left half done. */
 const QUIT_WAIT_MS = 15_000
+/** The usage service once started, so quitting writes its cache (see UsageService.saveCache). */
+let usageService: UsageService | null = null
+/** How long quitting waits for the usage cache to be written; past it, the next start reads a little more. */
+const CACHE_SAVE_WAIT_MS = 3_000
 let notificationWatcher: NotificationWatcher | null = null
 let budgetWatcher: BudgetWatcher | null = null
 /** The window colour for the current appearance (see followAppearance); dark until the settings are loaded. */
@@ -146,7 +150,7 @@ async function bootstrap(): Promise<void> {
     settings,
     ui: new UiStateStore(uiStateFile()),
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
-    usage: new UsageService({ cacheFile: usageCacheFile() }), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
+    usage: (usageService = new UsageService({ cacheFile: usageCacheFile() })), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
     promptFiles,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
@@ -206,16 +210,22 @@ app
 
 // Detach only: tmux sessions (and Claude) keep running after the app closes. A change still running (a task being
 // created, archived or removed) is waited for, up to QUIT_WAIT_MS, so it isn't left half done; a clone is cancelled
-// (it may take minutes), and waited for until git has stopped. Quitting again doesn't wait.
+// (it may take minutes), and waited for until git has stopped. The usage cache is written. Quitting again doesn't
+// wait.
 app.on('before-quit', (event) => {
   notificationWatcher?.stop()
   budgetWatcher?.stop()
   ptyService?.detach()
-  if (quitReady || !started?.busy()) return
+  if (quitReady || !started) return
   event.preventDefault()
   quitReady = true
   started.cancelClones()
-  void started.whenIdle(QUIT_WAIT_MS).finally(() => app.quit())
+  // The usage cache is written at most every few minutes; what was read since would be read again at the next start.
+  const cacheSaved = Promise.race([
+    usageService?.saveCache() ?? Promise.resolve(),
+    new Promise((resolve) => setTimeout(resolve, CACHE_SAVE_WAIT_MS)),
+  ])
+  void Promise.all([started.busy() ? started.whenIdle(QUIT_WAIT_MS) : undefined, cacheSaved]).finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {
