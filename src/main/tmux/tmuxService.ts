@@ -254,20 +254,29 @@ export class TmuxService implements TmuxApi {
     cwd: string,
     windowName: string,
     command: string,
-    env?: Record<string, string>,
+    env: Record<string, string> = {},
   ): Promise<void> {
-    await this.tmux([
-      'new-session',
-      '-d',
-      '-s',
-      name,
-      '-c',
-      escapeFormat(cwd),
-      '-n',
-      windowName,
-      ...envArgs(env),
-      shellCommandArg(command),
-    ])
+    try {
+      await this.tmux([
+        'new-session',
+        '-d',
+        '-s',
+        name,
+        '-c',
+        escapeFormat(cwd),
+        '-n',
+        windowName,
+        ...envArgs(env),
+        shellCommandArg(command),
+      ])
+    } catch (err) {
+      // `new-session -e` came with tmux 3.2: older ones print the command's usage (newer ones, an unknown flag).
+      const old = err instanceof CommandError && /usage: new-session|unknown flag -e/.test(err.stderr)
+      if (old && Object.keys(env).length > 0) {
+        throw new Error('Claude accounts other than Default need tmux 3.2 or newer (see tmux -V)', { cause: err })
+      }
+      throw err
+    }
   }
 
   /** Resolves when the session is gone, including when it was never there or ended on its own meanwhile. */

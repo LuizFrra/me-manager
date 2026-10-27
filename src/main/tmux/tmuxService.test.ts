@@ -585,6 +585,35 @@ describe('TmuxService timeouts', () => {
   })
 })
 
+describe('TmuxService on a tmux older than 3.2', () => {
+  const savedPath = process.env.PATH
+  let bin: string
+  beforeAll(async () => {
+    bin = await mkdtemp(join(tmpdir(), 'mm-tmux-old-'))
+    // tmux 3.0 and 3.1 know no `new-session -e`: they print the command's usage.
+    const usage = 'usage: new-session [-AdDEPX] [-c start-directory] [-F format] [-n window-name] [-s session-name]'
+    await writeFile(join(bin, 'tmux'), `#!/bin/sh\necho '${usage}' >&2\nexit 1\n`, { mode: 0o755 })
+  })
+  afterAll(async () => {
+    process.env.PATH = savedPath
+    await rm(bin, { recursive: true, force: true })
+  })
+
+  it('says a profile needs a newer tmux when a session with an environment is refused', async () => {
+    const old = new TmuxService('mm-old', join(bin, 'tmux.conf'))
+    process.env.PATH = `${bin}:${savedPath}`
+    try {
+      await expect(old.newSession('s', bin, 'claude', 'sh', { CLAUDE_CONFIG_DIR: '/p' })).rejects.toThrow(
+        'Claude accounts other than Default need tmux 3.2 or newer',
+      )
+      // Without an environment, the usage error is tmux's own.
+      await expect(old.newSession('s', bin, 'claude', 'sh')).rejects.toThrow(/usage: new-session/)
+    } finally {
+      process.env.PATH = savedPath
+    }
+  })
+})
+
 describe('TmuxService.killSession', () => {
   const savedPath = process.env.PATH
   let bin: string

@@ -15,7 +15,7 @@ does.
 | Node.js                    | **22.12 or newer** (Electron 44 and Vite need it) | build, tests                                            |
 | npm                        | comes with Node (10+)                             | install                                                 |
 | git                        | recent (2.40+)                                    | the app and its tests run real git                      |
-| tmux                       | 3.x                                               | the app's sessions; some tests start a real tmux server |
+| tmux                       | **3.2 or newer** (`new-session -e`)               | the app's sessions; some tests start a real tmux server |
 | C/C++ toolchain + Python 3 | Linux only, see below                             | `node-pty` is compiled from source on Linux             |
 | `claude` (Claude Code CLI) | any                                               | only to _use_ the app; **not** needed to build or test  |
 
