@@ -12,7 +12,7 @@ import { createLinkProvider, type LinkFiles } from '../lib/terminalLinkProvider'
 import type { TextLink } from '../lib/terminalLinks'
 import { editingKeySequence, NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
 import { SYSTEM_UNICODE } from '../lib/unicodeWidths'
-import { showsCopyModePosition } from '../lib/copyMode'
+import { copyModePosition } from '../lib/copyMode'
 import { PopupMenu, type MenuItem } from './PopupMenu'
 import { joinShellWords } from '../../../shared/shell'
 
@@ -86,8 +86,9 @@ export function TerminalView({
   const scrolledBackRef = useRef(false)
   // Input held while copy mode is left; it goes to the program once tmux is out of it.
   const pendingRef = useRef<string[] | null>(null)
-  // tmux shows its copy-mode position on the screen: the user scrolled back (see showsCopyModePosition).
-  const [inCopyMode, setInCopyMode] = useState(false)
+  // tmux shows its copy-mode position on the screen (see copyModePosition): keys would go to tmux. scrolledBack: the
+  // view is above the bottom, so "Jump to the bottom" is offered.
+  const [scrolledBack, setScrolledBack] = useState(false)
   const inCopyModeRef = useRef(false)
   const termRef = useRef<Terminal | null>(null)
   // The last mouse selection tmux copied; it reaches the clipboard only on an explicit copy.
@@ -348,9 +349,9 @@ export function TerminalView({
       frame = 0
       const buffer = term.buffer.active
       const top = buffer.getLine(buffer.viewportY)
-      const shown = !!top && showsCopyModePosition(top)
-      inCopyModeRef.current = shown
-      setInCopyMode(shown)
+      const position = top ? copyModePosition(top) : null
+      inCopyModeRef.current = position !== null
+      setScrolledBack((position?.scrolledBack ?? 0) > 0)
     }
     const parsed = term.onWriteParsed(() => {
       frame ||= requestAnimationFrame(checkCopyMode)
@@ -397,7 +398,7 @@ export function TerminalView({
     scrolledBackRef.current = false
     pendingRef.current = null
     inCopyModeRef.current = false
-    setInCopyMode(false)
+    setScrolledBack(false)
     fitRef.current?.fit()
     api.ptyResize(term.cols, term.rows)
     term.focus()
@@ -437,7 +438,7 @@ export function TerminalView({
           {notice ?? `Selected · ${COPY_KEY} to copy`}
         </div>
       )}
-      {inCopyMode && (
+      {scrolledBack && (
         <button
           className="terminal-jump"
           onClick={() => {
