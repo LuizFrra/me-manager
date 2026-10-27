@@ -36,6 +36,7 @@ import { normalizeBudget } from '../../../shared/budget'
 import {
   allProfiles,
   DEFAULT_PROFILE_ID,
+  effectiveProfileId,
   MAX_PROFILES,
   normalizeConfigDir,
   profileError,
@@ -129,6 +130,21 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     return clone(tabs)
   }
 
+  /**
+   * The account each demo Claude was started in, by targetKey, as main reports it (LiveStatus.claudeProfiles): set
+   * when a task is created or opened the first time, and when Restart Claude replaces it.
+   */
+  const claudeRuns = new Map<string, string>()
+  const startClaude = (target: Target, replace: boolean): void => {
+    const key = targetKey(target)
+    if (claudeRuns.has(key) && !replace) return
+    const theme = state.themes.find((t) => t.id === target.themeId)
+    const item = theme?.items.find((i) => i.id === target.itemId)
+    const task = item?.kind === 'repo' ? item.tasks.find((k) => k.id === target.taskId) : undefined
+    if (!theme || !item || (target.taskId && !task)) return // the demo opens anything, as it always has
+    claudeRuns.set(key, effectiveProfileId(allProfiles(settings, DEMO_CLAUDE_DIR), theme, task).id)
+  }
+
   /** Like main: an id no profile has is refused (null, for none, is fine). */
   const checkProfile = (profileId: string | null): void => {
     if (profileId !== null && !allProfiles(settings, DEMO_CLAUDE_DIR).some((p) => p.id === profileId))
@@ -170,7 +186,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
 
   const api: MeManagerApi = {
     getState: async () => state,
-    getStatus: async () => ({ running: [], missing: [], activity: {} }),
+    getStatus: async () => ({
+      running: [],
+      missing: [],
+      activity: {},
+      claudeProfiles: Object.fromEntries(claudeRuns),
+    }),
     getGitStatus: async (targets) => {
       const out: Record<string, TaskGitStatus> = {}
       for (const target of targets) {
@@ -285,8 +306,8 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         t.items = [...moveEntry(t.items, from, toIndex)]
       }),
     listBranches: async () => ({ default: 'origin/main', branches: [...DEMO_BRANCHES] }),
-    createTask: (themeId, repoId, name, options = {}) =>
-      edit(themeId, (t) => {
+    createTask: async (themeId, repoId, name, options = {}) => {
+      const next = await edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind !== 'repo') throw new Error('Repository not found')
         const baseRef = options.baseRef || 'origin/main'
@@ -303,7 +324,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
           baseRef,
           createdAt: new Date().toISOString(),
         })
-      }),
+      })
+      const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+      const task = repo?.kind === 'repo' ? repo.tasks.at(-1) : undefined
+      if (task) startClaude({ themeId, itemId: repoId, taskId: task.id }, true)
+      return next
+    },
     renameTask: (themeId, repoId, taskId, name) =>
       edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
@@ -422,13 +448,19 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind === 'repo') repo.tasks = [...moveActiveTask(repo.tasks, taskId, toIndex)]
       }),
-    openTarget: async () => clone(tabs),
+    openTarget: async (target) => {
+      startClaude(target, false)
+      return clone(tabs)
+    },
     detachTerminal: async () => {},
     listTabs: async () => clone(tabs),
     newTab: async () => clone(tabs),
     selectTab: async () => clone(tabs),
     closeTab: async () => clone(tabs),
-    restartClaude: async () => clone(tabs),
+    restartClaude: async (target, options) => {
+      startClaude(target, options?.replace === true)
+      return clone(tabs)
+    },
     leaveCopyMode: async () => false,
     startRun: async (target) => run(target, false),
     restartRun: async (target) => run(target, true),

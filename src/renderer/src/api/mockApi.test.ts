@@ -235,6 +235,23 @@ describe('createMockApi', () => {
     expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, null))).not.toHaveProperty('profileId')
   })
 
+  it('reports the account each Claude it started runs in, until Restart Claude replaces it', async () => {
+    const api = createMockApi()
+    const [, work] = await api.addProfile({ name: 'Work', configDir: '/w', billing: 'own' })
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const repo = (await api.createTask(themeId, repoId, 'fix')).themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    const target = { themeId, itemId: repoId, taskId }
+    expect((await api.getStatus()).claudeProfiles).toEqual({ [taskId]: 'default' })
+    await api.setThemeProfile(themeId, work.id)
+    await api.openTarget(target) // already running: it keeps its account
+    await api.restartClaude(target)
+    expect((await api.getStatus()).claudeProfiles).toEqual({ [taskId]: 'default' })
+    await api.restartClaude(target, { replace: true })
+    expect((await api.getStatus()).claudeProfiles).toEqual({ [taskId]: work.id })
+  })
+
   it('adds, edits, removes and logs in to Claude profiles like main', async () => {
     const api = createMockApi()
     expect(await api.listProfiles()).toEqual([
