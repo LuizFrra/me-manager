@@ -154,3 +154,40 @@ describe('FileViewer review comments', () => {
     expect(screen.queryByRole('group', { name: 'Line numbers' })).toBeNull()
   })
 })
+
+describe('FileViewer copying', () => {
+  it("copies the file's path, and a path:lines reference to the selected lines", async () => {
+    const user = userEvent.setup()
+    renderViewer({ path: 'src/app.ts', content: text('a\nb\nc\nd\n'), onComment: () => {} })
+    await user.click(screen.getByRole('button', { name: 'Copy path' }))
+    expect(await navigator.clipboard.readText()).toBe('src/app.ts')
+    expect(screen.getByRole('button', { name: 'Path copied' })).toBeInTheDocument()
+
+    const gutter = screen.getByRole('group', { name: 'Line numbers' })
+    fireEvent.click(gutter, { clientY: lineY(2) })
+    fireEvent.click(gutter, { clientY: lineY(4), shiftKey: true })
+    await user.click(screen.getByRole('button', { name: 'Copy reference' }))
+    expect(await navigator.clipboard.readText()).toBe('src/app.ts:2-4')
+    expect(screen.getByRole('button', { name: 'Reference copied' })).toBeInTheDocument()
+    // The selection stays, to comment on it too.
+    expect(status()).toHaveTextContent('Lines 2–4 selected')
+  })
+
+  it('copies removed lines of a diff by their old number', async () => {
+    const user = userEvent.setup()
+    renderViewer({ tab: 'changes', path: 'single.txt', diff: SINGLE_HUNK, onComment: () => {} })
+    fireEvent.click(screen.getByText('beta').closest('tr')!.querySelector('td')!)
+    await user.click(screen.getByRole('button', { name: 'Copy reference' }))
+    expect(await navigator.clipboard.readText()).toBe('single.txt (removed line 2)')
+  })
+
+  it('says so when the clipboard refuses', async () => {
+    const user = userEvent.setup()
+    const onError = vi.fn()
+    renderViewer({ path: 'a.ts', content: text('a\n'), onError })
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('denied'))
+    await user.click(screen.getByRole('button', { name: 'Copy path' }))
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(new Error('Could not copy to the clipboard')))
+    expect(screen.getByRole('button', { name: 'Copy path' })).toBeInTheDocument()
+  })
+})

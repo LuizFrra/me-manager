@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../../shared/types'
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { isImagePath, isSvgPath } from '../../../../shared/images'
@@ -10,7 +10,7 @@ import { ImageView } from './ImageView'
 import { MarkdownView } from './MarkdownView'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 import type { LineSelection, LineSelectProps } from '../../lib/lineSelection'
-import { selectedLinesLabel, type ReviewDraft, type SelectedLines } from '../../lib/review'
+import { reviewLocation, selectedLinesLabel, type ReviewDraft, type SelectedLines } from '../../lib/review'
 
 export interface FileViewerProps {
   api: Pick<MeManagerApi, 'readImage' | 'openExternal'>
@@ -57,6 +57,9 @@ interface ViewSelection {
   lines: SelectedLines
 }
 
+/** How long a copy button says it copied. */
+const COPIED_MS = 1500
+
 export function FileViewer(p: FileViewerProps): React.JSX.Element {
   const { api, target } = p
   const onError = useLatestCallback(p.onError)
@@ -75,6 +78,22 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     const done = (): void => setViewSel((s) => (s === current ? null : s))
     p.onComment({ path: p.path, tab: p.tab, ...current.lines }, done)
   }
+  // What was just copied, for the button to say so for a moment.
+  const [copied, setCopied] = useState<{ what: 'path' | 'lines'; key: string } | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(copiedTimer.current), [])
+  const copy = (what: 'path' | 'lines', text: string): void => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        clearTimeout(copiedTimer.current)
+        setCopied({ what, key: selKey })
+        copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS)
+      },
+      () => onError(new Error('Could not copy to the clipboard')),
+    )
+  }
+  const justCopied = (what: 'path' | 'lines'): boolean => copied?.what === what && copied.key === selKey
+
   // The body scrolls for every file: another file (or the other tab) starts at its top, not where the last one was.
   const bodyRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -179,6 +198,14 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
         <span className="viewer-path" title={path}>
           {p.change?.oldPath ? `${p.change.oldPath} → ${path}` : path}
         </span>
+        <button
+          className="panel-icon viewer-copy"
+          aria-label={justCopied('path') ? 'Path copied' : 'Copy path'}
+          title={justCopied('path') ? 'Copied' : 'Copy the path'}
+          onClick={() => copy('path', path)}
+        >
+          {justCopied('path') ? '✓' : '⧉'}
+        </button>
         {(md || svg) && (
           <div className="segmented" role="group" aria-label={md ? 'Markdown mode' : 'SVG mode'}>
             <button aria-pressed={p.mdMode === 'view'} onClick={() => p.onMdMode('view')}>
@@ -232,6 +259,14 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
         <div className="viewer-selection">
           <span className="viewer-selection-label">{label}</span>
           <span className="viewer-selection-hint">C to comment · Esc to clear</span>
+          <button
+            className="viewer-btn"
+            aria-label={justCopied('lines') ? 'Reference copied' : 'Copy reference'}
+            title="Copy where the lines are, as path:lines"
+            onClick={() => current && copy('lines', reviewLocation({ path, ...current.lines }))}
+          >
+            {justCopied('lines') ? 'Copied' : 'Copy'}
+          </button>
           <button className="viewer-btn primary" title="Comment on the selected lines (C)" onClick={comment}>
             Comment
           </button>

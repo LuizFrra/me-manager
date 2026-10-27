@@ -1989,6 +1989,9 @@ body.resizing .side-panel {
   border-color: var(--border);
   font-size: 12px;
 }
+.viewer-copy {
+  flex: 0 0 auto;
+}
 .segmented {
   display: flex;
   flex: 0 0 auto;
