@@ -768,4 +768,29 @@ describe('CommitDialog', () => {
     await user.keyboard('{Escape}')
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
+
+  it('shows why the commit failed in the dialog, keeping the message, with the full output on demand', async () => {
+    const user = userEvent.setup()
+    const output = `git commit failed: husky - pre-commit script failed (code 1) ${'eslint: no-unused-vars '.repeat(20)}`
+    const onCommit = vi.fn().mockRejectedValueOnce(new Error(output)).mockResolvedValueOnce(undefined)
+    render(
+      <CommitDialog taskName="t" branch="b" loadChanges={async () => CHANGES} onCommit={onCommit} onCancel={vi.fn()} />,
+    )
+    await screen.findByText('1 file will be committed')
+    const message = screen.getByRole('textbox', { name: 'Commit message' })
+    await user.type(message, 'Fix it')
+    await user.click(screen.getByRole('button', { name: 'Commit' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/^Could not commit husky - pre-commit script failed \(code 1\) eslint/)
+    expect(within(alert).getAllByText(/husky/)[0].textContent!.length).toBeLessThan(200)
+    expect(message).toHaveValue('Fix it')
+    expect(screen.getByRole('button', { name: 'Commit' })).toBeEnabled()
+
+    await user.click(within(alert).getByText('Full output'))
+    expect(within(alert).getByText(output.replace('git commit failed: ', '').trim())).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'Commit' })) // tried again: the error goes
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 })

@@ -2385,7 +2385,8 @@ describe('App git actions', () => {
     const dialog = within(screen.getByRole('dialog', { name: 'Commit all in fix login bug' }))
     await dialog.findByText('3 files will be committed')
     await user.type(dialog.getByRole('textbox', { name: 'Commit message' }), 'msg{Control>}{Enter}{/Control}')
-    expect(await screen.findByRole('alert')).toHaveTextContent(identity)
+    expect(await dialog.findByRole('alert')).toHaveTextContent(identity.replace('git commit failed: ', ''))
+    expect(screen.getAllByRole('alert')).toHaveLength(1) // in the dialog, not in a toast that goes away
     expect(dialog.getByRole('textbox', { name: 'Commit message' })).toHaveValue('msg')
     expect(dialog.getByRole('button', { name: 'Commit' })).toBeEnabled()
   })

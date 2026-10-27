@@ -19,7 +19,7 @@ import { expandTaskName, templateBase } from '../../../shared/templates'
 import { archiveSkipReason, type BulkAction } from '../lib/bulk'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
-import { cleanError } from '../lib/toasts'
+import { cleanError, errorSummary } from '../lib/toasts'
 import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
@@ -1209,15 +1209,33 @@ export function NewTaskDialog(props: {
 
 type ChangesLoad = { kind: 'loading' } | { kind: 'ready'; list: ChangeList } | { kind: 'failed'; error: string }
 
+/** Why a commit failed: its start on a line, and git's whole output (a hook's can be long) behind a disclosure. */
+function CommitError({ error }: { error: string }): React.JSX.Element {
+  const text = error.replace(/^git commit failed: /, '')
+  const { summary, more } = errorSummary(text)
+  return (
+    <div className="dialog-warning commit-error" role="alert">
+      <strong>Could not commit</strong> <p>{summary}</p>
+      {more && (
+        <details>
+          <summary>Full output</summary>
+          <p className="commit-error-output">{text}</p>
+        </details>
+      )}
+    </div>
+  )
+}
+
 /**
  * "Commit all": the files `git add -A` will stage (the task's uncommitted changes, loaded when the dialog opens)
- * and a required message. Mod+Enter commits, Esc cancels (not while committing). Stays open with the message when
- * committing fails.
+ * and a required message. Mod+Enter commits, Esc cancels (not while committing). When committing fails (a
+ * pre-commit hook, a missing identity) it stays open with the message and shows git's error.
  */
 export function CommitDialog(props: {
   taskName: string
   branch: string
   loadChanges: () => Promise<ChangeList>
+  /** Rejects with the reason when committing fails. */
   onCommit: (message: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
@@ -1228,6 +1246,7 @@ export function CommitDialog(props: {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const [error, setError] = useState<string | null>(null)
   const messageId = useId()
   const counterId = useId()
   const filesId = useId()
@@ -1250,8 +1269,11 @@ export function CommitDialog(props: {
     if (busyRef.current || !canCommit) return
     busyRef.current = true
     setBusy(true)
+    setError(null)
     try {
       await props.onCommit(message.trim())
+    } catch (err) {
+      setError(cleanError(err))
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -1333,6 +1355,7 @@ export function CommitDialog(props: {
             <span id={counterId}>{`${message.length} / ${MAX_COMMIT_MESSAGE}`}</span>
           </div>
         </div>
+        {error && <CommitError error={error} />}
         <div className="dialog-actions">
           <span className="dialog-actions-hint">{MOD_ENTER_LABEL} to commit</span>
           <button type="button" onClick={props.onCancel} disabled={busy}>

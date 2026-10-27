@@ -1305,6 +1305,20 @@ button:disabled {
   font-size: 12px;
   white-space: pre-wrap;
 }
+.commit-error details {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.commit-error summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.commit-error-output {
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+}
 .confirm-remove-dialog {
   width: min(480px, 92vw);
 }

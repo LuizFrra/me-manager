@@ -32,6 +32,18 @@ export function cleanError(err: unknown): string {
   return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
 }
 
+/**
+ * The start of a long error, for a line read at a glance: at most `max` characters, cut at a word, with an
+ * ellipsis. `more` when it was cut, so the full text can be offered.
+ */
+export function errorSummary(message: string, max = 160): { summary: string; more: boolean } {
+  const text = message.trim()
+  if (text.length <= max) return { summary: text, more: false }
+  const head = text.slice(0, max - 1)
+  const space = head.lastIndexOf(' ')
+  return { summary: `${(space > max / 2 ? head.slice(0, space) : head).trimEnd()}…`, more: true }
+}
+
 export function useToasts(): {
   toasts: Toast[]
   showError: (err: unknown) => void
