@@ -415,7 +415,13 @@ export class UsageService implements UsageApi {
   private interned = new Map<string, string>()
   /** Bumped whenever any file's records change. */
   private generation = 0
-  private merged: { generation: number; records: UsageRecord[] } | null = null
+  /**
+   * Every message once, across files (a resumed or forked session can repeat earlier messages), kept up to date as
+   * lines are read: merging takes the larger counts, so a line merged in again changes nothing.
+   */
+  private merged = new Map<string, UsageRecord>()
+  /** Set when a file's records were dropped (deleted, replaced, out of scope): `merged` is then rebuilt. */
+  private mergedStale = false
   private cache: { key: string; result: UsageSummaries } | null = null
   private lastScan: { at: number; dirsKey: string } | null = null
   private scanning: Promise<void> | null = null
@@ -441,21 +447,20 @@ export class UsageService implements UsageApi {
     return result
   }
 
-  /** Every message once, across files (a resumed or forked session can repeat earlier messages). */
-  private mergedRecords(): UsageRecord[] {
-    if (this.merged?.generation === this.generation) return this.merged.records
-    const byKey = new Map<string, UsageRecord>()
-    for (const [path, state] of this.files) {
-      for (const [key, record] of state.records) {
-        // Keyless lines are unique to their file and offset.
-        const k = key.startsWith('@') ? `${path}${key}` : key
-        const prev = byKey.get(k)
-        byKey.set(k, prev ? mergeRecords(prev, record) : record)
-      }
+  private mergedRecords(): Iterable<UsageRecord> {
+    if (this.mergedStale) {
+      this.mergedStale = false
+      this.merged.clear()
+      for (const [path, state] of this.files) for (const [key, record] of state.records) this.mergeIn(path, key, record)
     }
-    const records = [...byKey.values()]
-    this.merged = { generation: this.generation, records }
-    return records
+    return this.merged.values()
+  }
+
+  private mergeIn(path: string, key: string, record: UsageRecord): void {
+    // Keyless lines are unique to their file and offset.
+    const k = key.startsWith('@') ? `${path}${key}` : key
+    const prev = this.merged.get(k)
+    this.merged.set(k, prev ? mergeRecords(prev, record) : record)
   }
 
   private intern(s: string): string {
@@ -506,11 +511,12 @@ export class UsageService implements UsageApi {
       if (seen.has(path)) continue
       this.files.delete(path) // deleted, or no longer under a requested root
       this.generation++
+      this.mergedStale = true
     }
     // Concurrently: one stat at a time would make a scan of thousands of transcripts as slow as their sum.
     await mapLimit(found, STAT_CONCURRENCY, async (path) => {
       try {
-        if (await this.update(path)) this.generation++
+        await this.update(path)
       } catch {
         // Unreadable or vanished mid-scan: keep what was read before, try again next time.
       }
@@ -531,23 +537,26 @@ export class UsageService implements UsageApi {
     }
   }
 
-  /** Reads what changed in one transcript; true when its records changed. */
-  private async update(path: string): Promise<boolean> {
+  /** Reads what changed in one transcript, bumping the generation when its records changed. */
+  private async update(path: string): Promise<void> {
     const st = await stat(path)
-    let state = this.files.get(path)
-    if (state && st.ino === state.ino && st.size === state.size && st.mtimeMs === state.mtimeMs) return false
+    const known = this.files.get(path)
+    if (known && st.ino === known.ino && st.size === known.size && st.mtimeMs === known.mtimeMs) return
     const replaced =
-      !state ||
-      st.ino !== state.ino ||
-      st.size < state.offset ||
-      st.mtimeMs < state.mtimeMs ||
-      (st.size === state.size && st.mtimeMs !== state.mtimeMs) // rewritten in place
+      !known ||
+      st.ino !== known.ino ||
+      st.size < known.offset ||
+      st.mtimeMs < known.mtimeMs ||
+      (st.size === known.size && st.mtimeMs !== known.mtimeMs) // rewritten in place
+    let current = known!
     if (replaced) {
-      state = { ino: st.ino, size: 0, mtimeMs: 0, offset: 0, records: new Map() }
+      if (known) this.mergedStale = true // its old records are merged in
+      current = { ino: st.ino, size: 0, mtimeMs: 0, offset: 0, records: new Map() }
+      // Kept before reading, so that whatever a failed read merged in is accounted for.
+      this.files.set(path, current)
     }
-    const current = state!
     const session = basename(path, '.jsonl')
-    let changed = replaced && this.files.has(path)
+    let changed = replaced && known !== undefined
     const take = (line: string, lineStart: number): void => {
       const parsed = parseUsageLine(line, session)
       if (!parsed) return
@@ -560,17 +569,19 @@ export class UsageService implements UsageApi {
       const next = prev ? mergeRecords(prev, r) : r
       if (next !== prev) {
         current.records.set(key, next)
+        this.mergeIn(path, key, next)
         changed = true
       }
     }
-    const { offset, tail } = await streamLines(path, current.offset, st.size, take)
-    // An unterminated last line counts if it is already complete JSON; it is read again next time either way.
-    if (tail !== null) take(tail, offset)
-    current.offset = offset
-    current.size = st.size
-    current.mtimeMs = st.mtimeMs
-    current.ino = st.ino
-    this.files.set(path, current)
-    return changed
+    try {
+      const { offset, tail } = await streamLines(path, current.offset, st.size, take)
+      // An unterminated last line counts if it is already complete JSON; it is read again next time either way.
+      if (tail !== null) take(tail, offset)
+      current.offset = offset
+      current.size = st.size
+      current.mtimeMs = st.mtimeMs
+    } finally {
+      if (changed) this.generation++
+    }
   }
 }

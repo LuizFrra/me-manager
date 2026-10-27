@@ -191,6 +191,25 @@ describe('UsageService', () => {
     expect((await usageOf(service(), '/p/proj')).all).toMatchObject({ messages: 2, output: 101 })
   })
 
+  it('keeps a message shared by two transcripts once as either grows, and after either goes', async () => {
+    const a = await put('/p/proj', 's1.jsonl', line({ id: 'm1', req: 'r1', output: 5 }))
+    const b = await put('/p/proj', 's2.jsonl', line({ input: 1 }))
+    const svc = service()
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 2, output: 5, input: 1 })
+    // The other transcript gets a fuller copy, then the first a stale one: the fullest counts, once.
+    await appendFile(b, line({ id: 'm1', req: 'r1', output: 50, input: 2 }))
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 2, output: 50, input: 3 })
+    await appendFile(a, line({ id: 'm1', req: 'r1', output: 7 }))
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 2, output: 50, input: 3 })
+    // Without the fuller copy, the first transcript's own lines count again.
+    const { rm } = await import('node:fs/promises')
+    await rm(b)
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 1, output: 7, input: 0 })
+    // A copy rewritten smaller is read from the start, so its old numbers go too.
+    await writeFile(a, line({ id: 'm1', req: 'r1', output: 6 }))
+    expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 1, output: 6 })
+  })
+
   it('reads only the bytes appended since the last read', async () => {
     const first = line({ input: 7 })
     const file = await put('/p/proj', 's1.jsonl', first)
