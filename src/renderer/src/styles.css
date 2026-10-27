@@ -4560,3 +4560,9 @@ button.status-seg:focus-visible {
   border-color: var(--border-strong);
   outline: none;
 }
+
+.prereq-copy {
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 12px;
+}

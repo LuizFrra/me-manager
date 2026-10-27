@@ -773,12 +773,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     return reads.length > 0 ? Promise.all(reads).then(() => {}) : undefined
   }, [api])
 
-  const checkPrereqs = useCallback(() => {
-    void attempt(async () => setPrereqs(await api.checkPrereqs()))
-  }, [api, attempt])
+  const checkPrereqs = useCallback(
+    (): Promise<void> => attempt(async () => setPrereqs(await api.checkPrereqs())).then(() => undefined),
+    [api, attempt],
+  )
 
   useEffect(() => {
-    checkPrereqs()
+    void checkPrereqs()
     api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
     api.getGitTools().then(setGitTools, () => {}) // without it, "PR" says gh is missing
     void attempt(async () => setSettings(await api.getSettings()))
