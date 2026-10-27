@@ -1,6 +1,6 @@
 import type { IBufferCell, IBufferLine } from '@xterm/xterm'
 import { describe, expect, it } from 'vitest'
-import { showsCopyModePosition } from './copyMode'
+import { copyModePosition } from './copyMode'
 
 /** A row of `cols` cells; the last `highlighted` of them have a coloured background. */
 function row(text: string, cols: number, highlighted: number): IBufferLine {
@@ -15,14 +15,15 @@ function row(text: string, cols: number, highlighted: number): IBufferLine {
   } as unknown as IBufferLine
 }
 
-describe('showsCopyModePosition', () => {
+describe('copyModePosition', () => {
   it("finds tmux's highlighted [n/m] against the right edge", () => {
-    expect(showsCopyModePosition(row('output   [12/345]', 30, 8))).toBe(true)
+    expect(copyModePosition(row('output   [12/345]', 30, 8))).toEqual({ scrolledBack: 12 })
+    expect(copyModePosition(row('output [0/345]', 30, 7))).toEqual({ scrolledBack: 0 })
   })
 
   it('ignores the same text printed as ordinary output, or anything else highlighted', () => {
-    expect(showsCopyModePosition(row('progress [12/345]', 30, 0))).toBe(false)
-    expect(showsCopyModePosition(row('   a highlighted status', 30, 10))).toBe(false)
-    expect(showsCopyModePosition(row('', 30, 0))).toBe(false)
+    expect(copyModePosition(row('progress [12/345]', 30, 0))).toBeNull()
+    expect(copyModePosition(row('   a highlighted status', 30, 10))).toBeNull()
+    expect(copyModePosition(row('', 30, 0))).toBeNull()
   })
 })
