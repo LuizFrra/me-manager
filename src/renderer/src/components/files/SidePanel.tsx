@@ -248,7 +248,12 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   )
 
   const select = (nextTab: PanelTab, path: string): void =>
-    onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
+    onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [], rawPath: undefined })
+  /** How a Markdown or SVG file is shown: as its text when it was opened at lines, else as the toggle says. */
+  const modeOf = (path: string | undefined): PanelState['mdMode'] =>
+    path !== undefined && path === state.rawPath ? 'raw' : state.mdMode
+  /** `path`, opened at lines: shown as its text if it is Markdown or SVG, where lines can be shown. */
+  const rawAt = (path: string): string | undefined => (isMarkdown(path) || isSvgPath(path) ? path : undefined)
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
   // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown. A link
   // to a heading (`#usage`) opens the file there. A link to a folder (the root too) opens its README, as on GitHub.
@@ -262,9 +267,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: path,
       reveal: lines ? { path, lines: { ...lines } } : heading ? { path, heading } : undefined,
       history: state.selected
-        ? [...state.history, { path: state.selected, scrollTop, mdMode: state.mdMode }]
+        ? [...state.history, { path: state.selected, scrollTop, mdMode: modeOf(state.selected) }]
         : state.history,
-      mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
+      rawPath: lines ? rawAt(path) : undefined,
     })
   })
   // Back to the file where it was scrolled, as it was shown (a link to lines of a document showed that one raw).
@@ -279,7 +284,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: path,
       reveal: scrollTop > 0 ? { path, scrollTop } : undefined,
       history,
-      mdMode,
+      mdMode: mdMode === 'view' ? 'view' : state.mdMode,
+      rawPath: mdMode === 'raw' ? path : undefined,
     })
   })
   // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.
@@ -291,7 +297,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       selected: m.path,
       reveal: { path: m.path, lines: { start: m.line, end: m.line } },
       history: [],
-      mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
+      rawPath: rawAt(m.path),
     })
   })
   // A comment opens at its lines, where it was made: the diff, or the file (Markdown and SVG as their text).
@@ -306,7 +312,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
         ? { path: c.path, lines: { ...((c.lines ?? c.removed) as LineRange) } }
         : { path: c.path, lines: c.lines && { ...c.lines }, removed: c.removed && { ...c.removed } },
       history: [],
-      mdMode: inFiles && (isMarkdown(c.path) || isSvgPath(c.path)) ? 'raw' : state.mdMode,
+      rawPath: inFiles ? rawAt(c.path) : undefined,
     })
   }
   const tabsRef = useRef<HTMLDivElement>(null)
@@ -328,7 +334,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     tabFocusPending.current = false
     return (takeSearchFocus?.() ?? false) || own
   }, [takeSearchFocus])
-  const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void => onState({ ...state, mdMode }))
+  const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void =>
+    onState({ ...state, mdMode, rawPath: undefined }),
+  )
   const openFile = useLatestCallback((path: string): void => select('files', path))
 
   const shown = view && view.key === viewKey ? view : undefined
@@ -487,7 +495,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             change={change}
             error={shown?.error}
             deleted={shown?.error === undefined && shown?.deleted}
-            mdMode={state.mdMode}
+            mdMode={modeOf(shownPath)}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}
             reveal={state.reveal?.path === shownPath ? state.reveal : undefined}

@@ -1906,7 +1906,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         selected: path,
         history: [],
         reveal: line ? { path, lines: { start: line, end: line } } : undefined,
-        ...(line && (isMarkdown(path) || isSvgPath(path)) ? { mdMode: 'raw' as const } : {}),
+        rawPath: line && (isMarkdown(path) || isSvgPath(path)) ? path : undefined,
       }),
     [updatePanel],
   )

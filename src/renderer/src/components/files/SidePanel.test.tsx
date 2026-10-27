@@ -255,6 +255,19 @@ describe('SidePanel', () => {
     expect(screen.getByRole('button', { name: 'View' })).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('shows only the linked document as its text after a link to its lines', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'doc line link from README.md' }))
+    await vi.waitFor(() => expect(codeText()).toContain('# Guide'))
+    await user.click(screen.getByRole('button', { name: 'README.md' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'docs' }))
+    await user.click(screen.getByRole('button', { name: 'guide.md' }))
+    expect(await screen.findByText(/MD:# Guide/)).toBeInTheDocument()
+  })
+
   it('goes Back to a document where it was scrolled', async () => {
     const user = userEvent.setup()
     render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
@@ -825,6 +838,24 @@ describe('SidePanel', () => {
       expect(screen.getByRole('button', { name: /^src\/util\/format\.ts, line/ })).toHaveFocus()
       await user.keyboard('{Home}{ArrowUp}')
       expect(input).toHaveFocus()
+    })
+
+    it('opens a Markdown result as its text, and only that file: other documents still render', async () => {
+      const user = userEvent.setup()
+      const api = createMockApi({
+        searchFiles: async () => ({ matches: [match('README.md', 1, '# Demo project', 2, 4)], truncated: false }),
+      })
+      render(<Harness api={api} initial={{ tab: 'search' }} />)
+      await user.type(await screen.findByRole('textbox', { name: 'Search in files' }), 'Demo{Enter}')
+      await user.click(await screen.findByRole('button', { name: /^README\.md, line 1:/ }))
+      await vi.waitFor(() => expect(codeText()).toContain('# Demo project'))
+      expect(screen.getByRole('button', { name: 'Raw' })).toHaveAttribute('aria-pressed', 'true')
+      // Another document picked from the tree renders, and so does this one picked again.
+      await user.click(screen.getByRole('button', { name: 'docs' }))
+      await user.click(screen.getByRole('button', { name: 'guide.md' }))
+      expect(await screen.findByText(/MD:# Guide/)).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'README.md' }))
+      expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
     })
 
     it('opens a result in Files at its line', async () => {
