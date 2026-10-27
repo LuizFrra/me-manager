@@ -51,12 +51,16 @@ export function normalizeBudget(raw: unknown): number | null {
 export const isBudget = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && inLimits(value) && toCents(value) === value
 
-/** A budget as typed: dollars, optionally after "$"; empty for none. */
+/**
+ * A budget as typed: dollars, optionally after "$" and with thousands separators as formatCost shows them
+ * ("$1,500"); empty for none. A comma before the cents ("12,50") gets its own message rather than a misreading.
+ */
 export function budgetFromText(text: string): { value: number | null } | { error: string } {
   const trimmed = text.trim()
   if (trimmed === '') return { value: null }
-  const match = /^\$?((?:\d+(?:\.\d*)?|\.\d+))$/.exec(trimmed)
-  const usd = match ? toCents(Number(match[1])) : NaN
+  const match = /^\$?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)$/.exec(trimmed)
+  if (!match && /^\$?\d+,\d{1,2}$/.test(trimmed)) return { error: 'Use a dot for cents, e.g. 12.50.' }
+  const usd = match ? toCents(Number(match[1].replaceAll(',', ''))) : NaN
   return Number.isFinite(usd) && inLimits(usd) ? { value: usd } : { error: BUDGET_INPUT_ERROR }
 }
 

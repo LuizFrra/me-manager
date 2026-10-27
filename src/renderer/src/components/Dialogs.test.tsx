@@ -275,6 +275,19 @@ describe('BudgetDialog', () => {
     expect(onSave).toHaveBeenCalledWith(null)
   })
 
+  it('says to use a dot for cents, and takes an amount written as it is shown ("1,500")', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={onSave} onCancel={vi.fn()} />)
+    const input = screen.getByRole('textbox', { name: 'Budget' })
+    await user.type(input, '12,50')
+    expect(screen.getByRole('alert')).toHaveTextContent('Use a dot for cents, e.g. 12.50.')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    await user.clear(input)
+    await user.type(input, '1,500{Enter}')
+    expect(onSave).toHaveBeenCalledWith(1500)
+  })
+
   it('cancels with Escape', async () => {
     const user = userEvent.setup()
     const onCancel = vi.fn()
