@@ -62,6 +62,11 @@ The packaged builds handle this themselves:
 - **Running code:** a run command per repo in a "run" tab. Dev-server URLs it prints become clickable links.
 - **Claude usage and estimated cost:** per task and folder, with daily and per-task budgets. Warnings and
   desktop notifications at 80% and 100%.
+- **Claude accounts:** several Claude accounts, or a company gateway, side by side. Each account is a Claude
+  config folder with its own login and `settings.json`, added in Settings. A theme picks one for its tasks and
+  folders, and a task can pick its own. Log in opens a "login" tab running `claude` in that account, where you
+  run `/login`. Usage is split by account. Estimated cost and budgets count only the accounts you pay for: a
+  company-billed account shows its tokens instead.
 - **Notifications:** when Claude finishes or needs input.
 - **Navigation:** a command palette, keyboard shortcuts, drag-and-drop ordering, a collapsible sidebar, and a
   light, dark or follow-system appearance.
