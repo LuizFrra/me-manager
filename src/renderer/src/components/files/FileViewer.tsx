@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../../shared/types'
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { isImagePath, isSvgPath } from '../../../../shared/images'
@@ -75,6 +75,14 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     const done = (): void => setViewSel((s) => (s === current ? null : s))
     p.onComment({ path: p.path, tab: p.tab, ...current.lines }, done)
   }
+  // The body scrolls for every file: another file (or the other tab) starts at its top, not where the last one was.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    el.scrollTop = 0
+    el.scrollLeft = 0
+  }, [selKey])
   const select: LineSelectProps | undefined = p.onComment && {
     selection: current?.selection ?? null,
     onSelect: (selection, lines) => setViewSel(selection && lines ? { key: selKey, source, selection, lines } : null),
@@ -214,7 +222,9 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
           {label && `${label} selected`}
         </span>
       )}
-      <div className="viewer-body">{body}</div>
+      <div className="viewer-body" ref={bodyRef}>
+        {body}
+      </div>
       {label && (
         <div className="viewer-selection">
           <span className="viewer-selection-label">{label}</span>

@@ -129,3 +129,35 @@ describe('FileViewer images', () => {
     expect(readImage).not.toHaveBeenCalled()
   })
 })
+
+describe('FileViewer scrolling', () => {
+  const text = (content: string): FileContent => ({ kind: 'text', content, size: content.length, truncated: false })
+  const props = (over: Partial<FileViewerProps>): FileViewerProps => ({
+    api: { readImage: async () => null, openExternal: async () => {} },
+    target: TARGET,
+    tab: 'files',
+    mdMode: 'view',
+    canGoBack: false,
+    onBack: () => {},
+    onMdMode: () => {},
+    onOpenLink: () => {},
+    onOpenFile: () => {},
+    onError: () => {},
+    ...over,
+  })
+
+  it('opens another file at its top, but keeps the place when the same file is read again', () => {
+    const { container, rerender } = render(<FileViewer {...props({ path: 'a.ts', content: text('a\n') })} />)
+    const body = container.querySelector('.viewer-body') as HTMLElement
+    body.scrollTop = 500
+    body.scrollLeft = 40
+    rerender(<FileViewer {...props({ path: 'a.ts', content: text('a changed\n') })} />)
+    expect(body.scrollTop).toBe(500)
+    rerender(<FileViewer {...props({ path: 'b.ts', content: undefined })} />)
+    expect(body.scrollTop).toBe(0)
+    expect(body.scrollLeft).toBe(0)
+    body.scrollTop = 300
+    rerender(<FileViewer {...props({ tab: 'changes', path: 'b.ts', diff: '' })} />)
+    expect(body.scrollTop).toBe(0)
+  })
+})
