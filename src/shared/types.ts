@@ -18,6 +18,11 @@ export interface Task {
    * shared/budget.ts), in place of Settings.taskBudgetUsd. Absent when it has none, and in state files from before.
    */
   budgetUsd?: number
+  /**
+   * The Claude profile (ClaudeProfile.id) the task's sessions start in, in place of its theme's; absent to use the
+   * theme's. See shared/profiles.ts for the rule.
+   */
+  profileId?: string
 }
 
 /** An archived task has no worktree and no session: nothing may poll, open or attach to it until it is restored. */
@@ -145,6 +150,8 @@ export interface Theme extends ThemeStyle {
   name: string
   slug: string
   items: Item[]
+  /** The Claude profile (ClaudeProfile.id) its tasks' and folders' sessions start in; absent for Default. */
+  profileId?: string
 }
 
 export interface AppState {
@@ -278,6 +285,27 @@ export interface Settings {
   taskBudgetUsd: number | null
   /** Light or dark colours; `system` follows the OS, live. */
   appearance: Appearance
+  /**
+   * The Claude profiles the user added, at most MAX_PROFILES, each with its own id and folder. The Default profile
+   * is not stored here: it always exists (see shared/profiles.ts).
+   */
+  profiles: ClaudeProfile[]
+  /** Who pays for the Default profile's usage. */
+  defaultProfileBilling: ProfileBilling
+}
+
+/** Who pays for a profile's usage: estimated cost and budgets count `own` profiles only. */
+export type ProfileBilling = 'own' | 'company'
+
+export const PROFILE_BILLINGS: readonly ProfileBilling[] = ['own', 'company']
+
+/** A Claude config folder (CLAUDE_CONFIG_DIR): its own login and settings.json. */
+export interface ClaudeProfile {
+  id: string
+  name: string
+  /** Absolute, normalized (see normalizeConfigDir). */
+  configDir: string
+  billing: ProfileBilling
 }
 
 /**

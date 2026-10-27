@@ -39,8 +39,11 @@ export interface SettingsForm {
   appearance: Appearance
 }
 
-/** What the Settings dialog edits: everything but what the app remembers by itself (the last clone folder). */
-export type EditableSettings = Omit<Settings, 'cloneDirectory'>
+/**
+ * What the Settings dialog's fields edit: everything but what the app remembers by itself (the last clone folder)
+ * and the Claude profiles, which have their own section.
+ */
+export type EditableSettings = Omit<Settings, 'cloneDirectory' | 'profiles' | 'defaultProfileBilling'>
 
 export type SettingsFormErrors = Partial<Record<Exclude<keyof SettingsForm, 'taskTemplates'>, string>> & {
   /** Each template's errors, in order ({} for a valid one); absent when every template is valid. */

@@ -105,8 +105,15 @@ describe('settings form', () => {
         appearance: 'dark',
       },
     })
-    // toEqual skips the undefined cloneDirectory: the dialog never edits it.
-    expect(parseForm(form())).toEqual({ settings: { ...DEFAULT_SETTINGS, cloneDirectory: undefined } })
+    // toEqual skips the undefined keys: the dialog's fields never edit the clone folder or the profiles.
+    expect(parseForm(form())).toEqual({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        cloneDirectory: undefined,
+        profiles: undefined,
+        defaultProfileBilling: undefined,
+      },
+    })
   })
 
   it('parses the budgets in dollars, empty as none', () => {
