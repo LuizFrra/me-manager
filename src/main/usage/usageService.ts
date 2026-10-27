@@ -1,4 +1,4 @@
-import { statSync, type Dirent, type Stats } from 'node:fs'
+import { readdirSync, statSync, type Dirent, type Stats } from 'node:fs'
 import { open, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
@@ -23,8 +23,12 @@ const DEFAULT_MIN_REFRESH_MS = 1_000
  * several times the CPU of the stat itself, and every scan checks every transcript.
  */
 export const STAT_SLICE = 128
+/** Folders listed by a scan before it lets other work run, synchronously too (see STAT_SLICE). */
+export const DIR_SLICE = 32
 /** Changed transcripts read at the same time by a scan. */
 export const READ_CONCURRENCY = 16
+/** Lets the event loop run (IPC, the terminal's output) between slices of synchronous file system calls. */
+const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 /** Claude Code shortens project folder names longer than this and appends a hash. */
 const MAX_ENCODED_LENGTH = 200
 
@@ -534,8 +538,7 @@ export class UsageService implements UsageApi {
     const dirs = entries
       .filter((e) => e.isDirectory() && encodedRoots.some((r) => projectDirMatches(e.name, r)))
       .map((e) => join(this.projectsDir, e.name))
-    const found: string[] = []
-    for (const dir of dirs) await this.collect(dir, 0, found)
+    const found = await this.collect(dirs)
     if (found.length > MAX_TRACKED_FILES) {
       if (!this.warnedCap) console.warn(`usage: tracking only ${MAX_TRACKED_FILES} of ${found.length} transcripts`)
       this.warnedCap = true
@@ -550,7 +553,7 @@ export class UsageService implements UsageApi {
     }
     const changed: { path: string; st: Stats }[] = []
     for (let i = 0; i < found.length; i += STAT_SLICE) {
-      if (i > 0) await new Promise((resolve) => setImmediate(resolve))
+      if (i > 0) await turn()
       for (const path of found.slice(i, i + STAT_SLICE)) {
         let st: Stats | undefined
         try {
@@ -573,18 +576,31 @@ export class UsageService implements UsageApi {
     })
   }
 
-  private async collect(dir: string, depth: number, out: string[]): Promise<void> {
-    let entries: Dirent[]
-    try {
-      entries = await readdir(dir, { withFileTypes: true })
-    } catch {
-      return
+  /** The transcripts in `dirs` and their subfolders, level by level (each session's subagents have a folder). */
+  private async collect(dirs: string[]): Promise<string[]> {
+    const out: string[] = []
+    let level = dirs
+    for (let depth = 0; level.length > 0; depth++) {
+      const next: string[] = []
+      for (let i = 0; i < level.length; i += DIR_SLICE) {
+        if (i > 0 || depth > 0) await turn()
+        for (const dir of level.slice(i, i + DIR_SLICE)) {
+          let entries: Dirent[]
+          try {
+            entries = readdirSync(dir, { withFileTypes: true })
+          } catch {
+            continue
+          }
+          for (const e of entries) {
+            const path = join(dir, e.name)
+            if (e.isFile() && e.name.endsWith('.jsonl')) out.push(path)
+            else if (e.isDirectory() && depth < MAX_SCAN_DEPTH) next.push(path)
+          }
+        }
+      }
+      level = next
     }
-    for (const e of entries) {
-      const path = join(dir, e.name)
-      if (e.isFile() && e.name.endsWith('.jsonl')) out.push(path)
-      else if (e.isDirectory() && depth < MAX_SCAN_DEPTH) await this.collect(path, depth + 1, out)
-    }
+    return out
   }
 
   /** Reads what changed in one transcript (`st` is its stat), bumping the generation when its records changed. */

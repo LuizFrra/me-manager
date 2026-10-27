@@ -17,22 +17,49 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }) as typeof real.open
   return { ...real, open, default: { ...real, open } }
 })
-// Wraps the real statSync so tests can see when each stat ran, as counted by `ticks` (see below).
-const statLog = vi.hoisted(() => ({ ticks: 0, calls: [] as number[] }))
+// Wraps the real statSync and readdirSync so tests can see when each ran, as counted by `ticks` (see below).
+const statLog = vi.hoisted(() => ({ ticks: 0, calls: [] as number[], dirs: [] as number[] }))
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
   const statSync = ((...args: Parameters<typeof real.statSync>) => {
     statLog.calls.push(statLog.ticks)
     return real.statSync(...args)
   }) as typeof real.statSync
-  return { ...real, statSync, default: { ...real, statSync } }
+  const readdirSync = ((...args: Parameters<typeof real.readdirSync>) => {
+    statLog.dirs.push(statLog.ticks)
+    return real.readdirSync(...args)
+  }) as typeof real.readdirSync
+  return { ...real, statSync, readdirSync, default: { ...real, statSync, readdirSync } }
 })
+
+/** Counts turns of the event loop in statLog.ticks while `fn` runs. */
+async function ticking<T>(fn: () => Promise<T>): Promise<T> {
+  let on = true
+  const tick = (): void => {
+    statLog.ticks++
+    if (on) setImmediate(tick)
+  }
+  setImmediate(tick)
+  try {
+    return await fn()
+  } finally {
+    on = false
+  }
+}
+
+/** The largest number of calls in `log` made without a turn of the event loop in between. */
+const largestRun = (log: number[]): number => {
+  const runs = new Map<number, number>()
+  for (const t of log) runs.set(t, (runs.get(t) ?? 0) + 1)
+  return Math.max(0, ...runs.values())
+}
 
 import {
   claudeConfigDir,
   encodeProjectPath,
   parseUsageLine,
   projectDirMatches,
+  DIR_SLICE,
   READ_CONCURRENCY,
   STAT_SLICE,
   streamLines,
@@ -457,24 +484,22 @@ describe('UsageService', () => {
     for (let i = 0; i < count; i++) await put('/p/proj', `s${i}.jsonl`, line({ input: 1 }))
     const svc = service()
     await usageOf(svc, '/p/proj')
-    // Counts turns of the event loop while the next scan runs: stats in one slice see the same count.
-    let ticking = true
-    const tick = (): void => {
-      statLog.ticks++
-      if (ticking) setImmediate(tick)
-    }
-    setImmediate(tick)
     statLog.calls = []
-    try {
-      expect((await usageOf(svc, '/p/proj')).all.messages).toBe(count)
-    } finally {
-      ticking = false
-    }
+    expect((await ticking(() => usageOf(svc, '/p/proj'))).all.messages).toBe(count)
     expect(statLog.calls).toHaveLength(count)
-    const slices = new Map<number, number>()
-    for (const t of statLog.calls) slices.set(t, (slices.get(t) ?? 0) + 1)
-    expect(Math.max(...slices.values())).toBeLessThanOrEqual(STAT_SLICE)
-    expect(slices.size).toBeGreaterThanOrEqual(3)
+    expect(largestRun(statLog.calls)).toBeLessThanOrEqual(STAT_SLICE)
+    expect(new Set(statLog.calls).size).toBeGreaterThanOrEqual(3)
+  })
+
+  it(`lists the folders at most ${DIR_SLICE} at a time between turns of the event loop`, async () => {
+    const count = DIR_SLICE + 5
+    for (let i = 0; i < count; i++) await put('/p/proj', `s${i}/subagents/agent-a.jsonl`, line({ input: 1 }))
+    const svc = service()
+    await usageOf(svc, '/p/proj')
+    statLog.dirs = []
+    expect((await ticking(() => usageOf(svc, '/p/proj'))).all.messages).toBe(count)
+    expect(statLog.dirs).toHaveLength(1 + count * 2) // the project folder, each session's and its subagents'
+    expect(largestRun(statLog.dirs)).toBeLessThanOrEqual(DIR_SLICE)
   })
 
   it('reuses the cached result while nothing changed', async () => {
