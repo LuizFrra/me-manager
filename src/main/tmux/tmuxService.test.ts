@@ -114,6 +114,23 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await expect(svc.listWindows('mmt_a_b_c')).resolves.toHaveLength(1)
   })
 
+  it('selects and kills windows by index only: never a window whose name starts with it, nor a bad index', async () => {
+    await svc.newSession('mmt_idx', cwd, 'claude', 'sh')
+    await svc.newWindow('mmt_idx', cwd, '7x') // index 1
+    await svc.selectWindow('mmt_idx', 0)
+    await expect(svc.killWindow('mmt_idx', 7)).rejects.toThrow(/No tab 7/)
+    await expect(svc.selectWindow('mmt_idx', 7)).rejects.toThrow(/No tab 7/)
+    for (const bad of [-1, 1.5, NaN, '1' as unknown as number, '0;kill-server' as unknown as number]) {
+      await expect(svc.selectWindow('mmt_idx', bad)).rejects.toThrow('Invalid tab')
+      await expect(svc.killWindow('mmt_idx', bad)).rejects.toThrow('Invalid tab')
+    }
+    expect((await svc.listWindows('mmt_idx')).map((t) => [t.name, t.active])).toEqual([
+      ['claude', true],
+      ['7x', false],
+    ])
+    await svc.killSession('mmt_idx')
+  })
+
   it('builds an attach command on our socket', () => {
     const { file, args } = svc.attachCommand('mmt_a_b_c')
     expect(file).toBe('tmux')
