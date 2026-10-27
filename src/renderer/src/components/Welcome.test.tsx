@@ -35,6 +35,17 @@ describe('Home recent tasks', () => {
   })
 })
 
+describe('Home recent tasks, for screen readers', () => {
+  it("says each task's session state, which the dot alone shows", () => {
+    const state = appState(theme('Client', [repo('api', [task('fix'), task('docs'), task('ship')])]))
+    renderHome(state, { running: ['fix', 'docs'], missing: [], activity: { fix: 'waiting', docs: 'busy' } })
+    const recent = within(screen.getByRole('list'))
+    expect(recent.getByRole('button', { name: 'Open fix (Client › api), waiting for you' })).toBeInTheDocument()
+    expect(recent.getByRole('button', { name: 'Open docs (Client › api), working' })).toBeInTheDocument()
+    expect(recent.getByRole('button', { name: 'Open ship (Client › api)' })).toBeInTheDocument()
+  })
+})
+
 describe('Home tip', () => {
   afterEach(() => {
     vi.useRealTimers()

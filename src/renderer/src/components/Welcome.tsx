@@ -319,14 +319,16 @@ export function Home(
                 const session = sessionState(p.status, task.id)
                 const dot =
                   session === 'none' || session === 'missing' || session === 'running' ? session : `running ${session}`
+                // The dot's colour is all that tells "waiting" from "idle": say it.
+                const state = session === 'none' ? '' : `, ${SESSION_STATE_INFO[session].label.toLowerCase()}`
                 return (
                   <li key={task.id}>
                     <button
                       className="home-recent-task"
-                      aria-label={`Open ${task.name} (${theme.name} › ${repoName})`}
+                      aria-label={`Open ${task.name} (${theme.name} › ${repoName})${state}`}
                       onClick={() => p.onOpen(target)}
                     >
-                      <span className={`dot ${dot}`} aria-hidden="true">
+                      <span className={`dot ${dot}`} aria-hidden="true" title={SESSION_STATE_INFO[session].title}>
                         {SESSION_STATE_INFO[session].glyph}
                       </span>
                       <span className="home-recent-name" title={task.name}>
