@@ -49,6 +49,7 @@ import {
   NameDialog,
   NewTaskDialog,
   NotesDialog,
+  ProfileDialog,
   RemoveTaskDialog,
   ReviewCommentDialog,
   RunCommandDialog,
@@ -63,6 +64,7 @@ import { withStableCallbacks } from './lib/stableCallbacks'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { cleanError, useToasts } from './lib/toasts'
+import { targetProfile } from './lib/profiles'
 import { formatCost } from './lib/usageFormat'
 import { GIT_ACTION_BUSY, type GitActionKind } from './lib/gitActions'
 import { archiveSkipReason, bulkSummary, runLimited, type BulkAction, type BulkOutcome, type Settled } from './lib/bulk'
@@ -158,6 +160,19 @@ type DialogBody =
     }
   /** A task's own budget; `initial` is null when it has none. */
   | { kind: 'budget'; target: Target; taskName: string; initial: number | null }
+  /**
+   * The Claude account of a theme, or of a task (with `itemId` and `taskId`, and `inherit` naming its theme's);
+   * `initial` is the profile id set now, null for none.
+   */
+  | {
+      kind: 'profile'
+      themeId: string
+      itemId?: string
+      taskId?: string
+      name: string
+      inherit?: string
+      initial: string | null
+    }
   | { kind: 'chooseTheme'; title: string; onChoose: (themeId: string) => void }
   | {
       kind: 'confirmRemove'
@@ -502,7 +517,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   // The Claude profiles (Default first), with their login state when last read; [] until main answers.
-  const [, setProfiles] = useState<ProfileStatus[]>([])
+  const [profiles, setProfiles] = useState<ProfileStatus[]>([])
+  // Accounts to choose from: only then do themes and tasks offer "Claude account…" and name theirs.
+  const multipleProfiles = profiles.length > 1
   // 'system' until main answers, which already matches: prefers-color-scheme follows main's nativeTheme.themeSource.
   const appearance = useDocumentAppearance(settings.appearance)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
@@ -1107,6 +1124,38 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         ? `Removed the budget of ${dialog.taskName}`
         : `Set the budget of ${dialog.taskName} to ${formatCost(budgetUsd)}`,
     )
+  }
+
+  /**
+   * "Claude account…" of a theme, or of a task with `itemId` and `taskId`. The profiles are read again meanwhile, as
+   * their login state may have changed since.
+   */
+  const chooseProfile = (target: { themeId: string; itemId?: string; taskId?: string }): void => {
+    const theme = state.themes.find((t) => t.id === target.themeId)
+    const task = target.itemId && target.taskId ? resolveTarget(state, target as Target)?.task : undefined
+    if (!theme || (target.taskId && (!task || isArchived(task)))) return
+    api.listProfiles().then(setProfiles, () => {}) // the dialog shows what is known meanwhile
+    const inherited = targetProfile(state, profiles, { themeId: theme.id })
+    openDialog({
+      kind: 'profile',
+      ...target,
+      name: task?.name ?? theme.name,
+      ...(task ? { inherit: `Use the theme’s (${inherited?.name ?? 'Default'})` } : {}),
+      initial: (task ? task.profileId : theme.profileId) ?? null,
+    })
+  }
+
+  const saveProfile = async (dialog: Extract<Dialog, { kind: 'profile' }>, profileId: string | null): Promise<void> => {
+    const { themeId, itemId, taskId } = dialog
+    const next = await update(() =>
+      itemId && taskId
+        ? api.setTaskProfile(themeId, itemId, taskId, profileId)
+        : api.setThemeProfile(themeId, profileId),
+    )
+    if (!next) return
+    closeDialog(dialog.id)
+    const now = targetProfile(next, profiles, { themeId, itemId, taskId })
+    if (now) showInfo(`${dialog.name} uses the Claude account ${now.name}`)
   }
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
@@ -2164,6 +2213,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onNewTask={goHome}
         onRenameTheme={renameTheme}
         onCustomizeTheme={customizeTheme}
+        onChooseProfile={multipleProfiles ? (themeId) => chooseProfile({ themeId }) : undefined}
         onRemoveTheme={removeTheme}
         onAddRepo={(themeId) => void addPath(themeId, api.addRepo)}
         onCloneRepo={cloneRepo}
@@ -2210,6 +2260,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               notes={selectedTask?.notes}
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
               onEditBudget={selectedTask ? editTaskBudget : undefined}
+              onChooseProfile={selectedTask && multipleProfiles ? () => chooseProfile(selected) : undefined}
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
@@ -2469,6 +2520,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           defaultBudget={settings.taskBudgetUsd}
           onSave={(budgetUsd) => saveTaskBudget(dialog, budgetUsd)}
           onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'profile' && (
+        <ProfileDialog
+          title={`Claude account for ${dialog.name}`}
+          profiles={profiles}
+          inherit={dialog.inherit}
+          initial={dialog.initial}
+          onSave={(profileId) => saveProfile(dialog, profileId)}
+          onCancel={() => closeDialog(dialog.id)}
+          onManage={openSettings}
         />
       )}
       {dialog?.kind === 'confirmRemove' && (

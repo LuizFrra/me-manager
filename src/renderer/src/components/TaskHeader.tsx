@@ -16,6 +16,7 @@ import {
   Square,
   SquareTerminal,
   StickyNote,
+  UserRound,
 } from 'lucide-react'
 import type { BudgetStatus, DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
@@ -261,6 +262,8 @@ export function TaskHeader(props: {
   onEditNotes?: () => void
   /** Set for tasks: "Set budget…" in the More actions menu, which opens the task's budget dialog. */
   onEditBudget?: () => void
+  /** Set for tasks while there are accounts to choose from: "Claude account…" in the More actions menu. */
+  onChooseProfile?: () => void
   /** Copy buttons (branch, path, attach command). */
   copies: CopyEntry[]
   onCopy: (entry: CopyEntry) => void
@@ -369,6 +372,9 @@ export function TaskHeader(props: {
                   : []),
                 ...(props.onEditBudget
                   ? [{ label: 'Set budget…', icon: <CircleDollarSign {...ICON} />, run: props.onEditBudget }]
+                  : []),
+                ...(props.onChooseProfile
+                  ? [{ label: 'Claude account…', icon: <UserRound {...ICON} />, run: props.onChooseProfile }]
                   : []),
               ]}
             />

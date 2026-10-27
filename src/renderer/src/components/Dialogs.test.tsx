@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { BranchList, TaskTemplate } from '../../../shared/types'
+import type { BranchList, ProfileStatus, TaskTemplate } from '../../../shared/types'
 import {
   ArchiveTaskDialog,
   BudgetDialog,
@@ -15,6 +15,7 @@ import {
   NameDialog,
   NewTaskDialog,
   NotesDialog,
+  ProfileDialog,
   RemoveTaskDialog,
   ReviewCommentDialog,
   RunCommandDialog,
@@ -1099,5 +1100,85 @@ describe('NewTaskDialog while creating', () => {
     done()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled())
     expect(screen.getByRole('textbox', { name: /Initial prompt/ })).toHaveValue('Do the thing')
+  })
+})
+
+describe('ProfileDialog', () => {
+  const profiles: ProfileStatus[] = [
+    { id: 'default', name: 'Default', configDir: '/h/.claude', billing: 'own', isDefault: true, login: 'signedIn' },
+    {
+      id: 'p-work',
+      name: 'Work',
+      configDir: '/h/.claude-work',
+      billing: 'company',
+      isDefault: false,
+      login: 'notSignedIn',
+    },
+  ]
+
+  it("for a task, offers the theme's account first and saves the one chosen", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(
+      <ProfileDialog
+        title="Claude account for fix-login"
+        profiles={profiles}
+        inherit="Use the theme’s (Work)"
+        initial={null}
+        onSave={onSave}
+        onCancel={vi.fn()}
+      />,
+    )
+    const radios = screen.getAllByRole('radio')
+    expect(radios.map((r) => r.closest('label')?.textContent)).toEqual([
+      'Use the theme’s (Work)',
+      expect.stringContaining('Default'),
+      expect.stringContaining('Work'),
+    ])
+    expect(radios[0]).toBeChecked()
+    expect(radios[0]).toHaveFocus()
+    expect(radios[2].closest('label')).toHaveTextContent('Not signed in')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled() // unchanged
+    await user.click(screen.getByRole('radio', { name: /^Default/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith('default')
+  })
+
+  it('for a theme, gives Default as none, and Esc cancels', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    const onCancel = vi.fn()
+    render(
+      <ProfileDialog
+        title="Claude account for Acme"
+        profiles={profiles}
+        initial="p-work"
+        onSave={onSave}
+        onCancel={onCancel}
+      />,
+    )
+    expect(screen.getByRole('radio', { name: /^Work/ })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /^Default/ }))
+    await user.keyboard('{Enter}')
+    expect(onSave).toHaveBeenCalledWith(null)
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalled()
+  })
+
+  it('says where accounts are added', async () => {
+    const user = userEvent.setup()
+    const onManage = vi.fn()
+    render(
+      <ProfileDialog
+        title="Claude account for Acme"
+        profiles={profiles.slice(0, 1)}
+        initial={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        onManage={onManage}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Manage accounts in Settings' }))
+    expect(onManage).toHaveBeenCalled()
   })
 })

@@ -4680,3 +4680,44 @@ describe('App bulk actions', () => {
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
   })
 })
+
+describe('App Claude accounts', () => {
+  /** repoApi with a Work account besides Default. */
+  const withWork = async (extra: Partial<MeManagerApi> = {}): Promise<{ api: MeManagerApi; workId: string }> => {
+    const api = repoApi(extra)
+    const [, work] = await api.addProfile({ name: 'Work', configDir: '/home/demo/.claude-work', billing: 'own' })
+    return { api, workId: work.id }
+  }
+  const taskOf = async (api: MeManagerApi): Promise<{ profileId?: string }> => {
+    const repo = (await api.getState()).themes[0].items[0]
+    return repo.kind === 'repo' ? repo.tasks[0] : {}
+  }
+
+  it("chooses a theme's account, and a task's own over it", async () => {
+    const user = userEvent.setup()
+    const { api, workId } = await withWork()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
+    expect(screen.getByRole('radio', { name: /^Default/ })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /^Work/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Client X uses the Claude account Work')).toBeInTheDocument()
+    expect((await api.getState()).themes[0].profileId).toBe(workId)
+
+    await headerAction(user, 'Claude account…')
+    expect(screen.getByRole('radio', { name: 'Use the theme’s (Work)' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /^Default/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('fix login bug uses the Claude account Default')).toBeInTheDocument()
+    expect((await taskOf(api)).profileId).toBe('default')
+  })
+
+  it('offers no choice of account while Default is the only one', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    expect(screen.queryByRole('button', { name: 'Claude account for Client X' })).not.toBeInTheDocument()
+    expect(await headerActions(user)).not.toContain('Claude account…')
+  })
+})

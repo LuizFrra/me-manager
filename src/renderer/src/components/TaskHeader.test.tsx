@@ -264,3 +264,19 @@ describe('TaskHeader budget', () => {
     expect(screen.queryByRole('menuitem', { name: 'Set budget…' })).not.toBeInTheDocument()
   })
 })
+
+describe('TaskHeader Claude account', () => {
+  it('chooses the account from the More actions menu, when there are accounts', async () => {
+    const user = userEvent.setup()
+    const onChooseProfile = vi.fn()
+    const { unmount } = render(<TaskHeader {...base} onChooseProfile={onChooseProfile} />)
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Claude account…' }))
+    expect(onChooseProfile).toHaveBeenCalledTimes(1)
+    unmount()
+
+    render(<TaskHeader {...base} />)
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    expect(screen.queryByRole('menuitem', { name: 'Claude account…' })).not.toBeInTheDocument()
+  })
+})

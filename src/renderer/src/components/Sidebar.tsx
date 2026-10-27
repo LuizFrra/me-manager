@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Settings,
   Settings2,
+  UserRound,
   X,
 } from 'lucide-react'
 import { budgetSummary } from '../../../shared/budget'
@@ -79,6 +80,8 @@ export interface SidebarProps {
   onRenameTheme: (themeId: string, currentName: string) => void
   /** Opens "Customize theme…" (colour and icon). */
   onCustomizeTheme: (themeId: string) => void
+  /** Opens the theme's "Claude account…" choice. Without it (no accounts to choose from), no button. */
+  onChooseProfile?: (themeId: string) => void
   onRemoveTheme: (themeId: string) => void
   onAddRepo: (themeId: string) => void
   onCloneRepo: (themeId: string) => void
@@ -682,6 +685,15 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                   >
                     <Palette {...ICON} />
                   </button>
+                  {p.onChooseProfile && (
+                    <button
+                      aria-label={`Claude account for ${theme.name}`}
+                      title="Claude account…"
+                      onClick={() => p.onChooseProfile?.(theme.id)}
+                    >
+                      <UserRound {...ICON} />
+                    </button>
+                  )}
                   <button
                     aria-label={`Rename theme ${theme.name}`}
                     title="Rename theme"

@@ -441,6 +441,15 @@ describe('Sidebar theme style', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Customize theme Client' }))
     expect(onCustomizeTheme).toHaveBeenCalledWith('Client')
   })
+
+  it('chooses the Claude account from the row, only when there are accounts to choose from', async () => {
+    const onChooseProfile = vi.fn()
+    const { rerender } = renderSidebar()
+    expect(screen.queryByRole('button', { name: 'Claude account for Client' })).not.toBeInTheDocument()
+    rerender(<Sidebar {...sidebarProps({ onChooseProfile })} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Claude account for Client' }))
+    expect(onChooseProfile).toHaveBeenCalledWith('Client')
+  })
 })
 
 describe('Sidebar archived tasks', () => {
