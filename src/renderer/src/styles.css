@@ -4450,13 +4450,14 @@ button.status-seg:focus-visible {
 .dev-url:focus-visible {
   text-decoration: underline;
 }
-/* Links that don't fit wrap to a second line, out of sight, rather than show cut. */
+/* Links that don't fit wrap to a second line, out of sight, rather than show cut (and StatusBar makes them inert).
+   Clipped, not hidden: an overflow: hidden box still scrolls to whatever gets focused in it, and stays scrolled. */
 .status-urls {
   flex: 0 10000 auto;
   flex-wrap: wrap;
   align-content: flex-start;
   gap: 0 8px;
-  overflow: hidden;
+  overflow: clip;
   font-size: 11px;
   line-height: 26px;
 }

@@ -275,6 +275,39 @@ describe('Sidebar keyboard navigation', () => {
     expect(labelOf('Archived')).toHaveFocus()
   })
 
+  it('gives the focus to the row that takes the place of one removed or archived from its own buttons', () => {
+    const props = sidebarProps({ state: navState })
+    const { rerender } = render(<Sidebar {...props} />)
+    const withTasks = (...tasks: ReturnType<typeof task>[]): SidebarProps['state'] =>
+      appState(theme('Client', [repo('api', [...tasks, archived]), folder('notes')]))
+    act(() => screen.getByRole('button', { name: 'Remove task fix' }).focus())
+    rerender(<Sidebar {...props} state={withTasks(task('docs'))} />)
+    expect(labelOf('docs')).toHaveFocus()
+
+    // Archived after a dialog that had the focus: the row goes into the collapsed Archived group.
+    act(() => screen.getByRole('button', { name: 'Archive task docs' }).focus())
+    const dialog = document.createElement('div')
+    dialog.setAttribute('aria-modal', 'true')
+    dialog.append(document.createElement('button'))
+    document.body.append(dialog)
+    act(() => (dialog.firstChild as HTMLElement).focus())
+    dialog.remove()
+    rerender(<Sidebar {...props} state={withTasks({ ...task('docs'), archivedAt: '2026-02-02T10:00:00.000Z' })} />)
+    expect(labelOf('Archived')).toHaveFocus()
+
+    // Focus that went elsewhere stays there.
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    try {
+      act(() => screen.getByRole('button', { name: 'Remove notes' }).focus())
+      act(() => outside.focus())
+      rerender(<Sidebar {...props} state={appState(theme('Client', [repo('api', [archived])]))} />)
+      expect(outside).toHaveFocus()
+    } finally {
+      outside.remove()
+    }
+  })
+
   it("leaves the filter's ↓ and Esc to an input method while it composes", () => {
     const onFilterChange = vi.fn()
     const onMultiSelect = vi.fn()

@@ -27,6 +27,30 @@ export function recentTasks(state: AppState, limit = 5): RecentTask[] {
   return all.sort((a, b) => time(b.task) - time(a.task)).slice(0, limit)
 }
 
+const TIP_KEY = 'me-manager.homeTip'
+/** The tip shown last in this run: what Home goes on from where storage is unavailable. */
+let sessionTip = -1
+
+/** The index of the tip Home showed last, kept across restarts; -1 before any. */
+export function loadLastTip(): number {
+  try {
+    const raw = localStorage.getItem(TIP_KEY)
+    const value = raw === null ? NaN : Number(raw)
+    return Number.isInteger(value) && value >= 0 ? value : -1
+  } catch {
+    return sessionTip
+  }
+}
+
+export function saveLastTip(index: number): void {
+  sessionTip = index
+  try {
+    localStorage.setItem(TIP_KEY, String(index))
+  } catch {
+    // storage may be unavailable; the tip is remembered for this run only
+  }
+}
+
 /** One-line tips for the home screen, with this platform's key labels (Ctrl+Shift+…, Alt+… or ⌘⇧…). */
 export function homeTips(mac?: boolean): string[] {
   const key = (id: Parameters<typeof shortcutLabel>[0]): string => shortcutLabel(id, mac)

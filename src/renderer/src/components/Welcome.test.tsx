@@ -108,6 +108,32 @@ describe('Home tip', () => {
     expect(tipText()).toHaveTextContent(tip(2))
   })
 
+  it('goes on after the tip shown last, even from an earlier run of the app', async () => {
+    const data = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => void data.set(k, String(v)),
+    })
+    try {
+      data.set('me-manager.homeTip', '3')
+      renderHome(appState(theme('Client', [])))
+      expect(tipText()).toHaveTextContent(tips[4])
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Next tip' }))
+      expect(data.get('me-manager.homeTip')).toBe('5')
+      cleanup()
+      // A stored value from elsewhere, or none at all, starts with the first tip.
+      for (const stored of ['nonsense', '-4', '1.5', undefined]) {
+        if (stored === undefined) data.clear()
+        else data.set('me-manager.homeTip', stored)
+        renderHome(appState(theme('Client', [])))
+        expect(tipText()).toHaveTextContent(tips[0])
+        cleanup()
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('holds still while the window is hidden', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let hidden = false
