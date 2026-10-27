@@ -21,8 +21,21 @@ import { fuzzyFilter } from './lib/fuzzy'
 import { mockColorScheme } from './test/matchMedia'
 
 vi.mock('./components/TerminalView', () => ({
-  TerminalView: ({ fontSize, focusSeq, appearance }: { fontSize: number; focusSeq?: number; appearance: string }) => (
-    <div data-testid="terminal" data-font-size={fontSize} data-focus-seq={focusSeq} data-appearance={appearance} />
+  TerminalView: ({
+    fontSize,
+    focusSeq,
+    appearance,
+    onOpenFile,
+  }: {
+    fontSize: number
+    focusSeq?: number
+    appearance: string
+    onOpenFile?: (path: string, line?: number) => void
+  }) => (
+    <div data-testid="terminal" data-font-size={fontSize} data-focus-seq={focusSeq} data-appearance={appearance}>
+      {/* Stands in for a Ctrl+click on `src/app.ts:2` in the output. */}
+      <button onClick={() => onOpenFile?.('src/app.ts', 2)}>terminal link src/app.ts:2</button>
+    </div>
   ),
 }))
 // The real matcher, spied on: the palette must not re-run it on App renders that change none of its inputs.
@@ -399,6 +412,15 @@ describe('App side panel', () => {
     fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true })
     await user.click(within(panel()).getByRole('button', { name: 'Close files panel' }))
     expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
+  })
+
+  it('opens a file linked in the terminal at its line', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user, 'task A')
+    await user.click(screen.getByRole('button', { name: 'terminal link src/app.ts:2' }))
+    expect(await within(panel()).findByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(document.querySelector('.code-line-mark')).toHaveAttribute('data-line', '2'))
   })
 
   it('opens Search in files with Ctrl+Shift+S, focused, without stealing focus when switching tasks', async () => {

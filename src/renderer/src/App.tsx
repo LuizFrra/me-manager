@@ -32,6 +32,8 @@ import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import type { LinkFiles } from './lib/terminalLinkProvider'
+import { isMarkdown } from './lib/files'
+import { isSvgPath } from '../../shared/images'
 import { Splitter } from './components/Splitter'
 import {
   ArchiveTaskDialog,
@@ -1837,8 +1839,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     return () => window.removeEventListener('keydown', onShortcutKey)
   }, [onShortcutKey])
 
+  // With a line (a `path:12` link in the terminal), the file opens there, marked; Markdown and SVG as their text.
   const openFileInPanel = useCallback(
-    (path: string) => updatePanel({ open: true, tab: 'files', selected: path, history: [] }),
+    (path: string, line?: number) =>
+      updatePanel({
+        open: true,
+        tab: 'files',
+        selected: path,
+        history: [],
+        reveal: line ? { path, lines: { start: line, end: line } } : undefined,
+        ...(line && (isMarkdown(path) || isSvgPath(path)) ? { mdMode: 'raw' as const } : {}),
+      }),
     [updatePanel],
   )
   // Paths in the terminal's output that name a file of the shown task (or folder) become links to the files panel.
