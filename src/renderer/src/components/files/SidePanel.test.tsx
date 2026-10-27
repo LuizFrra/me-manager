@@ -611,6 +611,32 @@ describe('SidePanel', () => {
       expect(await screen.findByText(note)).toBeInTheDocument()
     })
 
+    it('moves between the results with the arrow keys, from the input and back to it', async () => {
+      const user = userEvent.setup()
+      render(<Harness api={createMockApi()} initial={{ tab: 'search' }} />)
+      const input = await screen.findByRole('textbox', { name: 'Search in files' })
+      await user.type(input, 'formatName{Enter}')
+      await screen.findByText('4 results in 3 files')
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('button', { name: /^notes\.txt, line 1:/ })).toHaveFocus()
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('button', { name: /app\.ts/, expanded: true })).toHaveFocus()
+      // ← folds a file's results, → shows them again.
+      await user.keyboard('{ArrowLeft}')
+      expect(screen.getByRole('button', { name: /app\.ts/, expanded: false })).toHaveFocus()
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('button', { name: /format\.ts/, expanded: true })).toHaveFocus()
+      await user.keyboard('{ArrowUp}{ArrowRight}{ArrowDown}')
+      expect(document.activeElement).toHaveAccessibleName(/^src\/app\.ts, line \d+:/)
+      // ← on a result goes to its file.
+      await user.keyboard('{ArrowLeft}')
+      expect(screen.getByRole('button', { name: /app\.ts/, expanded: true })).toHaveFocus()
+      await user.keyboard('{End}')
+      expect(screen.getByRole('button', { name: /^src\/util\/format\.ts, line/ })).toHaveFocus()
+      await user.keyboard('{Home}{ArrowUp}')
+      expect(input).toHaveFocus()
+    })
+
     it('opens a result in Files at its line', async () => {
       const user = userEvent.setup()
       const api = createMockApi()
