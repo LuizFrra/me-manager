@@ -3742,7 +3742,7 @@ describe('App background actions and the dialog shown by then', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }))
   }
 
-  it('keeps Settings, opened while a task was being created, and does not jump to the new task', async () => {
+  it('keeps the New task dialog while the task is created (Esc waits), then opens the task', async () => {
     const user = userEvent.setup()
     const gate = deferred()
     const api = slowApi(gate)
@@ -3754,31 +3754,12 @@ describe('App background actions and the dialog shown by then', () => {
     expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled()
     await user.click(screen.getByRole('textbox', { name: 'Name' }))
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Settings' }))
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'New task in my-api' })).toBeInTheDocument()
 
-    gate.resolve()
-    expect(await screen.findByRole('button', { name: 'Remove task slow task' })).toBeInTheDocument()
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
-    expect(openTarget).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('terminal')).not.toBeInTheDocument()
-  })
-
-  it('still opens the new task when the dialog was only dismissed meanwhile', async () => {
-    const user = userEvent.setup()
-    const gate = deferred()
-    const api = slowApi(gate)
-    const openTarget = vi.spyOn(api, 'openTarget')
-    render(<App api={api} />)
-    await createTheme(user, 'Client X')
-    await user.click(screen.getByRole('button', { name: 'Add repository to Client X' }))
-    await startTask(user, 'slow task')
-    await user.click(screen.getByRole('textbox', { name: 'Name' }))
-    await user.keyboard('{Escape}')
     gate.resolve()
     await waitFor(() => expect(openTarget).toHaveBeenCalled())
     expect(await screen.findByText('my-api › slow task')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('keeps the Commit dialog while the commit runs (Esc waits), then closes it', async () => {

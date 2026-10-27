@@ -1056,3 +1056,30 @@ describe('ConflictDialog while asking Claude', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('NewTaskDialog while creating', () => {
+  it("doesn't close on Esc, as Cancel doesn't: a creation that fails keeps what was typed", async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    let done = (): void => {}
+    render(
+      <NewTaskDialog
+        repoName="my-api"
+        loadBranches={async () => ({ default: 'origin/main', branches: ['origin/main'] })}
+        onSubmit={() => new Promise<void>((resolve) => (done = resolve))}
+        onCancel={onCancel}
+      />,
+    )
+    await user.keyboard('fix it')
+    await user.type(screen.getByRole('textbox', { name: /Initial prompt/ }), 'Do the thing')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    expect(screen.getByRole('button', { name: 'Creating…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox', { name: 'Name' }))
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Discard the prompt/)).not.toBeInTheDocument()
+    done()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled())
+    expect(screen.getByRole('textbox', { name: /Initial prompt/ })).toHaveValue('Do the thing')
+  })
+})
