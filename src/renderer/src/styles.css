@@ -680,6 +680,12 @@ button:disabled {
   border-bottom: 1px solid var(--divider);
   background: var(--bg);
 }
+.tabbar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .tab {
   display: flex;
   align-items: center;
