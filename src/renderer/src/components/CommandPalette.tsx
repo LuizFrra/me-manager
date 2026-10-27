@@ -162,6 +162,8 @@ export function CommandPalette<C extends PaletteCommand>(props: {
     } else if (e.key === 'Escape') {
       e.preventDefault()
       onClose()
+    } else if (e.key === 'Tab') {
+      e.preventDefault() // the input is the palette's one control: the focus has nowhere to go
     }
   }
 
@@ -170,7 +172,14 @@ export function CommandPalette<C extends PaletteCommand>(props: {
 
   return (
     <div className="overlay palette-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div
+        className="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        // A click anywhere in it (a result, the footer) keeps the focus in the input, where the palette's keys work.
+        onMouseDown={(e) => !(e.target instanceof HTMLInputElement) && e.preventDefault()}
+      >
         <input
           className="palette-input"
           autoFocus
@@ -203,7 +212,6 @@ export function CommandPalette<C extends PaletteCommand>(props: {
                 scrollToActive.current = false
                 setActiveId(item.id)
               }}
-              onMouseDown={(e) => e.preventDefault()} // keep focus in the input
               onClick={() => run(item)}
             >
               <span

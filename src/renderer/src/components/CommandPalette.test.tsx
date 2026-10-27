@@ -76,6 +76,30 @@ describe('CommandPalette', () => {
     }
   })
 
+  it('keeps the focus in its input, where its keys work: Tab and clicks around the results leave it there', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    render(
+      <>
+        <button>Behind</button>
+        <CommandPalette commands={[command('One')]} onRun={vi.fn()} onOpenFile={vi.fn()} onClose={onClose} />
+      </>,
+    )
+    const input = screen.getByRole('combobox')
+    expect(input).toHaveFocus()
+    await user.tab()
+    expect(input).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(input).toHaveFocus()
+    await user.type(input, 'zzz')
+    await user.click(screen.getByText('No results'))
+    expect(input).toHaveFocus()
+    await user.click(screen.getByText('close'))
+    expect(input).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('runs a clicked result and closes on Esc', async () => {
     const user = userEvent.setup()
     const commands = [command('One'), command('Two')]
