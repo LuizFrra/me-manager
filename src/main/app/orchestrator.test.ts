@@ -32,6 +32,7 @@ import {
   MAX_TASK_PROMPT,
   MAX_TRANSCRIPT_BYTES,
   type AppState,
+  type LiveStatus,
   type Target,
   type Task,
   type TaskGitStatus,
@@ -1002,7 +1003,7 @@ describe('Orchestrator: archiving tasks', () => {
     // Even a session left over under the task's name (started by hand) is not reported.
     await tmux.newSession(SESSION, WT, 'claude', 'claude')
     tmux.activity.set(SESSION, 1_700_000_000)
-    expect(await orch.getStatus()).toEqual({ running: [], missing: [], activity: {} })
+    expect(await orch.getStatus()).toEqual({ running: [], missing: [], activity: {}, claudeProfiles: {} })
     expect(tmux.captureCalls).toEqual([])
     git.statuses.set(WT, { ahead: 0, behind: 0, uncommitted: 0, branch: BRANCH })
     expect(await orch.getGitStatus([target])).toEqual({})
@@ -1194,11 +1195,11 @@ describe('Orchestrator: sessions and tabs', () => {
   it('reports running sessions and missing paths', async () => {
     const ctx = await withTask()
     let status = await ctx.orch.getStatus()
-    expect(status).toEqual({ running: [ctx.task.id], missing: [], activity: {} })
+    expect(status).toEqual({ running: [ctx.task.id], missing: [], activity: {}, claudeProfiles: {} })
     ctx.tmux.sessions.clear()
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
-    expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {} })
+    expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {}, claudeProfiles: {} })
   })
 })
 
@@ -1347,6 +1348,57 @@ describe('Orchestrator: Claude profiles', () => {
     )
     await orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
     expect(envOf(ctx, SESSION, 'claude')).toEqual(home)
+  })
+
+  it('says which profile each Claude it started runs in, until it is restarted in the current one', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const claudeProfiles = async (): Promise<LiveStatus['claudeProfiles']> =>
+      (await ctx.orch.getStatus()).claudeProfiles
+    await ctx.orch.openTarget(ctx.target)
+    ctx.tmux.activity.set(SESSION, 1)
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+
+    // A change of profile restarts nothing, and neither does Restart Claude while Claude runs: it shows it.
+    await ctx.orch.setThemeProfile(ctx.themeId, 'p-home')
+    await ctx.orch.restartClaude(ctx.target)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('respawnWindow'))).toEqual([])
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+
+    // Unless asked to replace it: Claude starts again in its window, in the current profile, continuing.
+    await ctx.orch.restartClaude(ctx.target, { replace: true })
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('respawnWindow'))).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          `^respawnWindow ${SESSION} claude in \\S+: claude .*--continue.* env CLAUDE_CONFIG_DIR=/home/me/\\.claude-home$`,
+        ),
+      ),
+    ])
+    expect(envOf(ctx, SESSION, 'claude')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-home' })
+
+    // A new task, and Claude started again for a request, are known too; Default by its id.
+    await ctx.orch.setThemeProfile(ctx.themeId, null)
+    await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')
+    ctx.tmux.activity.set('mmt_client-x_my-api_new-one', 1)
+    await ctx.orch.newTab(ctx.target)
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    await ctx.orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
+    const newTask = (await ctx.orch.getState()).themes[0].items[0]
+    const newId = newTask.kind === 'repo' ? newTask.tasks.find((t) => t.slug === 'new-one')!.id : ''
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'default', [newId]: 'default' })
+  })
+
+  it('knows nothing of a Claude an earlier run started, nor of one whose tab was closed', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.openTarget(ctx.target)
+    ctx.tmux.activity.set(SESSION, 1)
+    const orch = await switchTheme(ctx, 'p-home') // the app restarted: the session runs on
+    await orch.openTarget(ctx.target)
+    expect((await orch.getStatus()).claudeProfiles).toEqual({})
+
+    await ctx.orch.newTab(ctx.target)
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    expect((await ctx.orch.getStatus()).claudeProfiles).toEqual({})
   })
 
   it("refuses to restart the run command when the profile's folder is gone, leaving the running one alone", async () => {

@@ -178,6 +178,20 @@ export interface LiveStatus {
   missing: string[]
   /** For running sessions that still have their `claude` window, by id. */
   activity: Record<string, ClaudeActivity>
+  /**
+   * The Claude profile (ClaudeProfile.id) the `claude` window of a running session was started in, by id: only for
+   * windows this run of the app started, as a session left from an earlier run may have been started in any.
+   */
+  claudeProfiles?: Record<string, string>
+}
+
+/** How MeManagerApi.restartClaude goes about a Claude still running. */
+export interface RestartClaudeOptions {
+  /**
+   * Starts it again in its window (the process is ended) in the target's current Claude profile, continuing its last
+   * conversation there. Without it, a running Claude is only shown.
+   */
+  replace?: boolean
 }
 
 /** A repo task's git state, read from its worktree (see GitApi.taskStatus). */
@@ -580,7 +594,11 @@ export interface MeManagerApi {
   newTab(target: Target): Promise<TabInfo[]>
   selectTab(target: Target, index: number): Promise<TabInfo[]>
   closeTab(target: Target, index: number): Promise<TabInfo[]>
-  restartClaude(target: Target): Promise<TabInfo[]>
+  /**
+   * Starts Claude again in its tab when it was closed (a new `claude` window, continuing its last conversation), or
+   * opens the session when it isn't running; a running Claude is shown, unless `options.replace`.
+   */
+  restartClaude(target: Target, options?: RestartClaudeOptions): Promise<TabInfo[]>
   /**
    * Leaves copy mode in the target's active tab, if it is in it. After a scroll back, tmux (not the program) gets
    * the keys: the terminal calls this before it sends the next one.

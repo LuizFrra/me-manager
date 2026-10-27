@@ -30,6 +30,7 @@ import type {
   ProfileBilling,
   ProfilePatch,
   ProfileStatus,
+  RestartClaudeOptions,
   PullRequestResult,
   PushResult,
   RemoveTaskResult,
@@ -335,6 +336,11 @@ export class Orchestrator implements AppService {
    * queues, and quitting cancels them rather than wait (see cancelClones). Keyed by a tail that always resolves.
    */
   private readonly clones = new Map<Promise<void>, AbortController>()
+  /**
+   * The Claude profile (id) each session's `claude` window was last started in by this run, by session name: set
+   * wherever a Claude window starts, and reported by getStatus (LiveStatus.claudeProfiles) while that window runs.
+   */
+  private readonly claudeProfiles = new Map<string, string>()
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -496,8 +502,7 @@ export class Orchestrator implements AppService {
    * ~/.claude, it looks elsewhere and the user would appear logged out. Throws when the profile's folder is gone,
    * rather than starting Claude in another account.
    */
-  private sessionEnv(target: Target): Record<string, string> {
-    const profile = this.profileFor(target)
+  private sessionEnv(target: Target, profile = this.profileFor(target)): Record<string, string> {
     return profile.id === DEFAULT_PROFILE_ID ? {} : { CLAUDE_CONFIG_DIR: this.profileFolder(profile) }
   }
 
@@ -515,8 +520,8 @@ export class Orchestrator implements AppService {
    * which tmux set when the session started, and a window's own -e can't remove a variable: without this, a
    * session started in a profile would keep it in new tabs after a switch to Default.
    */
-  private windowEnv(target: Target): Record<string, string | null> {
-    return { CLAUDE_CONFIG_DIR: this.sessionEnv(target).CLAUDE_CONFIG_DIR ?? null }
+  private windowEnv(target: Target, profile = this.profileFor(target)): Record<string, string | null> {
+    return { CLAUDE_CONFIG_DIR: this.sessionEnv(target, profile).CLAUDE_CONFIG_DIR ?? null }
   }
 
   /**
@@ -619,9 +624,32 @@ export class Orchestrator implements AppService {
         }
       }
     }
-    const status = { running, missing, activity: await this.claudeActivity(live, activityBySession) }
+    const status: LiveStatus = {
+      running,
+      missing,
+      activity: await this.claudeActivity(live, activityBySession),
+      claudeProfiles: this.runningClaudeProfiles(live, sessions, activityBySession),
+    }
     this.lastStatus = { at: this.now(), status }
     return status
+  }
+
+  /**
+   * LiveStatus.claudeProfiles: the profile of each running session's `claude` window this run started, while the
+   * window is there (it has an activity time). Sessions gone are forgotten.
+   */
+  private runningClaudeProfiles(
+    live: { id: string; session: string }[],
+    sessions: ReadonlySet<string>,
+    activityBySession: Record<string, number>,
+  ): Record<string, string> {
+    for (const session of this.claudeProfiles.keys()) if (!sessions.has(session)) this.claudeProfiles.delete(session)
+    const out: Record<string, string> = {}
+    for (const { id, session } of live) {
+      const profileId = this.claudeProfiles.get(session)
+      if (profileId !== undefined && activityBySession[session] !== undefined) out[id] = profileId
+    }
+    return out
   }
 
   /** Busy from recent output; otherwise waiting or idle from the screen (see tmux/activity.ts). */
@@ -873,7 +901,8 @@ export class Orchestrator implements AppService {
       const branch = branchName(theme.slug, slug)
       const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
       const session = sessionName(theme.slug, repo.slug, slug)
-      const env = this.sessionEnv({ themeId, itemId: repoId }) // before any git work it would have to undo
+      const profile = this.profileFor({ themeId, itemId: repoId })
+      const env = this.sessionEnv({ themeId, itemId: repoId }, profile) // before any git work it would have to undo
 
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
@@ -885,6 +914,7 @@ export class Orchestrator implements AppService {
         await this.withPromptFile(prompt, (file) =>
           tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file), env),
         )
+        this.claudeProfiles.set(session, profile.id)
         const task: Task = {
           id: randomUUID(),
           name: name.trim(),
@@ -1174,10 +1204,12 @@ export class Orchestrator implements AppService {
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     let started = false
     if (!(await this.deps.tmux.hasSession(session))) {
-      const env = this.sessionEnv(target)
+      const profile = this.profileFor(target)
+      const env = this.sessionEnv(target, profile)
       try {
         const command = claudeContinueCommand(this.claudeArgs(label))
         await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, command, env)
+        this.claudeProfiles.set(session, profile.id)
         started = true
       } catch (err) {
         // Another open of the same target (a double click) started it meanwhile, and tmux refused this one.
@@ -1268,15 +1300,25 @@ export class Orchestrator implements AppService {
     return this.deps.tmux.listWindows(session).catch(() => [])
   }
 
-  async restartClaude(target: Target): Promise<TabInfo[]> {
+  /**
+   * With `replace`, a running Claude is ended and started again in its window (`respawn-window -k`), so that it
+   * runs in the target's current profile: the user asked for it, after changing the profile.
+   */
+  async restartClaude(target: Target, options?: RestartClaudeOptions): Promise<TabInfo[]> {
+    const replace = isRecord(options) && options.replace === true // from the renderer: anything else is no
     const { session, cwd, label } = this.resolveOpenable(target)
     if (!(await this.deps.tmux.hasSession(session))) return this.openTarget(target)
     const existing = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
-    if (existing) await this.deps.tmux.selectWindow(session, existing.index)
+    if (existing && !replace) await this.deps.tmux.selectWindow(session, existing.index)
     else {
+      const profile = this.profileFor(target)
       const command = claudeContinueCommand(this.claudeArgs(label))
-      const env = this.windowEnv(target)
-      await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, command, { env })
+      const env = this.windowEnv(target, profile)
+      if (existing) {
+        await this.deps.tmux.respawnWindow(session, CLAUDE_WINDOW, cwd, command, env)
+        await this.deps.tmux.selectWindow(session, existing.index)
+      } else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, command, { env })
+      this.claudeProfiles.set(session, profile.id)
     }
     return this.deps.tmux.listWindows(session)
   }
@@ -1508,10 +1550,12 @@ export class Orchestrator implements AppService {
     } else {
       // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
       const args = this.claudeArgs(label)
-      const env = this.windowEnv(target)
+      const profile = this.profileFor(target)
+      const env = this.windowEnv(target, profile)
       await this.withPromptFile(text, (file) =>
         this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file), { env }),
       )
+      this.claudeProfiles.set(session, profile.id)
     }
     return this.deps.tmux.listWindows(session)
   }
