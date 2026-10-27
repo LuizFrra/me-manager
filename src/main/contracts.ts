@@ -45,6 +45,10 @@ export interface GitApi {
    * exists is refused; when the clone fails, `dest` (which this call created) is removed again.
    */
   clone(url: string, dest: string): Promise<void>
+  /**
+   * `git worktree add --no-track -b <branch> <worktreePath> <baseRef>`. Refuses a branch that exists already; when
+   * the checkout fails, the branch it made is deleted again.
+   */
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>
   /** Removes the worktree (forced); prunes if its folder is already gone. */
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>

@@ -279,8 +279,15 @@ export class GitService implements GitApi {
     }
     const base = await this.fullRef(repoPath, baseRef)
     await mkdir(dirname(worktreePath), { recursive: true })
-    // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
-    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, base])
+    try {
+      // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
+      await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, base])
+    } catch (err) {
+      // git makes the branch before the checkout and keeps it when the checkout fails (a filter like git-lfs
+      // missing, a full disk), which would refuse the task's name from then on. It didn't exist (checked above).
+      await this.git(repoPath, ['branch', '-D', branch]).catch(() => {})
+      throw commandFailure('git worktree add', err)
+    }
   }
 
   async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {

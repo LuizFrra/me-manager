@@ -189,6 +189,39 @@ describe('addWorktree with a kept branch', () => {
   })
 })
 
+describe('addWorktree whose checkout fails', () => {
+  it('deletes the branch it created, so the same task can be created once the cause is fixed', async () => {
+    const { root, repo } = await makeLocalRepo()
+    // A required filter that fails, like git-lfs content without git-lfs installed.
+    await writeFile(join(repo, '.gitattributes'), '*.dat filter=lfs-like\n')
+    await commitFile(repo, 'a.dat', 'data', 'add data')
+    await git(repo, 'config', 'filter.lfs-like.smudge', 'false')
+    await git(repo, 'config', 'filter.lfs-like.required', 'true')
+    const wt = join(root, 'wt')
+    await expect(svc.addWorktree(repo, wt, 'claude/t/x', 'main')).rejects.toThrow(
+      /^git worktree add failed: .*smudge filter lfs-like failed/,
+    )
+    expect(existsSync(wt)).toBe(false)
+    expect((await git(repo, 'branch', '--list', 'claude/t/x')).trim()).toBe('')
+    expect(await git(repo, 'worktree', 'list')).not.toContain(wt)
+
+    await git(repo, 'config', '--unset', 'filter.lfs-like.required')
+    await svc.addWorktree(repo, wt, 'claude/t/x', 'main')
+    expect(existsSync(join(wt, 'a.dat'))).toBe(true)
+  })
+  it('leaves a folder already at the path, and the branches, as they were', async () => {
+    const { root, repo } = await makeLocalRepo()
+    const wt = join(root, 'wt')
+    await mkdir(wt)
+    await writeFile(join(wt, 'mine.txt'), 'keep me')
+    await expect(svc.addWorktree(repo, wt, 'claude/t/x', 'main')).rejects.toThrow(
+      /^git worktree add failed: .*already exists/,
+    )
+    expect(existsSync(join(wt, 'mine.txt'))).toBe(true)
+    expect((await git(repo, 'branch', '--list', 'claude/t/x')).trim()).toBe('')
+  })
+})
+
 describe('getUnsavedWork', () => {
   it('is empty for a fresh task', async () => {
     const { clone, wt, branch } = await withTask()
