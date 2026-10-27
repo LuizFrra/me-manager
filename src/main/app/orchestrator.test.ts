@@ -857,6 +857,31 @@ describe('Orchestrator: archiving tasks', () => {
     }
   })
 
+  it('refuses a new tab or a Claude restart while the task is being archived or removed', async () => {
+    for (const close of ['archive', 'remove'] as const) {
+      const { orch, tmux, themeId, repoId, target, task } = await withTask()
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const killSession = tmux.killSession.bind(tmux)
+      tmux.killSession = async (name: string): Promise<void> => {
+        await gate // tmux is slow to answer: the session is still there
+        return killSession(name)
+      }
+      const closing =
+        close === 'archive'
+          ? orch.archiveTask(themeId, repoId, task.id)
+          : orch.removeTask(themeId, repoId, task.id, false)
+      await new Promise((r) => setTimeout(r, 0))
+      const refusal = `"fix" is being ${close === 'archive' ? 'archived' : 'removed'}`
+      tmux.sessions.get(SESSION)!.windows = [{ name: 'shell' }] // Claude exited: a restart would start a new one
+      await expect(orch.newTab(target)).rejects.toThrow(refusal)
+      await expect(orch.restartClaude(target)).rejects.toThrow(refusal)
+      expect(tmux.sessions.get(SESSION)!.windows.map((w) => w.name)).toEqual(['shell'])
+      release()
+      await closing
+    }
+  })
+
   it('kills the session an open started while the task was archived, and does not attach', async () => {
     const { orch, tmux, pty, themeId, repoId, target, task } = await withTask()
     await orch.detachTerminal()

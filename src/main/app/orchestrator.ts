@@ -970,7 +970,7 @@ export class Orchestrator implements AppService {
   }
 
   async newTab(target: Target): Promise<TabInfo[]> {
-    const { session, cwd } = this.resolve(target)
+    const { session, cwd } = this.resolveOpenable(target)
     const names = new Set((await this.deps.tmux.listWindows(session)).map((t) => t.name))
     let name = 'shell'
     for (let n = 2; names.has(name); n++) name = `shell ${n}`
@@ -991,7 +991,7 @@ export class Orchestrator implements AppService {
   }
 
   async restartClaude(target: Target): Promise<TabInfo[]> {
-    const { session, cwd, label } = this.resolve(target)
+    const { session, cwd, label } = this.resolveOpenable(target)
     if (!(await this.deps.tmux.hasSession(session))) return this.openTarget(target)
     const existing = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
