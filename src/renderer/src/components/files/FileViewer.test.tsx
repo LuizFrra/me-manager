@@ -340,3 +340,27 @@ describe('FileViewer missing files', () => {
     expect(screen.getByText('File no longer exists')).toBeInTheDocument()
   })
 })
+
+describe('FileViewer lines past the end', () => {
+  const text = (content: string, truncated = false): FileContent => ({
+    kind: 'text',
+    content,
+    size: truncated ? 2_000_000 : content.length,
+    truncated,
+  })
+
+  it('says when the lines to show are past the end of the file', () => {
+    renderViewer({ path: 'a.ts', content: text('one\ntwo\nthree\n'), reveal: { lines: { start: 12, end: 14 } } })
+    expect(screen.getByRole('status')).toHaveTextContent('Line 12 is past the end of the file (3 lines).')
+  })
+
+  it('says when they are past the beginning shown of a large file', () => {
+    renderViewer({ path: 'big.log', content: text('a\nb\n', true), reveal: { lines: { start: 50_000, end: 50_000 } } })
+    expect(screen.getByRole('status')).toHaveTextContent('Line 50,000 is past the part shown.')
+  })
+
+  it('says nothing for lines in the file', () => {
+    renderViewer({ path: 'a.ts', content: text('one\ntwo\nthree\n'), reveal: { lines: { start: 3, end: 3 } } })
+    expect(screen.queryByText(/past the/)).not.toBeInTheDocument()
+  })
+})

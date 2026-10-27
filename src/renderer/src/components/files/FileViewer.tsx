@@ -3,6 +3,7 @@ import type { ChangedFile, FileContent, MeManagerApi, Target } from '../../../..
 import type { PanelState, PanelTab } from '../../lib/panelState'
 import { isImagePath, isSvgPath } from '../../../../shared/images'
 import { formatSize, isMarkdown } from '../../lib/files'
+import { lineCount } from '../../lib/highlight'
 import type { DiffLayout } from '../../lib/diff/layout'
 import { CodeView } from './CodeView'
 import { DiffView } from './DiffView'
@@ -214,10 +215,21 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
     body = <p className="viewer-message">Empty file</p>
   } else {
     const text = p.content
+    const lines = lineCount(text.content)
+    // Lines asked for (a search result, a link to `#L120`) that aren't there would otherwise show nothing marked.
+    const past = p.reveal?.lines && p.reveal.lines.start > lines ? p.reveal.lines.start : undefined
     body = (
       <>
         {text.truncated && (
           <div className="panel-notice">Large file ({formatSize(text.size)}): only the beginning is shown.</div>
+        )}
+        {past !== undefined && (
+          <div className="panel-notice" role="status">
+            Line {past.toLocaleString('en-US')} is past{' '}
+            {text.truncated
+              ? 'the part shown.'
+              : `the end of the file (${lines.toLocaleString('en-US')} ${lines === 1 ? 'line' : 'lines'}).`}
+          </div>
         )}
         {md && p.mdMode === 'view' ? (
           <div className="viewer-md">
