@@ -315,7 +315,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     selectTab: async () => clone(tabs),
     closeTab: async () => clone(tabs),
     restartClaude: async () => clone(tabs),
-    leaveCopyMode: async () => {},
+    leaveCopyMode: async () => false,
     startRun: async (target) => run(target, false),
     restartRun: async (target) => run(target, true),
     // The demo's run tab "prints" Vite's address while it runs.

@@ -19,6 +19,8 @@ describe('copyModePosition', () => {
   it("finds tmux's highlighted [n/m] against the right edge", () => {
     expect(copyModePosition(row('output   [12/345]', 30, 8))).toEqual({ scrolledBack: 12 })
     expect(copyModePosition(row('output [0/345]', 30, 7))).toEqual({ scrolledBack: 0 })
+    // a selection on the same row has the same highlight
+    expect(copyModePosition(row('selected text[0/345]', 30, 20))).toEqual({ scrolledBack: 0 })
   })
 
   it('ignores the same text printed as ordinary output, or anything else highlighted', () => {

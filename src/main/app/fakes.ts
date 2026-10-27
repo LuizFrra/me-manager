@@ -276,9 +276,12 @@ export class FakeTmux implements TmuxApi {
     w.command = command
     delete w.dead
   }
-  async leaveCopyMode(session: string): Promise<void> {
+  /** Sessions whose active pane is in copy mode (the user scrolled back). */
+  inCopyMode = new Set<string>()
+  async leaveCopyMode(session: string): Promise<boolean> {
     if (!this.sessions.has(session)) throw new Error(`can't find session: ${session}`)
     this.calls.push(`leaveCopyMode ${session}`)
+    return this.inCopyMode.delete(session)
   }
   /** What a Ctrl-C does to each window, by `<session>:<window>`: 'exit' (the default) or 'ignore'. */
   interruptEffect = new Map<string, 'exit' | 'ignore'>()

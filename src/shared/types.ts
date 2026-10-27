@@ -490,7 +490,8 @@ export interface MeManagerApi {
    * Leaves copy mode in the target's active tab, if it is in it. After a scroll back, tmux (not the program) gets
    * the keys: the terminal calls this before it sends the next one.
    */
-  leaveCopyMode(target: Target): Promise<void>
+  /** Whether it was in copy mode. */
+  leaveCopyMode(target: Target): Promise<boolean>
   /**
    * Shows the target's `run` tab, or opens one (active) that runs its repo's or folder's run command with the
    * user's shell in the worktree or folder. The tab stays open with the output when the command exits, as a `dead`

@@ -470,7 +470,7 @@ describe('TerminalView after a scroll back', () => {
 
   it('leaves copy mode before the next typed key, and holds what is typed meanwhile', async () => {
     let leave = (): void => {}
-    const onLeaveCopyMode = vi.fn(() => new Promise<void>((resolve) => (leave = resolve)))
+    const onLeaveCopyMode = vi.fn(() => new Promise<boolean>((resolve) => (leave = () => resolve(true))))
     const { container } = render(
       <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
     )
@@ -492,7 +492,7 @@ describe('TerminalView after a scroll back', () => {
   })
 
   it('only leaves copy mode on Escape, so it does not also interrupt Claude', async () => {
-    const onLeaveCopyMode = vi.fn(async () => {})
+    const onLeaveCopyMode = vi.fn(async () => true)
     const { container } = render(
       <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
     )
@@ -500,6 +500,56 @@ describe('TerminalView after a scroll back', () => {
     await act(async () => terms.at(-1)?.input?.('\x1b'))
     expect(onLeaveCopyMode).toHaveBeenCalledTimes(1)
     expect(api.ptyWrite).not.toHaveBeenCalled()
+  })
+
+  it('sends Escape on when tmux had already left copy mode (scrolled back to the bottom)', async () => {
+    const onLeaveCopyMode = vi.fn(async () => false)
+    const { container } = render(
+      <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
+    )
+    fireEvent.wheel(container.querySelector('.terminal-host') as Element, { deltaY: -120 })
+    await act(async () => terms.at(-1)?.input?.('\x1b'))
+    expect(api.ptyWrite).toHaveBeenCalledWith('\x1b')
+  })
+
+  it('sends keys straight on once the screen shows tmux is out of copy mode', () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    const { container } = render(
+      <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
+    )
+    fireEvent.wheel(container.querySelector('.terminal-host') as Element, { deltaY: -120 })
+    const term = terms.at(-1) as FakeTerm & { parsed?: () => void }
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => (cb(0), 1))
+    act(() => term.parsed?.()) // the default fake screen has no copy-mode position
+    term.input?.('\x1b')
+    expect(onLeaveCopyMode).not.toHaveBeenCalled()
+    expect(api.ptyWrite).toHaveBeenCalledWith('\x1b')
+    vi.restoreAllMocks()
+  })
+
+  it('leaves copy mode for arrow keys after a mouse selection, which scrolled nothing', async () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />)
+    await act(async () => {
+      await providers.at(-1)?.writeText('' as never, 'picked')
+    })
+    await act(async () => terms.at(-1)?.input?.('\x1b[A'))
+    expect(onLeaveCopyMode).toHaveBeenCalledTimes(1)
+    expect(api.ptyWrite).toHaveBeenCalledWith('\x1b[A') // ↑ reaches Claude's prompt history
+  })
+
+  it('keeps a selection copyable across focus reports from leaving and coming back to the window', async () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />)
+    await act(async () => {
+      await providers.at(-1)?.writeText('' as never, 'picked')
+    })
+    act(() => {
+      terms.at(-1)?.input?.('\x1b[O')
+      terms.at(-1)?.input?.('\x1b[I')
+    })
+    expect(onLeaveCopyMode).not.toHaveBeenCalled()
+    expect(screen.getByRole('status')).toHaveTextContent('to copy')
   })
 })
 
@@ -542,7 +592,7 @@ describe('TerminalView editing keys', () => {
 
 describe('TerminalView jump to the bottom', () => {
   it('offers to jump back while tmux shows its copy-mode position, and leaves copy mode', async () => {
-    const onLeaveCopyMode = vi.fn(async () => {})
+    const onLeaveCopyMode = vi.fn(async () => true)
     render(
       <TerminalView
         api={{ ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }}
