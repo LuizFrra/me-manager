@@ -1,13 +1,14 @@
-import { appendFile, mkdir, open, rename, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanupTempDirs, makeTempDir } from '../files/testRepos'
 
 // Wraps the real open so tests can see how many transcripts are read at once.
-const openFlight = vi.hoisted(() => ({ now: 0, peak: 0 }))
+const openFlight = vi.hoisted(() => ({ now: 0, peak: 0, paths: [] as string[] }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
   const open = (async (...args: Parameters<typeof real.open>) => {
+    openFlight.paths.push(String(args[0]))
     openFlight.peak = Math.max(openFlight.peak, ++openFlight.now)
     try {
       return await real.open(...args)
@@ -57,13 +58,16 @@ const largestRun = (log: number[]): number => {
 import {
   claudeConfigDir,
   encodeProjectPath,
+  mergeRecords,
   parseUsageLine,
   projectDirMatches,
   DIR_SLICE,
   READ_CONCURRENCY,
   STAT_SLICE,
   streamLines,
+  USAGE_CACHE_VERSION,
   UsageService,
+  type UsageRecord,
 } from './usageService'
 
 interface Msg {
@@ -269,6 +273,66 @@ describe('UsageService', () => {
     expect((await usageOf(svc, '/p/proj')).all).toMatchObject({ messages: 1, output: 6 })
   })
 
+  it('merges the copies of a message the same way whatever order they are read in', () => {
+    const rec = (m: Msg, at: number | null = null): UsageRecord => {
+      const r = parseUsageLine(line({ id: 'm1', req: 'r1', ...m }))!.record
+      if (at !== null) r.ts = at
+      return r
+    }
+    const copies = [
+      rec({ cwd: '/p/b', session: 'b', output: 5 }),
+      rec({ cwd: '/p/a', session: 'a', output: 5 }), // the same time: the first path wins
+      rec({ cwd: '/p/c', session: 'c', output: 2, speed: 'fast' }, NaN), // no time: never the one that counts
+      rec({ cwd: '/p/d', session: 'd', input: 1 }, Date.parse(TODAY) + 1000),
+    ]
+    const results = [
+      copies.reduce(mergeRecords),
+      [...copies].reverse().reduce(mergeRecords),
+      [copies[2], copies[0], copies[3], copies[1]].reduce(mergeRecords),
+    ]
+    for (const r of results) {
+      expect(r).toEqual(results[0])
+      expect(r).toMatchObject({ cwd: '/p/a', session: 'a', ts: Date.parse(TODAY), output: 5, input: 1, fast: true })
+    }
+  })
+
+  it('counts a message copied into two tasks’ transcripts for the same task whichever is read first', async () => {
+    const msg = { id: 'm1', req: 'r1', output: 5 }
+    await put('/p/a', 's1.jsonl', line({ ...msg, cwd: '/p/a', session: 'sa' }))
+    await put('/p/b', 's2.jsonl', line({ ...msg, cwd: '/p/b', session: 'sb' }) + line({ cwd: '/p/b', input: 1 }))
+    const extra = await put('/p/b', 's3.jsonl', line({ cwd: '/p/b', input: 2 }))
+    const both = ['/p/a', '/p/b']
+    const aFirst = service()
+    await aFirst.summarize(['/p/a'])
+    const bFirst = service()
+    await bFirst.summarize(['/p/b'])
+    const expected = await service().summarize(both)
+    expect(expected.roots['/p/a'].all).toMatchObject({ messages: 1, output: 5, sessions: 1 })
+    expect(await aFirst.summarize(both)).toEqual(expected)
+    expect(await bFirst.summarize(both)).toEqual(expected)
+
+    // A transcript deleted: the merged messages are summed again from the files, and nothing moves.
+    const { rm } = await import('node:fs/promises')
+    await rm(extra)
+    const rebuilt = await service().summarize(both)
+    expect(rebuilt.roots['/p/a'].all).toMatchObject({ messages: 1, output: 5 })
+    expect(await aFirst.summarize(both)).toEqual(rebuilt)
+    expect(await bFirst.summarize(both)).toEqual(rebuilt)
+  })
+
+  it('keeps counting a transcript replaced by one it cannot read yet, until it can', async () => {
+    const file = await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const svc = service()
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(1)
+    const other = join(claudeDir, 'replacement.jsonl')
+    await writeFile(other, line({ input: 20 }))
+    await chmod(other, 0)
+    await rename(other, file)
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(1)
+    await chmod(file, 0o644)
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(20)
+  })
+
   it('reads only the bytes appended since the last read', async () => {
     const first = line({ input: 7 })
     const file = await put('/p/proj', 's1.jsonl', first)
@@ -469,6 +533,48 @@ describe('UsageService', () => {
     expect(both.all).toMatchObject({ messages: 5, sessions: 4, lastSeen: at(9, 3) })
   })
 
+  it('moves usage out of today, this week and this month as the clock passes midnight, with no transcript changed', async () => {
+    const at = (month: number, day: number, hour = 12): string => new Date(2026, month, day, hour).toISOString()
+    await put(
+      '/p/proj',
+      's1.jsonl',
+      line({ ts: at(9, 31, 23), input: 1 }) + line({ ts: at(9, 25, 1), input: 2 }) + line({ ts: at(9, 1), input: 4 }),
+    )
+    let now = new Date(2026, 9, 31, 23, 59)
+    const svc = new UsageService({ claudeDir, now: () => now, minRefreshMs: 0 })
+    const periods = async (): Promise<number[]> => {
+      const u = await usageOf(svc, '/p/proj')
+      return [u.today.input, u.week.input, u.month.input, u.all.input]
+    }
+    expect(await periods()).toEqual([1, 3, 7, 7])
+    now = new Date(2026, 10, 1, 0, 1) // a new day, week and month
+    expect(await periods()).toEqual([0, 1, 0, 7])
+  })
+
+  it('sums each change into the same totals as reading everything afresh', async () => {
+    const at = (day: number, hour = 12): string => new Date(2026, 9, day, hour).toISOString()
+    const roots = ['/p/a', '/p/a/wt', '/p/b']
+    const groups = { total: roots, t1: ['/p/a', '/p/a/wt'], t2: ['/p/b'] }
+    const a = await put('/p/a', 's1.jsonl', line({ cwd: '/p/a', ts: at(18), input: 1, session: 'a' }))
+    const wt = await put('/p/a/wt', 's2.jsonl', line({ cwd: '/p/a/wt', ts: at(12), output: 2, session: 'w' }))
+    const b = await put('/p/b', 's3.jsonl', line({ cwd: '/p/b', ts: at(1), cacheRead: 4, model: 'claude-sonnet-5' }))
+    const svc = service()
+    const same = async (): Promise<void> => {
+      expect(await svc.summarize(roots, groups)).toEqual(await service().summarize(roots, groups))
+    }
+    await same()
+    await appendFile(wt, line({ id: 'm1', req: 'r1', cwd: '/p/a/wt/pkg', output: 8, session: 'w2' }))
+    await same()
+    await appendFile(b, line({ id: 'm1', req: 'r1', cwd: '/p/a/wt/pkg', output: 16, session: 'w2' })) // fuller copy
+    await same()
+    await appendFile(a, line({ cwd: '/p/a', ts: at(17), input: 32, model: 'claude-future-9' }))
+    await same()
+    const { rm } = await import('node:fs/promises')
+    await rm(b)
+    await same()
+    expect((await svc.summarize(roots, groups)).groups.t1.all).toMatchObject({ input: 33, output: 10, messages: 4 })
+  })
+
   it('returns empty usage when there are no transcripts at all', async () => {
     const usage = await usageOf(service(), '/p/none')
     expect(usage.all).toMatchObject({ messages: 0, cost: 0, firstSeen: null, models: [] })
@@ -512,5 +618,160 @@ describe('UsageService', () => {
     const a = await svc.summarize(['/p/proj'])
     const b = await svc.summarize(['/p/proj'])
     expect(b).toBe(a)
+  })
+})
+
+describe('UsageService cache', () => {
+  let cacheFile: string
+  beforeEach(() => {
+    cacheFile = join(claudeDir, 'app-home', 'usage-cache.json')
+  })
+  /** A service that keeps its cache in cacheFile, written only when a test asks (saveCache). */
+  const cached = (now = NOW): UsageService =>
+    new UsageService({ claudeDir, now: () => now, minRefreshMs: 0, cacheFile, cacheSaveDelayMs: 3_600_000 })
+  /** The transcripts a call to `fn` opened. */
+  async function opened(fn: () => Promise<unknown>): Promise<string[]> {
+    openFlight.paths = []
+    await fn()
+    return openFlight.paths.filter((p) => p.endsWith('.jsonl'))
+  }
+
+  it('reads no unchanged transcript again after a restart, with the same result', async () => {
+    const at = (day: number): string => new Date(2026, 9, day, 12).toISOString()
+    await put('/p/a', 's1.jsonl', line({ cwd: '/p/a', ts: at(18), input: 1, model: 'claude-future-9' }))
+    await put('/p/a', 's1/subagents/agent-x.jsonl', line({ cwd: '/p/a/sub', ts: at(2), output: 2, speed: 'fast' }))
+    await put('/p/b', 's2.jsonl', line({ cwd: '/p/b', ts: 'nonsense', cacheWrite: 30, eph1: 30 }))
+    const groups = { both: ['/p/a', '/p/b'] }
+    const first = cached()
+    const before = await first.summarize(['/p/a', '/p/b'], groups)
+    await first.saveCache()
+
+    const restarted = cached()
+    let after: unknown
+    expect(await opened(async () => (after = await restarted.summarize(['/p/a', '/p/b'], groups)))).toEqual([])
+    expect(after).toEqual(before)
+  })
+
+  it('reads a transcript that grew since from where the cache left it', async () => {
+    const first = line({ input: 7 })
+    const file = await put('/p/proj', 's1.jsonl', first)
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+
+    // Overwrite the first line in place and append: only a read resumed at the cached offset still counts it.
+    const fh = await open(file, 'r+')
+    await fh.write(Buffer.from('x'.repeat(first.length - 1)), 0, first.length - 1, 0)
+    await fh.close()
+    await appendFile(file, line({ input: 3 }))
+    expect((await usageOf(cached(), '/p/proj')).all).toMatchObject({ messages: 2, input: 10 })
+  })
+
+  it('reads a transcript again from the start when it was replaced, shrank or was deleted since', async () => {
+    const replaced = await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const shrunk = await put('/p/proj', 's2.jsonl', line({ input: 2 }) + line({ input: 4 }))
+    const deleted = await put('/p/proj', 's3.jsonl', line({ input: 8 }))
+    const svc = cached()
+    expect((await usageOf(svc, '/p/proj')).all.input).toBe(15)
+    await svc.saveCache()
+
+    const other = join(claudeDir, 'replacement.jsonl')
+    await writeFile(other, line({ input: 16 }))
+    await rename(other, replaced)
+    await writeFile(shrunk, line({ input: 32 }))
+    await rm(deleted)
+    expect((await usageOf(cached(), '/p/proj')).all).toMatchObject({ messages: 2, input: 48 })
+  })
+
+  it('ignores a corrupt cache, or one from another version or folder, and writes a good one', async () => {
+    await put('/p/proj', 's1.jsonl', line({ input: 5 }))
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    const good = JSON.parse(await readFile(cacheFile, 'utf8'))
+    expect(good.v).toBe(USAGE_CACHE_VERSION)
+
+    const entry = Object.values(good.files)[0] as { r: unknown[] }
+    const bad = [
+      '{"v":',
+      JSON.stringify({ ...good, v: USAGE_CACHE_VERSION + 1 }),
+      JSON.stringify({ ...good, dir: '/elsewhere' }),
+      JSON.stringify({ ...good, files: { x: { ...entry, r: ['k', -1] } } }),
+      JSON.stringify({
+        ...good,
+        files: Object.fromEntries(Object.keys(good.files).map((k) => [k, { ...entry, r: [1] }])),
+      }),
+    ]
+    for (const content of bad) {
+      await writeFile(cacheFile, content)
+      const fresh = cached()
+      expect(await opened(() => usageOf(fresh, '/p/proj'))).toHaveLength(1)
+      expect((await usageOf(fresh, '/p/proj')).all).toMatchObject({ messages: 1, input: 5 })
+      await fresh.saveCache()
+      expect(JSON.parse(await readFile(cacheFile, 'utf8'))).toEqual(good)
+    }
+  })
+
+  it('keeps the cached transcripts of folders a call did not ask about', async () => {
+    await put('/p/a', 's1.jsonl', line({ cwd: '/p/a', input: 1 }))
+    await put('/p/b', 's2.jsonl', line({ cwd: '/p/b', input: 2 }))
+    const svc = cached()
+    await svc.summarize(['/p/a', '/p/b'])
+    await svc.saveCache()
+
+    const onlyA = cached()
+    await usageOf(onlyA, '/p/a')
+    await appendFile(join(projects, encodeProjectPath('/p/a'), 's1.jsonl'), line({ cwd: '/p/a', input: 4 }))
+    await usageOf(onlyA, '/p/a')
+    await onlyA.saveCache()
+
+    const both = cached()
+    let result: Awaited<ReturnType<UsageService['summarize']>> | undefined
+    const reads = await opened(async () => (result = await both.summarize(['/p/a', '/p/b'])))
+    expect(reads).toEqual([]) // /p/a's growth was saved too
+    expect(result!.roots['/p/a'].all.input).toBe(5)
+    expect(result!.roots['/p/b'].all.input).toBe(2)
+  })
+
+  it('writes the cache atomically, soon after a scan changed it and then at most once per interval', async () => {
+    const file = await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const svc = new UsageService({
+      claudeDir,
+      now: () => NOW,
+      minRefreshMs: 0,
+      cacheFile,
+      cacheSaveDelayMs: 10,
+      cacheSaveIntervalMs: 3_600_000,
+    })
+    await usageOf(svc, '/p/proj')
+    await vi.waitFor(async () => expect((await stat(cacheFile)).isFile()).toBe(true))
+    await new Promise((r) => setTimeout(r, 50))
+    const written = (await stat(cacheFile)).mtimeMs
+    await appendFile(file, line({ input: 2 }))
+    await usageOf(svc, '/p/proj')
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await stat(cacheFile)).mtimeMs).toBe(written) // not again within the interval
+    expect(await readdir(dirname(cacheFile))).toEqual(['usage-cache.json']) // no temp file left behind
+
+    await svc.saveCache() // now
+    const restarted = cached()
+    expect(await opened(() => usageOf(restarted, '/p/proj'))).toEqual([])
+    expect((await usageOf(restarted, '/p/proj')).all.input).toBe(3)
+  })
+
+  it('writes nothing while nothing changed, and nothing without a cache file', async () => {
+    await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    await rm(cacheFile)
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    await expect(stat(cacheFile)).rejects.toThrow()
+
+    const plain = service()
+    await usageOf(plain, '/p/proj')
+    await plain.saveCache()
+    expect(await readdir(dirname(cacheFile))).toEqual([])
   })
 })

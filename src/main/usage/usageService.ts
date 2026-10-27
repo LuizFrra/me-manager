@@ -1,7 +1,7 @@
 import { readdirSync, statSync, type Dirent, type Stats } from 'node:fs'
-import { open, readdir } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { messageCost, totalTokens, type TokenCounts } from '../../shared/pricing'
 import type { UsageBucket, UsageModelTotals, UsagePeriod, UsageSummary, UsageTotals } from '../../shared/types'
 import { USAGE_PERIODS } from '../../shared/types'
@@ -29,6 +29,20 @@ export const DIR_SLICE = 32
 export const READ_CONCURRENCY = 16
 /** Lets the event loop run (IPC, the terminal's output) between slices of synchronous file system calls. */
 const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+/**
+ * The cache file's format: bumped whenever its layout or what a transcript line counts for changes, so that a cache
+ * written by another version is ignored (and rebuilt) instead of misread.
+ */
+export const USAGE_CACHE_VERSION = 1
+/** The cache is written this long after a scan changed it, so that a burst of changes is written once. */
+const DEFAULT_CACHE_SAVE_DELAY_MS = 2_000
+/**
+ * And then at most this often: a transcript that grew since is read on from its cached offset, so a cache a few
+ * minutes old costs only the bytes appended since.
+ */
+const DEFAULT_CACHE_SAVE_INTERVAL_MS = 5 * 60_000
+/** Messages serialized by a cache write before it lets other work run. */
+const CACHE_SLICE = 5_000
 /** Claude Code shortens project folder names longer than this and appends a hash. */
 const MAX_ENCODED_LENGTH = 200
 
@@ -152,8 +166,24 @@ export function parseUsageLine(line: string, fallbackSession = ''): ParsedUsageL
 }
 
 /**
+ * Whether `a` is the copy of a message whose cwd, session and model count, over `b`: the earlier one (a copy without
+ * a time last), then the first by cwd, session and model. A total order, so the copy that counts never depends on
+ * the order transcripts were read in.
+ */
+function countsOver(a: UsageRecord, b: UsageRecord): boolean {
+  const at = Number.isNaN(a.ts) ? Infinity : a.ts
+  const bt = Number.isNaN(b.ts) ? Infinity : b.ts
+  if (at !== bt) return at < bt
+  if (a.cwd !== b.cwd) return a.cwd < b.cwd
+  if (a.session !== b.session) return a.session < b.session
+  return a.model < b.model
+}
+
+/**
  * Two lines of the same message: Claude Code writes one per content block, and an early one can carry partial
- * usage (output still streaming), so each count takes the larger value.
+ * usage (output still streaming), so each count takes the larger value. A resumed or forked session repeats
+ * earlier messages in another transcript, maybe another cwd: the earliest copy says where it counts (countsOver).
+ * The result is the same whatever order the copies are merged in.
  */
 export function mergeRecords(a: UsageRecord, b: UsageRecord): UsageRecord {
   if (a === b) return a
@@ -164,17 +194,17 @@ export function mergeRecords(a: UsageRecord, b: UsageRecord): UsageRecord {
     cacheWrite5m: Math.max(a.cacheWrite5m, b.cacheWrite5m),
     cacheWrite1h: Math.max(a.cacheWrite1h, b.cacheWrite1h),
   }
-  const same =
-    tokens.input === a.input &&
-    tokens.output === a.output &&
-    tokens.cacheRead === a.cacheRead &&
-    tokens.cacheWrite5m === a.cacheWrite5m &&
-    tokens.cacheWrite1h === a.cacheWrite1h &&
-    (a.fast || !b.fast)
-  if (same) return a
   const fast = a.fast || b.fast
-  const ts = Number.isNaN(a.ts) ? b.ts : Number.isNaN(b.ts) ? a.ts : Math.min(a.ts, b.ts)
-  return usageRecord(tokens, ts, a.cwd, a.session, a.model, fast)
+  const first = countsOver(b, a) ? b : a
+  const holds = (r: UsageRecord): boolean =>
+    tokens.input === r.input &&
+    tokens.output === r.output &&
+    tokens.cacheRead === r.cacheRead &&
+    tokens.cacheWrite5m === r.cacheWrite5m &&
+    tokens.cacheWrite1h === r.cacheWrite1h &&
+    fast === r.fast
+  if (holds(first)) return first
+  return usageRecord(tokens, first.ts, first.cwd, first.session, first.model, fast)
 }
 
 /**
@@ -257,9 +287,75 @@ interface FileState {
   records: Map<string, UsageRecord>
 }
 
+/**
+ * Values per message in a cache entry's `r`: its key, the five token counts, its time (null: none), the indexes of
+ * its cwd, session and model in the entry's `s`, and 1 for fast mode (else 0).
+ */
+const RECORD_FIELDS = 11
+
+/** One transcript's cache entry, as JSON: its strings once each, its messages flattened (see RECORD_FIELDS). */
+function serializeFile(state: FileState): string {
+  const strings = new Map<string, number>()
+  const index = (s: string): number => {
+    let i = strings.get(s)
+    if (i === undefined) strings.set(s, (i = strings.size))
+    return i
+  }
+  const r: (string | number | null)[] = []
+  for (const [key, x] of state.records) {
+    const ts = Number.isNaN(x.ts) ? null : x.ts
+    r.push(key, x.input, x.output, x.cacheRead, x.cacheWrite5m, x.cacheWrite1h, ts)
+    r.push(index(x.cwd), index(x.session), index(x.model), x.fast ? 1 : 0)
+  }
+  const { ino, size, mtimeMs, offset } = state
+  return JSON.stringify({ ino, size, mtimeMs, offset, s: [...strings.keys()], r })
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+
+/** A cache entry back as a file's state; null when anything in it is off (the transcript is then read again). */
+function parseCachedFile(entry: unknown, intern: (s: string) => string): FileState | null {
+  if (!entry || typeof entry !== 'object') return null
+  const { ino, size, mtimeMs, offset, s, r } = entry as Record<string, unknown>
+  if (!isCount(ino) || !isCount(size) || !isCount(mtimeMs) || !isCount(offset) || offset > size) return null
+  if (!Array.isArray(s) || !Array.isArray(r) || r.length % RECORD_FIELDS !== 0) return null
+  if (!s.every((x) => typeof x === 'string')) return null
+  const strings = (s as string[]).map(intern)
+  const str = (v: unknown): string | undefined => (Number.isInteger(v) ? strings[v as number] : undefined)
+  const records = new Map<string, UsageRecord>()
+  for (let i = 0; i < r.length; i += RECORD_FIELDS) {
+    const key = r[i]
+    const ts = r[i + 6]
+    const fast = r[i + 10]
+    const [cwd, session, model] = [str(r[i + 7]), str(r[i + 8]), str(r[i + 9])]
+    if (typeof key !== 'string' || key === '' || (ts !== null && typeof ts !== 'number')) return null
+    if (!cwd || session === undefined || !model || (fast !== 0 && fast !== 1)) return null
+    for (let j = i + 1; j <= i + 5; j++) if (!isCount(r[j])) return null
+    const tokens: TokenCounts = {
+      input: r[i + 1],
+      output: r[i + 2],
+      cacheRead: r[i + 3],
+      cacheWrite5m: r[i + 4],
+      cacheWrite1h: r[i + 5],
+    }
+    // The cost is worked out again: prices may have changed since.
+    records.set(key, usageRecord(tokens, ts ?? NaN, cwd, session, model, fast === 1))
+  }
+  return { ino, size, mtimeMs, offset, records }
+}
+
 export interface UsageServiceOptions {
   /** The Claude config folder; transcripts are read from `<claudeDir>/projects`. Default: claudeConfigDir(). */
   claudeDir?: string
+  /**
+   * Where to keep what was read from each transcript across restarts, so that one unchanged since is not parsed
+   * again. Default: none (nothing is written).
+   */
+  cacheFile?: string
+  /** How long after a change the cache is written. Default 2 s. */
+  cacheSaveDelayMs?: number
+  /** The least time between two writes of the cache. Default 5 minutes. */
+  cacheSaveIntervalMs?: number
   /** The clock for today / this week / this month. */
   now?: () => Date
   /** Calls closer together than this reuse the last scan. Default 1 s; 0 always rescans. */
@@ -376,21 +472,43 @@ const normalizeRoot = (root: string): string => {
 const contains = (root: string, cwd: string): boolean =>
   cwd === root || cwd.startsWith(root.endsWith(sep) ? root : root + sep)
 
+/** Totals by period mask (sparse): today implies this week and this month, but a week can start last month. */
+type Cells = Accumulator[]
+
+/** Adds a record to its cell for the periods it falls in; NaN (no timestamp) is in no period but `all`. */
+function addToCells(cells: Cells, r: UsageRecord, starts: Record<UsagePeriod, number>): void {
+  const mask =
+    (r.ts >= starts.today ? PERIOD_BIT.today : 0) |
+    (r.ts >= starts.week ? PERIOD_BIT.week : 0) |
+    (r.ts >= starts.month ? PERIOD_BIT.month : 0)
+  ;(cells[mask] ??= new Accumulator(true)).add(r)
+}
+
+/** Each cwd's totals by period mask, for the day of `now`. */
+export function cellsByCwd(records: Iterable<UsageRecord>, now: Date): Map<string, Cells> {
+  const starts = periodStarts(now)
+  const out = new Map<string, Cells>()
+  for (const r of records) {
+    let cells = out.get(r.cwd)
+    if (!cells) out.set(r.cwd, (cells = []))
+    addToCells(cells, r, starts)
+  }
+  return out
+}
+
 /**
- * Sums usage per root and per group. Each message counts for the most specific root containing its cwd (a task
- * worktree inside a folder counts for the task), and for every group listing that root.
+ * Sums usage per root and per group from each cwd's totals (see cellsByCwd). Each message counts for the most
+ * specific root containing its cwd (a task worktree inside a folder counts for the task), and for every group
+ * listing that root.
  *
- * Each record is added once, to its root's cell for the periods it falls in (a bit mask: today implies this week
- * and this month, but a week can start last month). The periods, roots and groups are then sums of those few cells,
- * instead of every record being added to every period of its root and of each of its groups.
+ * Each record was added once, to its cwd's cell for the periods it falls in. The periods, roots and groups are sums
+ * of those few cells, instead of every record being added to every period of its root and of each of its groups.
  */
-export function aggregateUsage(
-  records: Iterable<UsageRecord>,
+export function summarizeCells(
+  cells: ReadonlyMap<string, Cells>,
   roots: readonly string[],
   groups: Readonly<Record<string, readonly string[]>>,
-  now: Date,
 ): UsageSummaries {
-  const starts = periodStarts(now)
   type Sink = Record<UsagePeriod, Accumulator>
   const groupRoots = Object.entries(groups).map(
     ([name, members]) => [name, new Set(members.map(normalizeRoot))] as const,
@@ -398,38 +516,24 @@ export function aggregateUsage(
   const known = new Set(roots.map(normalizeRoot))
   for (const [, members] of groupRoots) for (const n of members) known.add(n)
   const ordered = [...known].sort((a, b) => b.length - a.length)
-  const rootOfCwd = new Map<string, string | null>()
-  const match = (cwd: string): string | null => {
-    let hit = rootOfCwd.get(cwd)
-    if (hit === undefined) {
-      hit = ordered.find((r) => contains(r, cwd)) ?? null
-      rootOfCwd.set(cwd, hit)
-    }
-    return hit
-  }
-
-  // Normalized root -> its records' totals, by period mask.
-  const cellsOf = new Map<string, Accumulator[]>()
-  for (const r of records) {
-    const root = match(r.cwd)
-    if (root === null) continue
-    let cells = cellsOf.get(root)
-    if (!cells) cellsOf.set(root, (cells = []))
-    // NaN (no timestamp) is in no period but `all`.
-    const mask =
-      (r.ts >= starts.today ? PERIOD_BIT.today : 0) |
-      (r.ts >= starts.week ? PERIOD_BIT.week : 0) |
-      (r.ts >= starts.month ? PERIOD_BIT.month : 0)
-    const cell = (cells[mask] ??= new Accumulator(true))
-    cell.add(r)
+  // Normalized root -> the totals of the cwds it is the most specific root of.
+  const cellsOf = new Map<string, Cells[]>()
+  for (const [cwd, c] of cells) {
+    const root = ordered.find((r) => contains(r, cwd))
+    if (root === undefined) continue
+    let list = cellsOf.get(root)
+    if (!list) cellsOf.set(root, (list = []))
+    list.push(c)
   }
 
   const summaryOf = (members: Iterable<string>): UsageSummary => {
     const sink = Object.fromEntries(USAGE_PERIODS.map((p) => [p, new Accumulator(true)])) as Sink
     for (const n of members) {
-      cellsOf.get(n)?.forEach((cell, mask) => {
-        for (const p of USAGE_PERIODS) if (p === 'all' || mask & PERIOD_BIT[p]) sink[p].merge(cell)
-      })
+      for (const c of cellsOf.get(n) ?? []) {
+        c.forEach((cell, mask) => {
+          for (const p of USAGE_PERIODS) if (p === 'all' || mask & PERIOD_BIT[p]) sink[p].merge(cell)
+        })
+      }
     }
     return Object.fromEntries(USAGE_PERIODS.map((p) => [p, sink[p].bucket()])) as Record<UsagePeriod, UsageBucket>
   }
@@ -439,11 +543,22 @@ export function aggregateUsage(
   }
 }
 
+/** Sums usage per root and per group (see summarizeCells). */
+export const aggregateUsage = (
+  records: Iterable<UsageRecord>,
+  roots: readonly string[],
+  groups: Readonly<Record<string, readonly string[]>>,
+  now: Date,
+): UsageSummaries => summarizeCells(cellsByCwd(records, now), roots, groups)
+
 /**
  * Reads Claude Code's transcripts (`<claudeDir>/projects/<encoded cwd>/**.jsonl`), read-only, and sums their
  * usage. Only project folders whose names match a requested root (or a folder inside one) are read. Each file
  * is parsed once and then only for the bytes appended since; a file that shrank or was replaced is parsed again
  * from the start. Results are cached until a transcript changes (or the day does).
+ *
+ * With a cache file, what was read from each transcript survives a restart: one unchanged since (same inode, size
+ * and mtime) is not read at all, and one that grew is read on from where the cache left it.
  */
 export class UsageService implements UsageApi {
   readonly projectsDir: string
@@ -461,15 +576,39 @@ export class UsageService implements UsageApi {
   private merged = new Map<string, UsageRecord>()
   /** Set when a file's records were dropped (deleted, replaced, out of scope): `merged` is then rebuilt. */
   private mergedStale = false
+  /** `merged` by cwd, so that a change sums again only the messages of its cwd. */
+  private mergedByCwd = new Map<string, Map<string, UsageRecord>>()
+  /**
+   * Each cwd's totals for the day `cellsDay` (see cellsByCwd); a cwd whose messages changed since is left out, and
+   * summed again on the next summarize.
+   */
+  private cells = new Map<string, Cells>()
+  private cellsDay = NaN
   private cache: { key: string; result: UsageSummaries } | null = null
   private lastScan: { at: number; dirsKey: string } | null = null
   private scanning: Promise<void> | null = null
   private warnedCap = false
+  private readonly cacheFile: string | null
+  private readonly cacheSaveDelayMs: number
+  private readonly cacheSaveIntervalMs: number
+  /**
+   * Transcripts in the cache file that no scan has found yet (their folders were not asked about), taken into
+   * `files` as scans find them; null until the cache file is read, on the first scan.
+   */
+  private cachedFiles: Map<string, FileState> | null = null
+  /** Set when what the cache file should hold changed since it was last written. */
+  private cacheDirty = false
+  private saveTimer: NodeJS.Timeout | null = null
+  private saving: Promise<void> | null = null
+  private lastSaveAt = -Infinity
 
   constructor(options: UsageServiceOptions = {}) {
     this.projectsDir = join(options.claudeDir ?? claudeConfigDir(), 'projects')
     this.now = options.now ?? (() => new Date())
     this.minRefreshMs = options.minRefreshMs ?? DEFAULT_MIN_REFRESH_MS
+    this.cacheFile = options.cacheFile ?? null
+    this.cacheSaveDelayMs = options.cacheSaveDelayMs ?? DEFAULT_CACHE_SAVE_DELAY_MS
+    this.cacheSaveIntervalMs = options.cacheSaveIntervalMs ?? DEFAULT_CACHE_SAVE_INTERVAL_MS
   }
 
   async summarize(
@@ -481,25 +620,53 @@ export class UsageService implements UsageApi {
     const now = this.now()
     const key = JSON.stringify([this.generation, startOfDay(now), roots, groups])
     if (this.cache?.key === key) return this.cache.result
-    const result = aggregateUsage(this.mergedRecords(), roots, groups, now)
+    const result = summarizeCells(this.cwdCells(now), roots, groups)
     this.cache = { key, result }
     return result
   }
 
-  private mergedRecords(): Iterable<UsageRecord> {
+  /** Every cwd's totals, summing again only the cwds whose messages changed (all of them on a new day). */
+  private cwdCells(now: Date): ReadonlyMap<string, Cells> {
     if (this.mergedStale) {
       this.mergedStale = false
       this.merged.clear()
+      this.mergedByCwd.clear()
+      this.cells.clear()
       for (const [path, state] of this.files) for (const [key, record] of state.records) this.mergeIn(path, key, record)
     }
-    return this.merged.values()
+    const day = startOfDay(now)
+    if (day !== this.cellsDay) {
+      this.cells.clear()
+      this.cellsDay = day
+    }
+    const starts = periodStarts(now)
+    for (const [cwd, records] of this.mergedByCwd) {
+      if (this.cells.has(cwd)) continue
+      const cells: Cells = []
+      for (const r of records.values()) addToCells(cells, r, starts)
+      this.cells.set(cwd, cells)
+    }
+    return this.cells
   }
 
   private mergeIn(path: string, key: string, record: UsageRecord): void {
     // Keyless lines are unique to their file and offset.
     const k = key.startsWith('@') ? `${path}${key}` : key
     const prev = this.merged.get(k)
-    this.merged.set(k, prev ? mergeRecords(prev, record) : record)
+    const next = prev ? mergeRecords(prev, record) : record
+    if (next === prev) return
+    this.merged.set(k, next)
+    if (prev && prev.cwd !== next.cwd) {
+      // An earlier copy, from another cwd.
+      const old = this.mergedByCwd.get(prev.cwd)
+      old?.delete(k)
+      if (old?.size === 0) this.mergedByCwd.delete(prev.cwd)
+      this.cells.delete(prev.cwd)
+    }
+    let byCwd = this.mergedByCwd.get(next.cwd)
+    if (!byCwd) this.mergedByCwd.set(next.cwd, (byCwd = new Map()))
+    byCwd.set(k, next)
+    this.cells.delete(next.cwd)
   }
 
   private intern(s: string): string {
@@ -521,6 +688,7 @@ export class UsageService implements UsageApi {
     this.scanning = this.scan(encoded)
       .then(() => {
         this.lastScan = { at: Date.now(), dirsKey }
+        this.scheduleSave()
       })
       .finally(() => {
         this.scanning = null
@@ -529,6 +697,7 @@ export class UsageService implements UsageApi {
   }
 
   private async scan(encodedRoots: string[]): Promise<void> {
+    this.cachedFiles ??= await this.loadCache()
     let entries: Dirent[] = []
     try {
       entries = await readdir(this.projectsDir, { withFileTypes: true })
@@ -550,6 +719,15 @@ export class UsageService implements UsageApi {
       this.files.delete(path) // deleted, or no longer under a requested root
       this.generation++
       this.mergedStale = true
+      this.cacheDirty = true
+    }
+    // Cached transcripts of the folders just listed that are not there any more were deleted since.
+    const listed = new Set(dirs)
+    for (const path of this.cachedFiles.keys()) {
+      if (seen.has(path) || !listed.has(join(this.projectsDir, path.slice(this.projectsDir.length + 1).split(sep)[0])))
+        continue
+      this.cachedFiles.delete(path)
+      this.cacheDirty = true
     }
     const changed: { path: string; st: Stats }[] = []
     for (let i = 0; i < found.length; i += STAT_SLICE) {
@@ -561,7 +739,7 @@ export class UsageService implements UsageApi {
         } catch {
           // Unreadable: keep what was read before, try again next time.
         }
-        const known = this.files.get(path)
+        const known = this.files.get(path) ?? this.adopt(path)
         if (!st || (known && st.ino === known.ino && st.size === known.size && st.mtimeMs === known.mtimeMs)) continue
         changed.push({ path, st })
       }
@@ -574,6 +752,92 @@ export class UsageService implements UsageApi {
         // Unreadable or vanished mid-scan: keep what was read before, try again next time.
       }
     })
+  }
+
+  /** A transcript's state from the cache file, now tracked, its messages merged in; undefined when it has none. */
+  private adopt(path: string): FileState | undefined {
+    const state = this.cachedFiles?.get(path)
+    if (!state) return undefined
+    this.cachedFiles!.delete(path)
+    this.files.set(path, state)
+    for (const [key, record] of state.records) this.mergeIn(path, key, record)
+    this.generation++
+    return state
+  }
+
+  /** The cache file's transcripts; none when it is missing, unreadable, corrupt or from another version or folder. */
+  private async loadCache(): Promise<Map<string, FileState>> {
+    const files = new Map<string, FileState>()
+    if (!this.cacheFile) return files
+    let data: unknown
+    try {
+      data = JSON.parse(await readFile(this.cacheFile, 'utf8'))
+    } catch {
+      return files // none yet, or unusable: rebuilt by reading the transcripts
+    }
+    const d = data as Record<string, unknown> | null
+    if (!d || typeof d !== 'object' || d.v !== USAGE_CACHE_VERSION || d.dir !== this.projectsDir) return files
+    if (!d.files || typeof d.files !== 'object') return files
+    for (const [path, entry] of Object.entries(d.files)) {
+      const state = path.startsWith(this.projectsDir + sep) ? parseCachedFile(entry, (s) => this.intern(s)) : null
+      if (state) files.set(path, state)
+      else this.cacheDirty = true // left out of the next write; the transcript is read again if found
+    }
+    return files
+  }
+
+  private scheduleSave(): void {
+    if (!this.cacheFile || !this.cacheDirty || this.saveTimer) return
+    const wait = Math.max(this.cacheSaveDelayMs, this.lastSaveAt + this.cacheSaveIntervalMs - Date.now())
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      void this.saveCache()
+    }, wait)
+    this.saveTimer.unref()
+  }
+
+  /** Writes the cache file now, if what it should hold changed since the last write. One write at a time. */
+  async saveCache(): Promise<void> {
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    while (this.saving) await this.saving
+    const file = this.cacheFile
+    if (!file || !this.cacheDirty) return
+    this.cacheDirty = false
+    this.saving = this.writeCache(file)
+      .catch((err) => {
+        this.cacheDirty = true
+        console.warn(`usage: could not write ${file}: ${(err as Error).message}`)
+      })
+      .finally(() => {
+        this.saving = null
+        this.lastSaveAt = Date.now()
+      })
+    await this.saving
+  }
+
+  /**
+   * Written whole to a temporary file renamed over the old one, so a crash never leaves half a cache. Each entry is
+   * serialized in one go, so it is consistent even while a scan runs between slices (re-reading lines a cache
+   * already has changes nothing: merging takes the larger counts).
+   */
+  private async writeCache(file: string): Promise<void> {
+    const entries = [...this.files, ...(this.cachedFiles ?? [])]
+    const parts: string[] = []
+    let slice = 0
+    for (const [path, state] of entries) {
+      parts.push(`${JSON.stringify(path)}:${serializeFile(state)}`)
+      slice += state.records.size
+      if (slice >= CACHE_SLICE) {
+        slice = 0
+        await turn()
+      }
+    }
+    const head = JSON.stringify({ v: USAGE_CACHE_VERSION, dir: this.projectsDir }).slice(0, -1)
+    await mkdir(dirname(file), { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    await writeFile(tmp, `${head},"files":{${parts.join(',')}}}\n`)
+    await rename(tmp, file)
   }
 
   /** The transcripts in `dirs` and their subfolders, level by level (each session's subagents have a folder). */
@@ -613,11 +877,14 @@ export class UsageService implements UsageApi {
       st.mtimeMs < known.mtimeMs ||
       (st.size === known.size && st.mtimeMs !== known.mtimeMs) // rewritten in place
     let current = known!
+    this.cacheDirty = true
     if (replaced) {
-      if (known) this.mergedStale = true // its old records are merged in
+      // Its old records are merged in: the merged set is rebuilt from the files, with the new records once they are
+      // read, or still the old ones if the read fails (it is tried again next time).
+      if (known) this.mergedStale = true
       current = { ino: st.ino, size: 0, mtimeMs: 0, offset: 0, records: new Map() }
-      // Kept before reading, so that whatever a failed read merged in is accounted for.
-      this.files.set(path, current)
+      // A new transcript is tracked before reading, so that whatever a failed read merged in is accounted for.
+      if (!known) this.files.set(path, current)
     }
     const session = basename(path, '.jsonl')
     let changed = replaced && known !== undefined
@@ -644,6 +911,7 @@ export class UsageService implements UsageApi {
       current.offset = offset
       current.size = st.size
       current.mtimeMs = st.mtimeMs
+      this.files.set(path, current)
     } finally {
       if (changed) this.generation++
     }

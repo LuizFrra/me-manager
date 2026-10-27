@@ -25,6 +25,7 @@ import {
   tmuxConfFile,
   TMUX_SOCKET,
   uiStateFile,
+  usageCacheFile,
   worktreesRoot,
 } from './paths'
 import { PromptFiles } from './promptFiles'
@@ -145,7 +146,7 @@ async function bootstrap(): Promise<void> {
     settings,
     ui: new UiStateStore(uiStateFile()),
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
-    usage: new UsageService(), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
+    usage: new UsageService({ cacheFile: usageCacheFile() }), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
     promptFiles,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,

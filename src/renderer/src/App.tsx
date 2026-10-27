@@ -58,6 +58,7 @@ import { Toasts } from './components/Toasts'
 import { PrereqScreen } from './components/PrereqScreen'
 import { startVisibleInterval } from './lib/visibleInterval'
 import { keepIfEqual } from './lib/keepIfEqual'
+import { withStableCallbacks } from './lib/stableCallbacks'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { cleanError, useToasts } from './lib/toasts'
@@ -91,6 +92,11 @@ import { ArchivedTaskView } from './components/ArchivedTaskView'
 import { formatReview, reviewLocation, type ReviewComment, type ReviewDraft } from './lib/review'
 
 // The panel pulls in Markdown, Mermaid, highlight.js and the diff view; load it on first open.
+/**
+ * The sidebar, re-rendered only when what it shows changed: App re-renders at every poll that changed anything (the
+ * usage, a tab, a dev URL) and passes it new callbacks each time, and it renders every task.
+ */
+const StableSidebar = withStableCallbacks(Sidebar)
 const SidePanel = lazy(() => import('./components/files/SidePanel').then((m) => ({ default: m.SidePanel })))
 
 /** What the name dialog asks: a new name, or (with `initial`) a new display name for a theme or task. */
@@ -2118,7 +2124,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   // Everything below can read the resolved appearance (the terminal and Mermaid need it; CSS uses the root attribute).
   const content = (
     <div className={`app${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
-      <Sidebar
+      <StableSidebar
         rail={sidebarCollapsed}
         unread={unread}
         onToggleSidebar={toggleSidebar}

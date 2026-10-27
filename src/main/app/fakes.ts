@@ -248,7 +248,10 @@ export class FakeTmux implements TmuxApi {
     this.calls.push(`killSession ${name}`)
     this.sessions.delete(name)
   }
+  /** list-windows calls for one session (listWindows and listWindowActivity). */
+  windowListCalls = 0
   async listWindows(session: string): Promise<TabInfo[]> {
+    this.windowListCalls++
     const s = this.sessions.get(session)
     if (!s) throw new Error(`no session ${session}`)
     return s.windows.map((w, index) => ({
@@ -316,12 +319,15 @@ export class FakeTmux implements TmuxApi {
   tails = new Map<string, string>()
   tailCalls: string[] = []
   async listWindowActivity(session: string): Promise<WindowActivity[]> {
+    this.windowListCalls++
     const s = this.sessions.get(session)
     if (!s) return []
     return s.windows.map((w, index) => ({
       index,
-      id: this.idOf(w),
       name: w.name,
+      active: index === s.active,
+      ...(w.dead ? { dead: true as const } : {}),
+      id: this.idOf(w),
       activity: this.windowActivitySec.get(`${session}:${w.name}`) ?? 0,
     }))
   }

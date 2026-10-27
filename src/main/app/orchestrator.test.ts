@@ -20,6 +20,7 @@ import {
   resolvePrompt,
   RUN_RESTART_GRACE_MS,
   runWindowCommand,
+  DEV_URL_BUSY_RESCAN_MS,
   DEV_URL_RESCAN_MS,
   DEV_URL_SCROLLBACK_LINES,
 } from './orchestrator'
@@ -2679,6 +2680,55 @@ describe('Orchestrator: dev-server URLs', () => {
     ctx.clock.ms += DEV_URL_RESCAN_MS
     await ctx.orch.getDevUrls(ctx.target) // captured after that second: settled
     expect(ctx.tmux.tailCalls).toEqual([])
+  })
+
+  it("captures Claude's window while it works at most every DEV_URL_BUSY_RESCAN_MS, and again once it is done", async () => {
+    const ctx = await withTask()
+    const sec = (): number => Math.floor(ctx.clock.ms / 1000)
+    print(ctx, 'claude', 'Thinking…', sec())
+    await ctx.orch.getDevUrls(ctx.target)
+    ctx.tmux.tailCalls = []
+    // Its spinner makes it print every second: captured again only after DEV_URL_BUSY_RESCAN_MS.
+    const start = ctx.clock.ms
+    while (ctx.clock.ms + DEV_URL_RESCAN_MS - start < DEV_URL_BUSY_RESCAN_MS) {
+      ctx.clock.ms += DEV_URL_RESCAN_MS
+      print(ctx, 'claude', 'Started http://localhost:8080 · Thinking…', sec())
+      await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([])
+    }
+    expect(ctx.tmux.tailCalls).toEqual([])
+    ctx.clock.ms = start + DEV_URL_BUSY_RESCAN_MS
+    print(ctx, 'claude', 'Started http://localhost:8080 · Thinking…', sec())
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toEqual([
+      { url: 'http://localhost:8080/', index: 0, tab: 'claude' },
+    ])
+    expect(ctx.tmux.tailCalls).toEqual([`${SESSION}:claude 200`])
+
+    // Done: it stops printing, and is captured once more when the next poll sees it quiet.
+    ctx.tmux.tailCalls = []
+    ctx.clock.ms += 1000
+    print(ctx, 'claude', 'Started http://localhost:8080\nAlso http://localhost:8081', sec())
+    ctx.clock.ms += DEV_URL_RESCAN_MS + 1000
+    await expect(ctx.orch.getDevUrls(ctx.target)).resolves.toHaveLength(2)
+    ctx.clock.ms += DEV_URL_RESCAN_MS
+    await ctx.orch.getDevUrls(ctx.target)
+    expect(ctx.tmux.tailCalls).toEqual([`${SESSION}:claude 200`])
+  })
+
+  it("lists a poll's tabs and scans its URLs with one list-windows call, never kept for the next poll", async () => {
+    const ctx = await withTask()
+    ctx.tmux.windowListCalls = 0
+    const [tabs] = await Promise.all([ctx.orch.listTabs(ctx.target), ctx.orch.getDevUrls(ctx.target)])
+    expect(tabs).toEqual([
+      { index: 0, name: 'claude', active: false },
+      { index: 1, name: 'shell', active: false },
+      { index: 2, name: 'shell 2', active: true },
+    ])
+    expect(ctx.tmux.windowListCalls).toBe(1)
+    await ctx.orch.closeTab(ctx.target, 1)
+    await expect(ctx.orch.listTabs(ctx.target)).resolves.toEqual([
+      { index: 0, name: 'claude', active: true },
+      { index: 1, name: 'shell 2', active: false },
+    ])
   })
 
   it('drops the URLs of a tab once it is closed', async () => {
