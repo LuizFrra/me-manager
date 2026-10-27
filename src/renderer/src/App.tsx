@@ -27,6 +27,7 @@ import type {
 import { hasUnsavedWork, isArchived, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
 import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
 import { targetKey } from '../../shared/naming'
+import { usageTokens } from '../../shared/usage'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { Sidebar } from './components/Sidebar'
@@ -2461,6 +2462,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 session={sessionState(status, targetKey(selected))}
                 tabs={tabs.length}
                 todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
+                todayTokens={
+                  usageCompany && usage?.key === targetKey(selected) ? usageTokens(usage.summary.today) : undefined
+                }
                 dailyBudget={budgets?.daily}
                 skipPermissions={sessionFlags.skipPermissions}
                 run={run}

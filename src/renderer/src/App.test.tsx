@@ -4780,12 +4780,16 @@ describe('App Claude accounts', () => {
     const user = userEvent.setup()
     const usage = emptyUsageSummary()
     usage.all = { ...usage.all, output: 2000 } // none yet billed to the company: its account is
+    usage.today = { ...usage.today, output: 500 }
     const api = repoApi({ getUsage: async () => usage })
     await api.updateProfile('default', { billing: 'company' })
     render(<App api={api} />)
     await createRepoAndTask(user)
     const badge = await within(screen.getByRole('banner')).findByRole('button', { name: /^Claude usage:/ })
     expect(badge).toHaveAccessibleName('Claude usage: 2k tok, billed to your company')
+    // The status bar's "today" says tokens too, not a cost.
+    expect(screen.getByRole('button', { name: "Today's tokens 500, billed to your company: show usage" })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /^Today's cost/ })).not.toBeInTheDocument()
   })
 
   it('offers no choice of account while Default is the only one', async () => {
