@@ -605,21 +605,36 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setDropAt(null)
         }}
       >
-        <input
-          ref={filterRef}
-          className="sidebar-filter"
-          aria-label="Filter sidebar"
-          placeholder={`Filter (${shortcutLabel('filterSidebar')})`}
-          spellCheck={false}
-          value={p.filter}
-          onChange={(e) => p.onFilterChange(e.target.value)}
-          onKeyDown={(e) => {
-            // An input method's Esc cancels what it composes.
-            if (e.key !== 'Escape' || e.nativeEvent.isComposing) return
-            e.preventDefault()
-            p.onFilterChange('')
-          }}
-        />
+        <div className="sidebar-filter-box">
+          <input
+            ref={filterRef}
+            className="sidebar-filter"
+            aria-label="Filter sidebar"
+            placeholder={`Filter (${shortcutLabel('filterSidebar')})`}
+            spellCheck={false}
+            value={p.filter}
+            onChange={(e) => p.onFilterChange(e.target.value)}
+            onKeyDown={(e) => {
+              // An input method's Esc cancels what it composes.
+              if (e.key !== 'Escape' || e.nativeEvent.isComposing) return
+              e.preventDefault()
+              p.onFilterChange('')
+            }}
+          />
+          {p.filter && (
+            <button
+              className="sidebar-filter-clear"
+              aria-label="Clear filter"
+              title="Clear filter (Esc)"
+              onClick={() => {
+                p.onFilterChange('')
+                navRef.current?.querySelector<HTMLElement>('.sidebar-filter')?.focus()
+              }}
+            >
+              <X {...ICON} />
+            </button>
+          )}
+        </div>
         <div className="sidebar-header">
           <span>Themes</span>
           <button aria-label="New theme" title="New theme" onClick={p.onAddTheme}>

@@ -125,6 +125,24 @@ describe('Sidebar header and tree', () => {
     expect(current()).toEqual([])
   })
 
+  it('clears the filter from a button in it, while it holds text, keeping the focus in it', async () => {
+    const user = userEvent.setup()
+    function Filtered(): React.JSX.Element {
+      const [filter, setFilter] = useState('fix')
+      return <Sidebar {...sidebarProps({ filter, onFilterChange: setFilter })} />
+    }
+    render(<Filtered />)
+    expect(screen.queryByRole('button', { name: '○ docs' })).not.toBeInTheDocument()
+    const clear = screen.getByRole('button', { name: 'Clear filter' })
+    expect(clear).toHaveAttribute('title', 'Clear filter (Esc)')
+    await user.click(clear)
+    const box = screen.getByRole('textbox', { name: 'Filter sidebar' })
+    expect(box).toHaveValue('')
+    expect(box).toHaveFocus()
+    expect(screen.getByRole('button', { name: '○ docs' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clear filter' })).not.toBeInTheDocument()
+  })
+
   it('says whether each theme and repository is expanded', () => {
     renderSidebar({ collapsed: new Set(['api']) })
     expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('aria-expanded', 'true')
