@@ -200,4 +200,37 @@ describe('TabBar keys and pointer', () => {
     expect(tab(/^npm run dev/)).toHaveFocus()
     expect(onSelect).toHaveBeenCalledTimes(5)
   })
+
+  it('scrolls the active tab into view when the tabs overflow', () => {
+    const scrolled: Element[] = []
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+    try {
+      const props = {
+        onSelect: () => {},
+        onClose: () => {},
+        onNew: () => {},
+        onRestartClaude: () => {},
+        onCopyTranscript: () => {},
+        onSaveTranscript: () => {},
+        panelOpen: false,
+        onTogglePanel: () => {},
+      }
+      const { rerender } = render(<TabBar tabs={tabs} {...props} />)
+      expect(scrolled.at(-1)).toBe(tab('shell'))
+      rerender(<TabBar tabs={tabs.map((t) => ({ ...t, active: t.index === 5 }))} {...props} />)
+      expect(scrolled.at(-1)).toBe(tab(/^npm run dev/))
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
+  })
+
+  it('shows each full tab name in its tooltip, and the close shortcut on the active tab', () => {
+    renderTabs()
+    expect(tab(/^npm run dev/)).toHaveAttribute('title', 'npm run dev -- --host 0.0.0.0 --port 5173')
+    expect(screen.getByRole('button', { name: 'Close tab shell' })).toHaveAttribute('title', 'Close tab (Ctrl+Shift+W)')
+    expect(screen.getByRole('button', { name: 'Close tab claude' })).toHaveAttribute('title', 'Close tab')
+  })
 })

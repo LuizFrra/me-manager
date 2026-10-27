@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { RUN_WINDOW } from '../../../shared/runCommand'
 import type { TabInfo } from '../../../shared/types'
 import { PANEL_SHORTCUT_LABEL, shortcutLabel } from '../lib/shortcuts'
@@ -29,6 +29,11 @@ export function TabBar(props: {
   const [menu, setMenu] = useState<OpenMenu | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
   const listRef = useRef<HTMLDivElement>(null)
+  // Ctrl+Shift+[ / ] and the terminal switch tabs too: the active one stays in view when the tabs overflow.
+  const activeIndex = props.tabs.find((t) => t.active)?.index
+  useEffect(() => {
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [activeIndex])
   // A tab that closed meanwhile (from the terminal, say) takes its menu with it.
   // Its items follow the tab as it is now: a run tab that stopped meanwhile has no Stop.
   const menuTab = menu && props.tabs.find((t) => t.index === menu.tab.index)
@@ -81,6 +86,7 @@ export function TabBar(props: {
 
   return (
     <div className="tabbar">
+      {/* Scrolls sideways when the tabs don't fit, keeping the buttons after it in view. */}
       <div className="tabbar-tabs" role="tablist" aria-label="Terminal tabs" ref={listRef}>
         {props.tabs.map((t, at) => (
           <div key={t.index} className={t.active ? 'tab active' : 'tab'}>
@@ -90,7 +96,7 @@ export function TabBar(props: {
               aria-haspopup="menu"
               tabIndex={t.active ? 0 : -1}
               className={t.dead ? 'dead' : undefined}
-              title={t.dead ? 'Stopped: the command exited. Restart it from the tab menu.' : undefined}
+              title={t.dead ? 'Stopped: the command exited. Restart it from the tab menu.' : t.name}
               onClick={() => props.onSelect(t.index)}
               onKeyDown={(e) => onTabKey(e, at)}
               onContextMenu={(e) => openMenu(e, t)}
@@ -101,6 +107,7 @@ export function TabBar(props: {
             <button
               className="tab-close"
               aria-label={`Close tab ${t.name}`}
+              title={t.active ? `Close tab (${shortcutLabel('closeTab')})` : 'Close tab'}
               tabIndex={-1}
               onClick={() => props.onClose(t.index)}
             >

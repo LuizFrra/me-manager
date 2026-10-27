@@ -680,18 +680,31 @@ button:disabled {
   border-bottom: 1px solid var(--divider);
   background: var(--bg);
 }
+/* Many tabs scroll sideways; the padding keeps the focus ring inside the scrolling box. */
 .tabbar-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
+  margin: -3px;
+  padding: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .tab {
+  flex: none;
   display: flex;
   align-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--muted);
+}
+/* A long command's name is cut; its tooltip has all of it. */
+.tab [role='tab'] {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tab:hover {
   background: var(--hover);
