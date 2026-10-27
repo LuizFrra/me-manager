@@ -10,6 +10,7 @@ import type {
   MeManagerApi,
   NewTaskOptions,
   PrereqResult,
+  ProfileStatus,
   Settings,
   TabInfo,
   Target,
@@ -500,6 +501,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const gitBusyRef = useRef<Record<string, GitActionKind>>({})
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  // The Claude profiles (Default first), with their login state when last read; [] until main answers.
+  const [, setProfiles] = useState<ProfileStatus[]>([])
   // 'system' until main answers, which already matches: prefers-color-scheme follows main's nativeTheme.themeSource.
   const appearance = useDocumentAppearance(settings.appearance)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
@@ -798,6 +801,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
     api.getGitTools().then(setGitTools, () => {}) // without it, "PR" says gh is missing
     void attempt(async () => setSettings(await api.getSettings()))
+    api.listProfiles().then(setProfiles, () => {}) // without them, only the account badges are missing
   }, [api, attempt, checkPrereqs])
 
   const pollMs = settings.pollIntervalMs
@@ -2533,6 +2537,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           settings={settings}
           onSave={(next) => saveSettings(dialog.id, next)}
           onCancel={() => closeDialog(dialog.id)}
+          accounts={{
+            api,
+            target:
+              selected && header && !isArchivedTarget(state, selected)
+                ? { target: selected, label: header.title }
+                : null,
+            onChange: setProfiles,
+            onLogin: (target, next) => {
+              if (sameTarget(selectedRef.current, target)) setTabs(next)
+            },
+          }}
         />
       )}
       {paletteOpen && (
