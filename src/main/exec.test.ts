@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CommandError, run, runTail, streamNul } from './exec'
+import { CommandError, KILL_GRACE_MS, run, runTail, streamNul } from './exec'
 
 describe('run', () => {
   it('returns stdout', async () => {
@@ -40,6 +40,14 @@ describe('run', () => {
     expect(err).toBeInstanceOf(CommandError)
     expect(err.timedOut).toBe(true)
     expect(err.message).toMatch(/timed out after 0\.1 s$/)
+  })
+  it('kills a command that ignores the timeout’s SIGTERM (as an interactive shell does)', async () => {
+    const started = Date.now()
+    const ignoreTerm = 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 30000)'
+    const err = await run(process.execPath, ['-e', ignoreTerm], { timeoutMs: 300 }).catch((e) => e)
+    expect(err).toBeInstanceOf(CommandError)
+    expect(err.timedOut).toBe(true)
+    expect(Date.now() - started).toBeLessThan(300 + KILL_GRACE_MS + 2000)
   })
   it('explains a missing binary', async () => {
     const err = await run('definitely-not-a-real-binary-xyz', []).catch((e) => e)

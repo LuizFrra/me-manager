@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AppState, Task } from '../../shared/types'
 import * as m from './mutations'
+import { slugify } from '../../shared/naming'
 
 const task = (slug: string): Task => ({
   id: `task-${slug}`,
@@ -31,6 +32,14 @@ describe('themes', () => {
   })
   it('rejects names without letters or numbers', () => {
     expect(() => m.addTheme(m.emptyState(), '!!!')).toThrow(/letters or numbers/)
+  })
+  it('takes themes and repo folders named in any script, and still tells apart the ones that clash', () => {
+    let s = m.addTheme(m.emptyState(), 'Работа')
+    expect(() => m.addTheme(s, 'работа')).toThrow(/already exists/)
+    s = m.addTheme(s, '仕事')
+    expect(s.themes.map((t) => t.slug)).toEqual([slugify('Работа'), slugify('仕事')])
+    s = m.addRepo(s, s.themes[0].id, '/code/проект')
+    expect(s.themes[0].items[0]).toMatchObject({ name: 'проект', slug: slugify('проект') })
   })
   it('does not mutate the input state', () => {
     const before = m.emptyState()

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { lstat, mkdir, rm } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { checkCloneUrl } from '../../shared/clone'
 import type { CommitResult, TaskGitStatus, UnsavedWork, UpdateResult, UpdateStrategy } from '../../shared/types'
 import type { GitApi } from '../contracts'
@@ -209,7 +209,8 @@ export class GitService implements GitApi {
   }
 
   async resolveBaseRef(repoPath: string): Promise<string> {
-    if (await this.hasOrigin(repoPath)) {
+    const origin = await this.hasOrigin(repoPath)
+    if (origin) {
       try {
         const head = (await this.git(repoPath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim()
         // origin/HEAD can dangle (e.g. the default branch was renamed and older git kept the link).
@@ -224,9 +225,18 @@ export class GitService implements GitApi {
     for (const name of ['main', 'master']) {
       if (await this.refExists(repoPath, `refs/heads/${name}`)) return name
     }
-    const current = (await this.git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-    if (current && current !== 'HEAD') return current
-    throw new Error(`Could not find a base branch in ${repoPath}`)
+    // The checked-out branch: origin's copy when it has one (origin/HEAD is only set by a clone, or a fetch by git
+    // 2.48+, and the local branch may be behind), else the local one when it has a commit (a new repo's HEAD is on
+    // a branch that has none yet).
+    const current = (await this.git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')).trim()
+    if (current && origin && (await this.refExists(repoPath, `refs/remotes/origin/${current}`)))
+      return `origin/${current}`
+    if (current && (await this.refExists(repoPath, `refs/heads/${current}`))) return current
+    if ((await this.git(repoPath, ['rev-list', '-n', '1', '--all'])).trim() === '') {
+      throw new Error(`${repoPath} has no commits yet: commit something first, then create the task`)
+    }
+    const why = current ? `${current} has no commits yet` : 'its HEAD is not on a branch'
+    throw new Error(`Could not find a base branch in ${repoPath}: it has no main or master, and ${why}`)
   }
 
   async listBranches(repoPath: string): Promise<string[]> {
@@ -279,8 +289,15 @@ export class GitService implements GitApi {
     }
     const base = await this.fullRef(repoPath, baseRef)
     await mkdir(dirname(worktreePath), { recursive: true })
-    // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
-    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, base])
+    try {
+      // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
+      await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, base])
+    } catch (err) {
+      // git makes the branch before the checkout and keeps it when the checkout fails (a filter like git-lfs
+      // missing, a full disk), which would refuse the task's name from then on. It didn't exist (checked above).
+      await this.git(repoPath, ['branch', '-D', branch]).catch(() => {})
+      throw commandFailure('git worktree add', err)
+    }
   }
 
   async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
@@ -289,11 +306,33 @@ export class GitService implements GitApi {
       await rm(worktreePath, { recursive: true, force: true })
       return
     }
-    if (existsSync(worktreePath)) {
+    if (!existsSync(worktreePath)) {
+      await this.git(repoPath, ['worktree', 'prune'])
+      return
+    }
+    try {
       await this.git(repoPath, ['worktree', 'remove', '--force', worktreePath])
-    } else {
+    } catch (err) {
+      if (!(await this.isBrokenWorktree(worktreePath))) throw err
+      // git refuses it, which would keep the task forever; it is still the task's folder, so it goes like one whose
+      // repo is gone.
+      await rm(worktreePath, { recursive: true, force: true })
       await this.git(repoPath, ['worktree', 'prune'])
     }
+  }
+
+  /**
+   * Whether `path` is a linked worktree whose link with its repo broke: it has the `.git` file git leaves in one,
+   * but git can't open the repository through it (the repo's entry for it was pruned, the repo was cloned again,
+   * or the file was changed). A repository's own folder has a `.git` folder instead, so it is never one.
+   */
+  private async isBrokenWorktree(path: string): Promise<boolean> {
+    const link = await lstat(join(path, '.git')).catch(() => null)
+    if (!link?.isFile()) return false
+    return this.git(path, ['rev-parse', '--git-dir']).then(
+      () => false,
+      () => true,
+    )
   }
 
   async restoreWorktree(repoPath: string, worktreePath: string, branch: string): Promise<void> {

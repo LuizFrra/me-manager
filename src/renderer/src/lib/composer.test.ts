@@ -45,7 +45,10 @@ describe('taskNameFromPrompt', () => {
 
   it('falls back to "task" when the prompt has no letters or digits a slug keeps', () => {
     expect(taskNameFromPrompt('¿¡ … !?', [])).toBe('task')
-    expect(taskNameFromPrompt('修复登录', ['task'])).toBe('task 2')
+  })
+
+  it('names the task with words in any script', () => {
+    expect(taskNameFromPrompt('修复登录 bug', [])).toBe('修复登录 bug')
   })
 })
 

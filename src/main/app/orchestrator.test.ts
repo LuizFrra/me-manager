@@ -334,6 +334,17 @@ describe('Orchestrator: createTask', () => {
     await expect(orch.createTask(themeId, repoId, 'FIX')).rejects.toThrow(/already exists/)
     expect(git.calls).toEqual([])
   })
+  it("replaces a leftover session with the new task's name (from a crash), starting Claude in the new worktree", async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await tmux.newSession('mmt_client-x_my-api_fix', '/wt/client-x/my-api/fix', 'claude', 'claude --continue')
+    tmux.calls = []
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(tmux.calls).toEqual([
+      'killSession mmt_client-x_my-api_fix',
+      `newSession mmt_client-x_my-api_fix ${CLAUDE_CMD}`,
+    ])
+    expect(tmux.sessions.get('mmt_client-x_my-api_fix')?.windows).toEqual([{ name: 'claude', command: CLAUDE_CMD }])
+  })
   it('rolls back the worktree and branch when tmux fails', async () => {
     const { orch, git, tmux, store, themeId, repoId } = await setup()
     tmux.failNewSession = true
@@ -364,6 +375,29 @@ describe('Orchestrator: new-task options', () => {
       default: 'origin/main',
       branches: ['origin/main', 'origin/develop'],
     })
+  })
+
+  it('lists the branches, the first as the default, when the repo has no default base (a detached HEAD)', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    git.noDefaultBase = 'Could not find a base branch in /code/my-api'
+    git.branches = ['develop', 'trunk']
+    await expect(orch.listBranches(themeId, repoId)).resolves.toEqual({
+      default: 'develop',
+      branches: ['develop', 'trunk'],
+    })
+    expect(taskOf(await orch.createTask(themeId, repoId, 'fix', { baseRef: 'trunk' })).baseRef).toBe('trunk')
+    await expect(orch.createTask(themeId, repoId, 'other')).rejects.toThrow('Could not find a base branch')
+    git.branches = []
+    await expect(orch.listBranches(themeId, repoId)).rejects.toThrow('Could not find a base branch')
+  })
+
+  it('says the repository is gone, before running git, when its folder was moved or deleted', async () => {
+    const { orch, git, deps, themeId, repoId } = await setup()
+    deps.pathExists = (path) => path !== '/code/my-api'
+    git.calls = []
+    await expect(orch.listBranches(themeId, repoId)).rejects.toThrow('Repository not found: /code/my-api')
+    await expect(orch.createTask(themeId, repoId, 'fix')).rejects.toThrow('Repository not found: /code/my-api')
+    expect(git.calls).toEqual([])
   })
 
   it('creates the worktree from the chosen base branch and records it', async () => {
@@ -766,6 +800,75 @@ describe('Orchestrator: archiving tasks', () => {
     expect(git.calls.at(-1)).toBe(`removeWorktree ${WT}`)
   })
 
+  it('refuses to open a task while it is being archived or removed, leaving no session behind', async () => {
+    for (const close of ['archive', 'remove'] as const) {
+      const { orch, git, tmux, pty, themeId, repoId, target, task } = await withTask()
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const removeWorktree = git.removeWorktree.bind(git)
+      git.removeWorktree = async (repo: string, wt: string): Promise<void> => {
+        await gate // a big worktree takes a while to delete
+        return removeWorktree(repo, wt)
+      }
+      const closing =
+        close === 'archive'
+          ? orch.archiveTask(themeId, repoId, task.id)
+          : orch.removeTask(themeId, repoId, task.id, false)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(tmux.sessions.has(SESSION)).toBe(false)
+      await expect(orch.openTarget(target)).rejects.toThrow(
+        `"fix" is being ${close === 'archive' ? 'archived' : 'removed'}`,
+      )
+      release()
+      await closing
+      expect(tmux.sessions.has(SESSION)).toBe(false)
+      expect(pty.attached).toBeNull()
+      expect(orch.currentTarget()).toBeNull()
+    }
+  })
+
+  it('kills the session an open started while the task was archived, and does not attach', async () => {
+    const { orch, tmux, pty, themeId, repoId, target, task } = await withTask()
+    await orch.detachTerminal()
+    tmux.sessions.clear()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const hasSession = tmux.hasSession.bind(tmux)
+    tmux.hasSession = async (name: string): Promise<boolean> => {
+      await gate // tmux is slow to answer
+      return hasSession(name)
+    }
+    const opening = orch.openTarget(target)
+    const archiving = orch.archiveTask(themeId, repoId, task.id)
+    release()
+    await archiving
+    await expect(opening).rejects.toThrow(/"fix" is (being )?archived/)
+    expect(tmux.sessions.has(SESSION)).toBe(false)
+    expect(pty.attached).toBeNull()
+    expect(orch.currentTarget()).toBeNull()
+  })
+
+  it('waits for the git action on the task without holding up changes elsewhere', async () => {
+    for (const close of ['archive', 'remove'] as const) {
+      const { orch, git, themeId, repoId, target, task } = await withTask()
+      let release = (): void => {}
+      git.actionGate = new Promise<void>((r) => (release = r))
+      const push = orch.pushTask(target) // a slow network
+      const closing =
+        close === 'archive'
+          ? orch.archiveTask(themeId, repoId, task.id)
+          : orch.removeTask(themeId, repoId, task.id, false)
+      let renamed = false
+      void orch.renameTheme(themeId, 'Client Y').then(() => (renamed = true))
+      for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
+      expect(renamed).toBe(true)
+      expect(git.calls).toEqual([`push ${WT} ${BRANCH}`])
+      release()
+      await Promise.all([push, closing])
+      expect(git.calls.at(-1)).toBe(`removeWorktree ${WT}`)
+    }
+  })
+
   it('runs concurrent archive and restore calls one at a time, so only one archive takes effect', async () => {
     const { orch, git, themeId, repoId, task } = await withTask()
     const results = await Promise.allSettled([
@@ -910,6 +1013,16 @@ describe('Orchestrator: sessions and tabs', () => {
     tmux.sessions.clear() // e.g. after a reboot
     await orch.openTarget(target)
     expect(tmux.calls).toContain(`newSession mmt_client-x_my-api_fix ${CLAUDE_CONTINUE_CMD}`)
+  })
+
+  it('starts the session once and attaches when the same target is opened twice at once', async () => {
+    const { orch, tmux, pty, target } = await withTask()
+    tmux.sessions.clear()
+    const tabs = await Promise.all([orch.openTarget(target), orch.openTarget(target)])
+    expect(tabs).toEqual([[{ index: 0, name: 'claude', active: true }], [{ index: 0, name: 'claude', active: true }]])
+    expect(tmux.sessions.get('mmt_client-x_my-api_fix')?.windows).toHaveLength(1)
+    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+    expect(orch.currentTarget()).toEqual(target)
   })
 
   it('detaches the terminal on request, cancelling an open still in flight', async () => {
@@ -1228,6 +1341,47 @@ describe('Orchestrator: serialized mutations', () => {
   })
 })
 
+describe('Orchestrator: quitting', () => {
+  it('is idle at once when nothing runs', async () => {
+    const { orch } = await setup()
+    expect(orch.busy()).toBe(false)
+    await orch.whenIdle(60_000)
+  })
+
+  it('waits for the changes running, and for ones queued while it waits', async () => {
+    const { orch, store, themeId, repoId } = await setup()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const save = store.save.bind(store)
+    store.save = async (state: AppState): Promise<void> => {
+      await gate // a slow disk
+      return save(state)
+    }
+    const creating = orch.createTask(themeId, repoId, 'fix')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch.busy()).toBe(true)
+    let idle = false
+    const waiting = orch.whenIdle(60_000).then(() => (idle = true))
+    const renaming = orch.renameTheme(themeId, 'Client Y')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(idle).toBe(false)
+    release()
+    await Promise.all([creating, renaming, waiting])
+    expect(orch.busy()).toBe(false)
+    expect(store.saved.at(-1)?.themes[0].name).toBe('Client Y')
+  })
+
+  it('gives up waiting after the time given', async () => {
+    const { orch, store, themeId } = await setup()
+    store.save = (): Promise<void> => new Promise(() => {}) // never finishes
+    void orch.renameTheme(themeId, 'Client Y')
+    const started = Date.now()
+    await orch.whenIdle(50)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(orch.busy()).toBe(true)
+  })
+})
+
 describe('Orchestrator: fetch timeout', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -1261,6 +1415,40 @@ describe('Orchestrator: fetch timeout', () => {
     await vi.advanceTimersByTimeAsync(1)
     await p
     expect(done).toBe(true)
+  })
+
+  it('fetches outside the state queue, so a slow fetch holds up no other change', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    git.fetch = async (repo: string): Promise<void> => {
+      git.calls.push(`fetch ${repo}`)
+      await gate
+    }
+    let created = false
+    const creating = orch.createTask(themeId, repoId, 'fix').finally(() => (created = true))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.calls).toEqual(['fetch /code/my-api'])
+    await orch.renameTheme(themeId, 'Client Y') // not queued behind the fetch
+    await orch.createTheme('Other')
+    expect(created).toBe(false)
+    release()
+    const task = taskOf(await creating)
+    expect(task.branch).toBe('claude/client-x/fix') // the theme's slug stays as it was
+    expect((await orch.getState()).themes.map((t) => t.name)).toEqual(['Client Y', 'Other'])
+  })
+
+  it('checks the task again after the fetch, against the state as it is then', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    git.fetch = (): Promise<void> => gate
+    const creating = orch.createTask(themeId, repoId, 'fix')
+    await new Promise((r) => setTimeout(r, 0))
+    await orch.removeItem(themeId, repoId)
+    release()
+    await expect(creating).rejects.toThrow(`Item not found: ${repoId}`)
+    expect(git.calls.some((c) => c.startsWith('addWorktree'))).toBe(false)
   })
 
   it('clears the timer once fetch settles', async () => {

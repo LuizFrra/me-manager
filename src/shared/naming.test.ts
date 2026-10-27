@@ -19,6 +19,26 @@ describe('slugify', () => {
     expect(slug.length).toBeLessThanOrEqual(40)
     expect(slug.endsWith('-')).toBe(false)
   })
+  it('spells out the Latin letters that have no accent to strip', () => {
+    expect(slugify('Straße Øl Æther Łódź Þing')).toBe('strasse-ol-aether-lodz-thing')
+  })
+  it('gives names in other scripts a slug: a hash of the name, the same whatever the case', () => {
+    for (const name of ['Работа', '修复登录', 'Ελληνικά', '한국어 작업', 'مهمة'])
+      expect(slugify(name)).toMatch(/^[0-9a-f]{8}$/)
+    expect(slugify('Работа')).toBe(slugify(' РАБОТА! '))
+    expect(slugify('Работа')).not.toBe(slugify('Отдых'))
+  })
+  it('keeps the ASCII part and adds the hash when some letters could not be kept, so such names stay apart', () => {
+    expect(slugify('Ошибка в API')).toMatch(/^api-[0-9a-f]{8}$/)
+    expect(slugify('Ошибка в API')).not.toBe(slugify('Тесты API'))
+    const long = slugify(`${'a'.repeat(45)} задача`)
+    expect(long).toMatch(/^a{31}-[0-9a-f]{8}$/)
+  })
+  it('makes slugs that are their own slug, as a restored theme or item needs', () => {
+    for (const name of ['Fix Login Bug!', 'Работа', 'Ошибка в API', `${'a'.repeat(45)} задача`, 'Straße']) {
+      expect(slugify(slugify(name))).toBe(slugify(name))
+    }
+  })
 })
 
 describe('branchName', () => {

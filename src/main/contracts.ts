@@ -30,7 +30,10 @@ export interface GitApi {
   repoRoot(path: string): Promise<string | null>
   /** `git fetch origin --prune`; no-op when there is no origin remote. */
   fetch(repoPath: string): Promise<void>
-  /** e.g. "origin/main"; falls back to local main/master/current branch. */
+  /**
+   * e.g. "origin/main" (origin/HEAD, else origin/main or origin/master); falls back to local main/master, then the
+   * current branch (origin's copy when it has one).
+   */
   resolveBaseRef(repoPath: string): Promise<string>
   /**
    * origin's branches as `origin/<name>` (without `origin/HEAD`), then the local branches, each sorted by name.
@@ -45,8 +48,15 @@ export interface GitApi {
    * exists is refused; when the clone fails, `dest` (which this call created) is removed again.
    */
   clone(url: string, dest: string): Promise<void>
+  /**
+   * `git worktree add --no-track -b <branch> <worktreePath> <baseRef>`. Refuses a branch that exists already; when
+   * the checkout fails, the branch it made is deleted again.
+   */
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>
-  /** Removes the worktree (forced); prunes if its folder is already gone. */
+  /**
+   * Removes the worktree (forced); prunes if its folder is already gone. A folder whose worktree link broke (which
+   * git refuses to remove) is deleted, and so is the folder when the repo itself is gone.
+   */
   removeWorktree(repoPath: string, worktreePath: string): Promise<void>
   /**
    * Recreates an archived task's worktree: `git worktree add <worktreePath> <branch>`, checking out the kept branch

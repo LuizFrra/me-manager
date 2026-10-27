@@ -54,6 +54,35 @@ describe('resolveBaseRef', () => {
     const { repo } = await makeLocalRepo()
     await expect(svc.resolveBaseRef(repo)).resolves.toBe('main')
   })
+  it("prefers origin's copy of the current branch to the local one when origin/HEAD isn't set", async () => {
+    const { root, clone } = await makeClonedRepo()
+    await git(clone, 'branch', '-m', 'main', 'develop')
+    await git(clone, 'push', 'origin', 'develop')
+    await git(join(root, 'origin.git'), 'symbolic-ref', 'HEAD', 'refs/heads/develop')
+    await git(clone, 'push', 'origin', '--delete', 'main')
+    await git(clone, 'fetch', 'origin', '--prune')
+    // As in a repo that was pushed, never cloned (git before 2.48 doesn't set origin/HEAD on fetch).
+    await git(clone, 'remote', 'set-head', 'origin', '-d')
+    await expect(svc.resolveBaseRef(clone)).resolves.toBe('origin/develop')
+  })
+  it('uses the current branch when there is no main or master', async () => {
+    const { repo } = await makeLocalRepo()
+    await git(repo, 'branch', '-m', 'main', 'trunk')
+    await expect(svc.resolveBaseRef(repo)).resolves.toBe('trunk')
+  })
+  it('explains a repo without commits, and a detached HEAD without main or master', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'mm-git-')))
+    await run('git', ['init', '-b', 'main', root])
+    await expect(svc.resolveBaseRef(root)).rejects.toThrow(
+      `${root} has no commits yet: commit something first, then create the task`,
+    )
+    const { repo } = await makeLocalRepo()
+    await git(repo, 'checkout', '--detach')
+    await git(repo, 'branch', '-m', 'main', 'trunk')
+    await expect(svc.resolveBaseRef(repo)).rejects.toThrow(
+      `Could not find a base branch in ${repo}: it has no main or master, and its HEAD is not on a branch`,
+    )
+  })
 })
 
 describe('listBranches / verifyRef', () => {
@@ -189,6 +218,39 @@ describe('addWorktree with a kept branch', () => {
   })
 })
 
+describe('addWorktree whose checkout fails', () => {
+  it('deletes the branch it created, so the same task can be created once the cause is fixed', async () => {
+    const { root, repo } = await makeLocalRepo()
+    // A required filter that fails, like git-lfs content without git-lfs installed.
+    await writeFile(join(repo, '.gitattributes'), '*.dat filter=lfs-like\n')
+    await commitFile(repo, 'a.dat', 'data', 'add data')
+    await git(repo, 'config', 'filter.lfs-like.smudge', 'false')
+    await git(repo, 'config', 'filter.lfs-like.required', 'true')
+    const wt = join(root, 'wt')
+    await expect(svc.addWorktree(repo, wt, 'claude/t/x', 'main')).rejects.toThrow(
+      /^git worktree add failed: .*smudge filter lfs-like failed/,
+    )
+    expect(existsSync(wt)).toBe(false)
+    expect((await git(repo, 'branch', '--list', 'claude/t/x')).trim()).toBe('')
+    expect(await git(repo, 'worktree', 'list')).not.toContain(wt)
+
+    await git(repo, 'config', '--unset', 'filter.lfs-like.required')
+    await svc.addWorktree(repo, wt, 'claude/t/x', 'main')
+    expect(existsSync(join(wt, 'a.dat'))).toBe(true)
+  })
+  it('leaves a folder already at the path, and the branches, as they were', async () => {
+    const { root, repo } = await makeLocalRepo()
+    const wt = join(root, 'wt')
+    await mkdir(wt)
+    await writeFile(join(wt, 'mine.txt'), 'keep me')
+    await expect(svc.addWorktree(repo, wt, 'claude/t/x', 'main')).rejects.toThrow(
+      /^git worktree add failed: .*already exists/,
+    )
+    expect(existsSync(join(wt, 'mine.txt'))).toBe(true)
+    expect((await git(repo, 'branch', '--list', 'claude/t/x')).trim()).toBe('')
+  })
+})
+
 describe('getUnsavedWork', () => {
   it('is empty for a fresh task', async () => {
     const { clone, wt, branch } = await withTask()
@@ -302,6 +364,30 @@ describe('removeWorktree / deleteBranch', () => {
     await rm(wt, { recursive: true, force: true })
     await svc.removeWorktree(clone, wt)
     expect(await run('git', ['-C', clone, 'worktree', 'list'])).not.toContain(wt)
+  })
+  it("deletes a worktree folder whose link with the repo broke, which git won't remove", async () => {
+    // The repo's entry for it pruned (or the repo cloned again at its path)…
+    const pruned = await withTask()
+    await writeFile(join(pruned.wt, 'dirty.txt'), 'x')
+    await rm(join(pruned.clone, '.git', 'worktrees'), { recursive: true, force: true })
+    await svc.removeWorktree(pruned.clone, pruned.wt)
+    expect(existsSync(pruned.wt)).toBe(false)
+    // …or its own `.git` file changed.
+    const relinked = await withTask()
+    await writeFile(join(relinked.wt, '.git'), 'gitdir: /nonexistent/worktree\n')
+    await svc.removeWorktree(relinked.clone, relinked.wt)
+    expect(existsSync(relinked.wt)).toBe(false)
+    expect(await run('git', ['-C', relinked.clone, 'worktree', 'list'])).not.toContain(relinked.wt)
+  })
+  it('never deletes a folder that is not a broken worktree when git refuses it', async () => {
+    const { clone, root } = await withTask()
+    const other = join(root, 'not-a-worktree')
+    await mkdir(other)
+    await writeFile(join(other, 'mine.txt'), 'keep me')
+    await expect(svc.removeWorktree(clone, other)).rejects.toThrow()
+    await expect(svc.removeWorktree(clone, clone)).rejects.toThrow() // the repo's own work tree
+    expect(existsSync(join(other, 'mine.txt'))).toBe(true)
+    expect(existsSync(join(clone, 'README.md'))).toBe(true)
   })
   it('deletes the worktree folder when the original repo was moved', async () => {
     const { clone, wt } = await withTask()

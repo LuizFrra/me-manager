@@ -96,7 +96,10 @@ export class FakeGit implements GitApi {
     this.calls.push(`fetch ${repo}`)
     if (this.failFetch) throw new Error('offline')
   }
+  /** When set, resolveBaseRef rejects with it (a repo with no default base, like a detached HEAD). */
+  noDefaultBase: string | null = null
   async resolveBaseRef(): Promise<string> {
+    if (this.noDefaultBase) throw new Error(this.noDefaultBase)
     return 'origin/main'
   }
   /** What listBranches returns; verifyRef is true for these unless listed in `unresolvable`. */
@@ -230,6 +233,7 @@ export class FakeTmux implements TmuxApi {
   async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
     this.calls.push(`newSession ${name} ${command}`)
     if (this.failNewSession) throw new Error('tmux failed')
+    if (this.sessions.has(name)) throw new Error(`duplicate session: ${name}`) // as tmux refuses it
     this.sessions.set(name, { cwd, windows: [{ name: windowName, command }], active: 0 })
   }
   async killSession(name: string): Promise<void> {

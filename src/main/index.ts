@@ -39,6 +39,12 @@ import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
 let ptyService: PtyService | null = null
+/** The orchestrator once started, for the quit handler. */
+let started: Orchestrator | null = null
+/** Set once quitting waited for the changes still running (or the user quit a second time): the next quit goes. */
+let quitReady = false
+/** How long quitting waits for changes still running (a task being created or removed), so none is left half done. */
+const QUIT_WAIT_MS = 15_000
 let notificationWatcher: NotificationWatcher | null = null
 let budgetWatcher: BudgetWatcher | null = null
 /** The window colour for the current appearance (see followAppearance); dark until the settings are loaded. */
@@ -140,6 +146,7 @@ async function bootstrap(): Promise<void> {
     pathExists: existsSync,
   })
   await orchestrator.init()
+  started = orchestrator
 
   registerIpc({ app: orchestrator, pty: ptyService, getWindow: () => mainWindow })
   buildMenu()
@@ -190,11 +197,17 @@ app
     app.quit()
   })
 
-// Detach only: tmux sessions (and Claude) keep running after the app closes.
-app.on('before-quit', () => {
+// Detach only: tmux sessions (and Claude) keep running after the app closes. A change still running (a task being
+// created, archived or removed) is waited for, up to QUIT_WAIT_MS, so it isn't left half done; quitting again
+// doesn't wait.
+app.on('before-quit', (event) => {
   notificationWatcher?.stop()
   budgetWatcher?.stop()
   ptyService?.detach()
+  if (quitReady || !started?.busy()) return
+  event.preventDefault()
+  quitReady = true
+  void started.whenIdle(QUIT_WAIT_MS).finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {
