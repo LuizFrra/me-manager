@@ -12,7 +12,7 @@ interface MdProps {
   source: string
   filePath: string
   loadImage: unknown
-  onOpenLink: (path: string) => void
+  onOpenLink: (path: string, lines?: { start: number; end: number }) => void
   onOpenExternal: unknown
 }
 const mdRenders = vi.hoisted(() => [] as MdProps[])
@@ -23,6 +23,7 @@ vi.mock('./MarkdownView', () => ({
       <div data-testid="markdown">
         MD:{p.source}
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
       </div>
     )
   },
@@ -196,6 +197,18 @@ describe('SidePanel', () => {
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
+  })
+
+  it('opens a Markdown link to lines of a file at those lines, with Back to the document', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'line link from README.md' }))
+    await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+    const mark = document.querySelector('.code-line-mark') as HTMLElement
+    expect(mark).toHaveAttribute('data-line', '9')
+    expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
   })
 
   it('passes MarkdownView the same callbacks when the panel re-renders', async () => {

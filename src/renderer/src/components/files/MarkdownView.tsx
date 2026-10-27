@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { isExternal, resolveRelative } from '../../lib/markdown/paths'
+import { headingSlug, isExternal, lineFragment, linkFragment, resolveRelative } from '../../lib/markdown/paths'
+import type { LineRange } from '../../lib/review'
 import { MermaidBlock } from './MermaidBlock'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 
@@ -11,24 +12,72 @@ export interface MarkdownViewProps {
   /** Path of the .md file relative to the root, used to resolve relative links/images. */
   filePath: string
   loadImage: (relPath: string) => Promise<string | null>
-  /** Called with a root-relative path for links to other files inside the root. */
-  onOpenLink: (relPath: string) => void
+  /** Called with a root-relative path for links to other files inside the root, and the lines a `#L12` names. */
+  onOpenLink: (relPath: string, lines?: LineRange) => void
   onOpenExternal: (url: string) => void
 }
 
 type HastNode = NonNullable<ExtraProps['node']>
+type HastRoot = { type: 'root'; children: HastNode['children'] }
+
+function textOf(node: HastNode | HastNode['children'][number]): string {
+  if (node.type === 'text') return node.value
+  if (node.type === 'element') return node.children.map(textOf).join('')
+  return ''
+}
+
+/**
+ * Gives every heading its GitHub anchor (see headingSlug) as `data-slug`, for `#anchor` links to scroll to. Not as
+ * an id: a document's headings must not take ids the app's own elements have.
+ */
+function rehypeHeadingSlugs() {
+  return (tree: HastRoot): void => {
+    const seen = new Map<string, number>()
+    const visit = (nodes: HastRoot['children']): void => {
+      for (const node of nodes) {
+        if (node.type !== 'element') continue
+        if (/^h[1-6]$/.test(node.tagName)) {
+          const base = headingSlug(textOf(node))
+          const n = seen.get(base) ?? 0
+          seen.set(base, n + 1)
+          node.properties.dataSlug = n === 0 ? base : `${base}-${n}`
+        } else visit(node.children)
+      }
+    }
+    visit(tree.children)
+  }
+}
 
 const remarkPlugins = [remarkGfm]
 // Mermaid fences are rendered by MermaidBlock, so don't spend time highlighting them.
 // NOTE: never add rehype-raw here; raw HTML in Markdown must stay inert.
 const rehypePlugins: React.ComponentProps<typeof Markdown>['rehypePlugins'] = [
   [rehypeHighlight, { plainText: ['mermaid'] }],
+  rehypeHeadingSlugs,
 ]
 
-function textOf(node: HastNode | HastNode['children'][number]): string {
-  if (node.type === 'text') return node.value
-  if (node.type === 'element') return node.children.map(textOf).join('')
-  return ''
+/** A link handled here (no href, so the browser can never follow it): a click or Enter calls `go`. */
+function ActionLink(p: { title?: string; go: () => void; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <a
+      role="link"
+      tabIndex={0}
+      className="md-link"
+      title={p.title}
+      onClick={(e) => {
+        e.preventDefault()
+        p.go()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          p.go()
+        }
+      }}
+    >
+      {p.children}
+    </a>
+  )
 }
 
 /** The source of a ```mermaid fence, or null if this <pre> is something else. */
@@ -108,6 +157,7 @@ export const MarkdownView = memo(function MarkdownView({
   const loadImage = useLatestCallback(loadImageProp)
   const onOpenLink = useLatestCallback(onOpenLinkProp)
   const onOpenExternal = useLatestCallback(onOpenExternalProp)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const components = useMemo<Components>(
     () => ({
       a({ href, title, children }) {
@@ -127,28 +177,29 @@ export const MarkdownView = memo(function MarkdownView({
             </a>
           )
         }
+        if (href?.startsWith('#')) {
+          // A heading of this document.
+          const slug = linkFragment(href)?.toLowerCase()
+          const go = (): void => {
+            const heading = [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-slug]') ?? [])].find(
+              (h) => h.dataset.slug === slug,
+            )
+            if (heading && typeof heading.scrollIntoView === 'function') heading.scrollIntoView({ block: 'start' })
+          }
+          return (
+            <ActionLink title={title ?? href} go={go}>
+              {children}
+            </ActionLink>
+          )
+        }
         const path = href ? resolveRelative(filePath, href) : null
         if (path) {
-          // No href: an in-root path must never be navigable by the browser (middle-click, drag, etc.).
+          // `file.ts#L12-L20` opens the file at those lines.
+          const lines = lineFragment(linkFragment(href as string))
           return (
-            <a
-              role="link"
-              tabIndex={0}
-              className="md-link"
-              title={title ?? path}
-              onClick={(e) => {
-                e.preventDefault()
-                onOpenLink(path)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  onOpenLink(path)
-                }
-              }}
-            >
+            <ActionLink title={title ?? path} go={() => (lines ? onOpenLink(path, lines) : onOpenLink(path))}>
               {children}
-            </a>
+            </ActionLink>
           )
         }
         return <span title={title}>{children}</span>
@@ -174,7 +225,7 @@ export const MarkdownView = memo(function MarkdownView({
   )
 
   return (
-    <div className="markdown-body">
+    <div className="markdown-body" ref={bodyRef}>
       <Markdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components}>
         {source}
       </Markdown>

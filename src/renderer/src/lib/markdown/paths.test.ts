@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isExternal, resolveRelative } from './paths'
+import { headingSlug, isExternal, linkFragment, lineFragment, resolveRelative } from './paths'
 
 describe('resolveRelative', () => {
   it('resolves a sibling file', () => {
@@ -61,5 +61,38 @@ describe('isExternal', () => {
     expect(isExternal('docs/a.md')).toBe(false)
     expect(isExternal('//example.com')).toBe(false)
     expect(isExternal('')).toBe(false)
+  })
+})
+
+describe('linkFragment', () => {
+  it("returns a link's decoded #fragment, or null without one", () => {
+    expect(linkFragment('#Getting-started')).toBe('Getting-started')
+    expect(linkFragment('b.md?x=1#caf%C3%A9')).toBe('café')
+    expect(linkFragment('b.md')).toBeNull()
+    expect(linkFragment('b.md#')).toBeNull()
+    expect(linkFragment('#%E0%A4%A')).toBeNull()
+  })
+})
+
+describe('lineFragment', () => {
+  it('reads GitHub-style line anchors', () => {
+    expect(lineFragment('L12')).toEqual({ start: 12, end: 12 })
+    expect(lineFragment('L12-L20')).toEqual({ start: 12, end: 20 })
+    expect(lineFragment('L12-20')).toEqual({ start: 12, end: 20 })
+    expect(lineFragment('L20-L12')).toEqual({ start: 12, end: 20 })
+    expect(lineFragment('L0')).toBeNull()
+    expect(lineFragment('Lx')).toBeNull()
+    expect(lineFragment('usage')).toBeNull()
+    expect(lineFragment(null)).toBeNull()
+  })
+})
+
+describe('headingSlug', () => {
+  it("makes GitHub's anchor for a heading's text", () => {
+    expect(headingSlug('Getting Started')).toBe('getting-started')
+    expect(headingSlug('What’s new in v2.0?')).toBe('whats-new-in-v20')
+    expect(headingSlug('API: `run()` & co')).toBe('api-run--co')
+    expect(headingSlug('snake_case and-dash')).toBe('snake_case-and-dash')
+    expect(headingSlug('Café über')).toBe('café-über')
   })
 })

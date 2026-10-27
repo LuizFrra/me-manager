@@ -10,7 +10,13 @@ import { ImageView } from './ImageView'
 import { MarkdownView } from './MarkdownView'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 import type { LineSelection, LineSelectProps } from '../../lib/lineSelection'
-import { reviewLocation, selectedLinesLabel, type ReviewDraft, type SelectedLines } from '../../lib/review'
+import {
+  reviewLocation,
+  selectedLinesLabel,
+  type LineRange,
+  type ReviewDraft,
+  type SelectedLines,
+} from '../../lib/review'
 
 export interface FileViewerProps {
   api: Pick<MeManagerApi, 'readImage' | 'openExternal'>
@@ -35,7 +41,7 @@ export interface FileViewerProps {
   canGoBack: boolean
   onBack: () => void
   onMdMode: (mode: PanelState['mdMode']) => void
-  onOpenLink: (path: string) => void
+  onOpenLink: (path: string, lines?: LineRange) => void
   onOpenFile: (path: string) => void
   onError: (err: unknown) => void
   /**

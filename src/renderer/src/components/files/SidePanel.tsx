@@ -238,13 +238,15 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const select = (nextTab: PanelTab, path: string): void =>
     onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
-  const openLink = useLatestCallback((path: string): void =>
+  // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown.
+  const openLink = useLatestCallback((path: string, lines?: LineRange): void =>
     onState({
       ...state,
       tab: 'files',
       selected: path,
-      reveal: undefined,
+      reveal: lines && { path, lines: { ...lines } },
       history: state.selected ? [...state.history, state.selected] : state.history,
+      mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
     }),
   )
   const back = useLatestCallback((): void => {
