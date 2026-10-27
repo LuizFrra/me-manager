@@ -4,7 +4,7 @@ import { MAX_TASK_PROMPT, type AppState, type LiveStatus, type Target } from '..
 import { targetKey } from '../../../shared/naming'
 import { waitingTargets } from '../lib/attention'
 import { defaultRepo, greeting, repoChoices, taskNameFromPrompt } from '../lib/composer'
-import { homeTips, recentTasks, timeAgo, TIP_ROTATE_MS } from '../lib/onboarding'
+import { homeTips, loadLastTip, recentTasks, saveLastTip, timeAgo, TIP_ROTATE_MS } from '../lib/onboarding'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { shortcutLabel } from '../lib/shortcuts'
 import { startVisibleInterval } from '../lib/visibleInterval'
@@ -97,9 +97,6 @@ export function Welcome(p: StartActions & { onShowShortcuts: () => void }): Reac
   )
 }
 
-/** The tip Home showed last, so the next time it opens it goes on from there rather than from the first. */
-let lastTip = -1
-
 /**
  * A tip line that changes every TIP_ROTATE_MS, or on "Next tip". It holds still while hovered or focused, so it
  * can be read, and only then is it a live region: a screen reader hears the tips the user asks for, not every
@@ -107,13 +104,12 @@ let lastTip = -1
  */
 function TipLine(): React.JSX.Element {
   const tips = useMemo(() => homeTips(), [])
-  const [index, setIndex] = useState(() => (lastTip + 1) % tips.length)
+  // Goes on from the tip shown last, even in an earlier run, rather than from the first.
+  const [index, setIndex] = useState(() => (loadLastTip() + 1) % tips.length)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const paused = hovered || focused
-  useEffect(() => {
-    lastTip = index
-  }, [index])
+  useEffect(() => saveLastTip(index), [index])
   useEffect(() => {
     if (paused) return
     return startVisibleInterval(() => setIndex((i) => (i + 1) % tips.length), TIP_ROTATE_MS)
