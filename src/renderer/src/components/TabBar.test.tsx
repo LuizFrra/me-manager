@@ -227,6 +227,16 @@ describe('TabBar keys and pointer', () => {
     }
   })
 
+  it('closes a tab on a middle click', () => {
+    const { onClose, onSelect } = renderTabs()
+    expect(fireEvent.mouseDown(tab('claude'), { button: 1 })).toBe(false) // no autoscroll or paste
+    fireEvent(tab('claude'), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }))
+    expect(onClose).toHaveBeenCalledWith(0)
+    fireEvent(tab('shell'), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
   it('shows each full tab name in its tooltip, and the close shortcut on the active tab', () => {
     renderTabs()
     expect(tab(/^npm run dev/)).toHaveAttribute('title', 'npm run dev -- --host 0.0.0.0 --port 5173')

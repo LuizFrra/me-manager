@@ -99,6 +99,9 @@ export function TabBar(props: {
               title={t.dead ? 'Stopped: the command exited. Restart it from the tab menu.' : t.name}
               onClick={() => props.onSelect(t.index)}
               onKeyDown={(e) => onTabKey(e, at)}
+              // A middle click closes the tab, as in browsers; its mousedown would start autoscroll or paste.
+              onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+              onAuxClick={(e) => e.button === 1 && props.onClose(t.index)}
               onContextMenu={(e) => openMenu(e, t)}
             >
               {t.name}
