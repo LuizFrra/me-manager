@@ -2,9 +2,20 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:/i
 
 /**
  * Resolve a link/image href found in `fromFile` (root-relative) to a root-relative path, or null if it escapes the
- * root or is not a relative path. Strips #fragment and ?query; decodes %20 etc.
+ * root, is the root itself or is not a relative path. Strips #fragment and ?query; decodes %20 etc.
  */
 export function resolveRelative(fromFile: string, href: string): string | null {
+  const parts = resolveParts(fromFile, href)
+  return parts && parts.length > 0 ? parts.join('/') : null
+}
+
+/** Whether a link found in `fromFile` names the root folder itself (`../` from `docs/a.md`, `/`). */
+export function isRootLink(fromFile: string, href: string): boolean {
+  return resolveParts(fromFile, href)?.length === 0
+}
+
+/** The path segments `href` resolves to from `fromFile` (see resolveRelative); empty for the root. */
+function resolveParts(fromFile: string, href: string): string[] | null {
   const trimmed = href.trim()
   if (trimmed === '' || SCHEME.test(trimmed) || trimmed.startsWith('//')) return null
 
@@ -34,7 +45,7 @@ export function resolveRelative(fromFile: string, href: string): string | null {
       parts.push(segment)
     }
   }
-  return parts.length === 0 ? null : parts.join('/')
+  return parts
 }
 
 /** True only for absolute http: or https: URLs. */

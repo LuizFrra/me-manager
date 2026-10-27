@@ -26,6 +26,7 @@ vi.mock('./MarkdownView', () => ({
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('docs')}>folder link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('')}>root link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('docs/guide.md', { start: 2, end: 2 })}>
           doc line link from {p.filePath}
         </button>
@@ -284,6 +285,29 @@ describe('SidePanel', () => {
     await user.click(await screen.findByRole('button', { name: 'folder link from README.md' }))
     await vi.waitFor(() => expect(readFile).toHaveBeenLastCalledWith(TASK, 'docs/README.md'))
     expect(readFile).not.toHaveBeenCalledWith(TASK, 'docs')
+  })
+
+  it("opens a Markdown link to the root folder at the root's README", async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({
+      listFiles: async () => ({ paths: ['README.md', 'docs/README.md', 'docs/guide.md'], truncated: false }),
+    })
+    const readFile = vi.spyOn(api, 'readFile')
+    render(<Harness api={api} initial={{ selected: 'docs/guide.md' }} />)
+    await screen.findByRole('button', { name: 'docs' })
+    await user.click(await screen.findByRole('button', { name: 'root link from docs/guide.md' }))
+    await vi.waitFor(() => expect(readFile).toHaveBeenLastCalledWith(TASK, 'README.md'))
+    expect(screen.getByRole('button', { name: '← Back' })).toBeInTheDocument()
+  })
+
+  it('stays on the document when a link to the root folder has no README to open', async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({ listFiles: async () => ({ paths: ['docs/guide.md'], truncated: false }) })
+    render(<Harness api={api} initial={{ selected: 'docs/guide.md' }} />)
+    await screen.findByRole('button', { name: 'docs' })
+    await user.click(await screen.findByRole('button', { name: 'root link from docs/guide.md' }))
+    expect(screen.getByTestId('markdown')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
   })
 
   it('passes MarkdownView the same callbacks when the panel re-renders', async () => {

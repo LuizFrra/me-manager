@@ -2,7 +2,14 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { headingSlug, isExternal, lineFragment, linkFragment, resolveRelative } from '../../lib/markdown/paths'
+import {
+  headingSlug,
+  isExternal,
+  isRootLink,
+  lineFragment,
+  linkFragment,
+  resolveRelative,
+} from '../../lib/markdown/paths'
 import type { LineRange } from '../../lib/review'
 import { MermaidBlock } from './MermaidBlock'
 import { useLatestCallback } from '../../lib/useLatestCallback'
@@ -13,8 +20,8 @@ export interface MarkdownViewProps {
   filePath: string
   loadImage: (relPath: string) => Promise<string | null>
   /**
-   * Called with a root-relative path for links to other files inside the root, and the lines a `#L12` names or
-   * the heading (its anchor, lowercased) any other `#fragment` names.
+   * Called with a root-relative path for links to other files inside the root ('' for the root folder), and the
+   * lines a `#L12` names or the heading (its anchor, lowercased) any other `#fragment` names.
    */
   onOpenLink: (relPath: string, lines?: LineRange, heading?: string) => void
   onOpenExternal: (url: string) => void
@@ -198,8 +205,9 @@ export const MarkdownView = memo(function MarkdownView({
             </ActionLink>
           )
         }
-        const path = href ? resolveRelative(filePath, href) : null
-        if (path) {
+        // '' for the root folder (`../` from docs/), which opens at its README like any folder.
+        const path = href ? (resolveRelative(filePath, href) ?? (isRootLink(filePath, href) ? '' : null)) : null
+        if (path !== null) {
           // `file.ts#L12-L20` opens the file at those lines, `other.md#usage` at that heading.
           const fragment = linkFragment(href as string)
           const lines = lineFragment(fragment)
@@ -209,7 +217,7 @@ export const MarkdownView = memo(function MarkdownView({
             else onOpenLink(path)
           }
           return (
-            <ActionLink title={title ?? path} go={go}>
+            <ActionLink title={title ?? (path || '/')} go={go}>
               {children}
             </ActionLink>
           )

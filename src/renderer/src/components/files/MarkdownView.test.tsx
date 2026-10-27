@@ -230,6 +230,14 @@ describe('MarkdownView', () => {
       }
     })
 
+    it('opens a link to the root folder (at its README, see SidePanel)', () => {
+      const { props } = setup('[home](../) [top](/)')
+      click(screen.getByText('home'))
+      expect(props.onOpenLink).toHaveBeenLastCalledWith('')
+      click(screen.getByText('top'))
+      expect(props.onOpenLink).toHaveBeenCalledTimes(2)
+    })
+
     it('renders a link escaping the root as plain text', () => {
       const { container, props } = setup('[up](../../../etc/passwd)')
       expect(container.querySelector('a')).toBeNull()

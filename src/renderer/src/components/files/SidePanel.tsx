@@ -239,9 +239,10 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
   // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown. A link
-  // to a heading (`#usage`) opens the file there. A link to a folder opens its README, as on GitHub.
+  // to a heading (`#usage`) opens the file there. A link to a folder (the root too) opens its README, as on GitHub.
   const openLink = useLatestCallback((link: string, lines?: LineRange, heading?: string): void => {
     const path = files && !lines && !files.includes(link) ? (folderIndex(files, link) ?? link) : link
+    if (path === '') return // the root folder, without a README
     const scrollTop = panelRef.current?.querySelector('.viewer-body')?.scrollTop ?? 0
     onState({
       ...state,

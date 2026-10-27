@@ -20,11 +20,11 @@ const README = /^readme\.(md|markdown)$/i
 const INDEX = /^index\.(md|markdown)$/i
 
 /**
- * The page that stands for folder `dir` (as a Markdown link to the folder means): its README, else its index.md,
- * directly inside it; null when it has neither (or isn't a folder of `paths`).
+ * The page that stands for folder `dir` (as a Markdown link to the folder means; '' for the root): its README, else
+ * its index.md, directly inside it; null when it has neither (or isn't a folder of `paths`).
  */
 export function folderIndex(paths: readonly string[], dir: string): string | null {
-  const prefix = `${dir}/`
+  const prefix = dir === '' ? '' : `${dir}/`
   let index: string | null = null
   for (const p of paths) {
     if (!p.startsWith(prefix)) continue
