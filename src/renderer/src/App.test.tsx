@@ -781,7 +781,8 @@ describe('App command palette', () => {
     await user.click(option)
 
     const panel = screen.getByRole('complementary', { name: 'Files panel' })
-    expect(within(panel).getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
+    // The panel's contents load lazily: on a cold start "Loading…" shows first.
+    expect(await within(panel).findByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true')
     expect(await within(panel).findByRole('button', { name: /^app\.ts/ })).toHaveAttribute('aria-current', 'true')
     await waitFor(() => expect(document.querySelector('.code-body')?.textContent).toContain('greetAll'))
   })
