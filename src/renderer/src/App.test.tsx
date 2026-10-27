@@ -1018,9 +1018,8 @@ describe('App rename', () => {
     render(<App api={repoApi()} />)
     await createTheme(user, 'Client X')
     await user.click(screen.getByRole('button', { name: 'Rename theme Client X' }))
-    expect(screen.getByRole('dialog', { name: 'Rename theme' })).toHaveTextContent(
-      'The branch and folder keep their original name.',
-    )
+    // A theme has no branch of its own: its name is in its tasks' branches and folders.
+    expect(nameBox()).toHaveAccessibleDescription('Its tasks’ branches and folders keep their original names.')
     await user.clear(nameBox())
     await user.type(nameBox(), 'Acme{Enter}')
     expect(await screen.findByRole('button', { name: 'Remove theme Acme' })).toBeInTheDocument()

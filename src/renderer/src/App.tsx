@@ -241,7 +241,11 @@ const BULK_LABEL: Record<BulkAction, (n: number) => string> = {
 }
 
 /** Renaming changes the display name only, never the slug that branches, worktrees and sessions are named by. */
-const RENAME_NOTE = 'The branch and folder keep their original name.'
+/** Renaming changes the display name only: the slug stays in branches, worktree folders and sessions. */
+const RENAME_NOTE = {
+  task: 'The branch and folder keep their original name.',
+  theme: 'Its tasks’ branches and folders keep their original names.',
+}
 
 const EMPTY: AppState = { version: 1, themes: [] }
 const NO_COMMENTS: readonly ReviewComment[] = []
@@ -972,7 +976,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         placeholder: current,
         initial: current,
         submitLabel: 'Rename',
-        note: RENAME_NOTE,
+        note: RENAME_NOTE[what],
         validate: (name) => renameError(name, others(), what),
       },
       submit,
