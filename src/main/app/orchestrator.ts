@@ -618,7 +618,11 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commitIfChanged(m.moveTheme(this.state, themeId, toIndex)))
   }
 
+  /** The path comes from the renderer: a relative one would be resolved against the app's own folder. */
   async addRepo(themeId: string, path: string): Promise<AppState> {
+    if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) {
+      throw new Error('Choose a repository to add')
+    }
     return this.exclusive(async () => {
       const root = await this.deps.git.repoRoot(path)
       if (!root) throw new Error(`Not a git repository: ${path}`)

@@ -87,6 +87,13 @@ describe('Orchestrator: themes and items', () => {
     const { orch, themeId } = await setup()
     await expect(orch.addRepo(themeId, '/not/a/repo')).rejects.toThrow(/Not a git repository/)
   })
+  it('refuses a repository path that is not absolute text before asking git (it would resolve it anywhere)', async () => {
+    const { orch, git, themeId } = await setup()
+    git.roots.set('code/my-api', '/code/my-api') // as git resolves a relative path against the app's folder
+    for (const bad of ['code/my-api', '', '/code/my-api\0', 42, null] as unknown as string[]) {
+      await expect(orch.addRepo(themeId, bad)).rejects.toThrow('Choose a repository to add')
+    }
+  })
   it('refuses a folder path that is not absolute, or not there, before adding it', async () => {
     const { orch, store, deps, themeId } = await setup()
     deps.pathExists = (p) => p !== '/docs/gone'
