@@ -737,3 +737,35 @@ describe('BulkConfirmDialog', () => {
     expect(screen.getByRole('button', { name: 'Update 2 tasks' })).toHaveFocus()
   })
 })
+
+describe('CommitDialog', () => {
+  const CHANGES = { files: [{ path: 'a.ts', status: 'M' as const, added: 1, removed: 0, binary: false }] }
+
+  it("can't be closed with Esc while committing, so a failure still finds the message", async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    // Resolves without closing the dialog, as App does when the commit fails.
+    const onCommit = vi.fn(() => new Promise<void>((r) => (finish = r)))
+    const onCancel = vi.fn()
+    render(
+      <CommitDialog
+        taskName="t"
+        branch="b"
+        loadChanges={async () => CHANGES}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />,
+    )
+    await screen.findByText('1 file will be committed')
+    const message = screen.getByRole('textbox', { name: 'Commit message' })
+    await user.type(message, 'Fix it{Control>}{Enter}{/Control}')
+    expect(onCommit).toHaveBeenCalledWith('Fix it')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    finish()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Commit' })).toBeEnabled())
+    expect(message).toHaveValue('Fix it')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})

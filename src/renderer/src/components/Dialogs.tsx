@@ -1211,7 +1211,8 @@ type ChangesLoad = { kind: 'loading' } | { kind: 'ready'; list: ChangeList } | {
 
 /**
  * "Commit all": the files `git add -A` will stage (the task's uncommitted changes, loaded when the dialog opens)
- * and a required message. Mod+Enter commits, Esc cancels. Stays open with the message when committing fails.
+ * and a required message. Mod+Enter commits, Esc cancels (not while committing). Stays open with the message when
+ * committing fails.
  */
 export function CommitDialog(props: {
   taskName: string
@@ -1271,7 +1272,8 @@ export function CommitDialog(props: {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
-            props.onCancel()
+            // Like Cancel, off while committing: closing then would lose the message if the commit fails.
+            if (!busyRef.current) props.onCancel()
           } else if (isModEnter(e.nativeEvent)) {
             e.preventDefault()
             void commit()

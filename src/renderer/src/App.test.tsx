@@ -3672,7 +3672,7 @@ describe('App background actions and the dialog shown by then', () => {
     expect(await screen.findByText('my-api › slow task')).toBeInTheDocument()
   })
 
-  it('keeps a dialog opened while a commit was running', async () => {
+  it('keeps the Commit dialog while the commit runs (Esc waits), then closes it', async () => {
     const user = userEvent.setup()
     const gate = deferred()
     const api = repoApi()
@@ -3690,11 +3690,10 @@ describe('App background actions and the dialog shown by then', () => {
     await user.click(dialog.getByRole('button', { name: 'Commit' }))
     await user.click(dialog.getByRole('textbox', { name: 'Commit message' }))
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('dialog', { name: 'Commit all in fix login bug' })).toBeInTheDocument()
     gate.resolve()
     expect(await screen.findByText('Committed 3 files')).toBeInTheDocument()
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('reports conflicts in a toast instead of replacing a dialog opened while the update ran', async () => {
