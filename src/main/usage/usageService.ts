@@ -70,6 +70,31 @@ const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
 
 /**
+ * A record with every field set in one literal, so that all records share one compact layout (a spread builds a
+ * larger object, its fields added one by one).
+ */
+const usageRecord = (
+  t: TokenCounts,
+  ts: number,
+  cwd: string,
+  session: string,
+  model: string,
+  fast: boolean,
+): UsageRecord => ({
+  input: t.input,
+  output: t.output,
+  cacheRead: t.cacheRead,
+  cacheWrite5m: t.cacheWrite5m,
+  cacheWrite1h: t.cacheWrite1h,
+  ts,
+  cwd,
+  session,
+  model,
+  fast,
+  cost: messageCost(model, t, fast),
+})
+
+/**
  * The usage on one transcript line, or null when the line doesn't count: not an assistant message with
  * `message.usage`, a `<synthetic>` model, no `cwd`, or not valid JSON.
  */
@@ -113,23 +138,13 @@ export function parseUsageLine(line: string, fallbackSession = ''): ParsedUsageL
     cacheWrite5m,
     cacheWrite1h,
   }
-  const fast = usage.speed === 'fast'
   const id = str(message.id)
   const requestId = str(entry.requestId)
-  const key = id || requestId ? `${id ?? ''}\u0000${requestId ?? ''}` : null
+  // Joined, not concatenated: V8 keeps a concatenation as a rope over its parts, larger than the flat string.
+  const key = id || requestId ? [id ?? '', requestId ?? ''].join('\u0000') : null
   const ts = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
-  return {
-    key,
-    record: {
-      ...tokens,
-      ts,
-      cwd,
-      session: str(entry.sessionId) ?? fallbackSession,
-      model,
-      fast,
-      cost: messageCost(model, tokens, fast),
-    },
-  }
+  const session = str(entry.sessionId) ?? fallbackSession
+  return { key, record: usageRecord(tokens, ts, cwd, session, model, usage.speed === 'fast') }
 }
 
 /**
@@ -155,7 +170,7 @@ export function mergeRecords(a: UsageRecord, b: UsageRecord): UsageRecord {
   if (same) return a
   const fast = a.fast || b.fast
   const ts = Number.isNaN(a.ts) ? b.ts : Number.isNaN(b.ts) ? a.ts : Math.min(a.ts, b.ts)
-  return { ...a, ...tokens, ts, fast, cost: messageCost(a.model, tokens, fast) }
+  return usageRecord(tokens, ts, a.cwd, a.session, a.model, fast)
 }
 
 /**
