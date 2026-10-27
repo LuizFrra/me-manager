@@ -681,6 +681,9 @@ export class FilesService implements FilesApi {
       return git(worktree, ['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', rel], [1])
     }
     const { base } = await this.resolveBase(worktree, baseRef)
+    // A path the base has is no rename's new name: diff it as is, without looking renames up in the whole tree
+    // (on every poll of the open diff).
+    if (await this.inCommit(worktree, base, rel)) return git(worktree, ['diff', ...DIFF_FLAGS, '-M', base, '--', rel])
     const nameStatus = await git(worktree, ['diff', ...DIFF_FLAGS, '-z', '-M', '--name-status', base, '--'])
     const rename = parseNameStatus(nameStatus).find((ns) => ns.path === rel && ns.oldPath !== undefined)
     const paths = rename?.oldPath ? [rename.oldPath, rel] : [rel]
@@ -708,6 +711,16 @@ export class FilesService implements FilesApi {
       }
     }
     return { base: 'HEAD', fallback: 'uncommitted-only' }
+  }
+
+  /** Whether commit `rev` has a file (or symlink, or submodule) at `rel`. */
+  private async inCommit(worktree: string, rev: string, rel: string): Promise<boolean> {
+    try {
+      await git(worktree, ['cat-file', '-e', `${rev}:${rel}`])
+      return true
+    } catch {
+      return false
+    }
   }
 
   private async isTracked(worktree: string, rel: string): Promise<boolean> {

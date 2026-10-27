@@ -542,6 +542,16 @@ describe('fileDiff', () => {
     expect(gitCalls().filter((c) => c.includes('--name-status'))).toEqual([])
   })
 
+  it('diffs a file the base has (modified, deleted) without a whole-tree rename lookup', async () => {
+    const { clone } = await makeTaskClone(SEED)
+    await put(clone, 'mod.txt', 'changed\n')
+    await rm(join(clone, 'del.txt'))
+    runSpy.mockClear()
+    expect(await svc.fileDiff(clone, 'origin/main', 'mod.txt')).toContain('+changed')
+    expect(await svc.fileDiff(clone, 'origin/main', 'del.txt')).toContain('deleted file mode')
+    expect(gitCalls().filter((c) => c.includes('--name-status'))).toEqual([])
+  })
+
   it('still finds the rename itself when no oldPath is given', async () => {
     const { clone } = await makeTaskClone(SEED)
     await git(clone, 'mv', 'ren.txt', 'renamed.txt')
