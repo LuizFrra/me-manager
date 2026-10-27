@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -207,5 +209,27 @@ describe('StatusBar daily budget', () => {
     expect(cost()).not.toHaveClass('budget-warn')
     expect(cost()).toHaveAccessibleName("Today's cost $0.42: show usage")
     expect(cost()).toHaveAttribute('title', expect.stringContaining('$1.00 of $5.00 daily budget (20%)'))
+  })
+})
+
+describe('StatusBar on a narrow window', () => {
+  // jsdom lays nothing out: these check the rules the styles give each segment (see .status-bar in styles.css).
+  it('lets the commit subject, then the links, then the branch give way, never the state, cost or warning', () => {
+    const style = document.createElement('style')
+    style.textContent = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+    document.head.append(style)
+    try {
+      renderBar({ devUrls: [{ url: 'http://localhost:5173/', tab: 'dev', index: 1 }], onOpenUrl: vi.fn() })
+      const shrink = (el: Element): number => Number(getComputedStyle(el).flexShrink)
+      const seg = (selector: string): Element => bar().querySelector(selector) as Element
+      for (const side of ['.status-left', '.status-right']) expect(getComputedStyle(seg(side)).display).toBe('contents')
+      expect(shrink(seg('.status-commit'))).toBeGreaterThan(shrink(seg('.status-urls')) * 1000)
+      expect(shrink(seg('.status-urls'))).toBeGreaterThan(shrink(seg('.status-branch')) * 1000)
+      expect(shrink(seg('.status-branch'))).toBeGreaterThan(0)
+      for (const kept of ['.status-claude', '.status-cost', '.status-right > .status-warn'])
+        expect(shrink(seg(kept))).toBe(0)
+    } finally {
+      style.remove()
+    }
   })
 })

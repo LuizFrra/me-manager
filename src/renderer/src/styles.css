@@ -3553,8 +3553,7 @@ kbd {
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-end;
   height: 26px;
   padding: 0 10px;
   overflow: hidden;
@@ -3566,21 +3565,26 @@ kbd {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/*
+ * Both sides' segments share the bar's one row, so that on a narrow window the least useful give way first: the
+ * last commit's subject, then the dev-server links, then the branch or path (cut with an ellipsis). The state,
+ * the tab count, today's cost and the skip-perms warning keep their width; past that, the left edge is cut.
+ * The flex-shrink factors are far apart so that each segment shrinks to nothing before the next one starts.
+ */
 .status-left,
 .status-right {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  height: 100%;
+  display: contents;
 }
-.status-left {
-  flex: 1 1 auto;
-}
-.status-right {
-  flex: 0 0 auto;
+/* Between the sides: the free space, at least 12px. */
+.status-right::before {
+  content: '';
+  flex: none;
+  width: 12px;
+  margin-left: auto;
 }
 .status-seg {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 5px;
   height: 100%;
@@ -3599,8 +3603,11 @@ button.status-seg:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
-.status-branch {
+.status-branch,
+.status-path {
   flex: 0 1 auto;
+}
+.status-branch {
   color: var(--text);
   font-family: var(--mono);
   font-size: 11px;
@@ -3621,9 +3628,15 @@ button.status-seg:focus-visible {
 .status-changes.dirty {
   color: var(--git-dirty);
 }
+/* Spaced by margins, not padding: cut to nothing, they show no sliver of text in their padding. */
+.status-commit,
+.status-urls {
+  padding: 0;
+  margin: 0 7px;
+}
 .status-commit {
   display: block;
-  flex: 0 1 auto;
+  flex: 0 1000000000 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-soft);
@@ -4420,9 +4433,15 @@ button.status-seg:focus-visible {
 .dev-url:focus-visible {
   text-decoration: underline;
 }
+/* Links that don't fit wrap to a second line, out of sight, rather than show cut. */
 .status-urls {
-  gap: 8px;
+  flex: 0 10000 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 0 8px;
+  overflow: hidden;
   font-size: 11px;
+  line-height: 26px;
 }
 
 /* ---------- Budgets ---------- */
