@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { parseUnifiedDiff } from './parse'
+import { mixedLineEndings, modeChangeText, parseUnifiedDiff } from './parse'
 import {
   ADDED_FILE,
   BINARY,
+  BINARY_ADDED,
   DELETED_FILE,
+  EMPTY_ADDED,
+  EMPTY_DELETED,
+  FILE_TO_SYMLINK,
+  LF_TO_CRLF,
+  MODE_AND_CONTENT,
+  MODE_ONLY,
   HEADER_LIKE_CONTENT,
   MULTI_HUNK,
   NO_NEWLINE,
@@ -134,6 +141,27 @@ describe('parseUnifiedDiff', () => {
     const d = parseUnifiedDiff(SINGLE_HUNK.replace(/\n/g, '\r\n'))
     expect(d.newPath).toBe('single.txt')
     expect(d.hunks[0].lines[1]).toEqual({ kind: 'del', text: 'beta', oldNo: 2 })
+    expect(mixedLineEndings(d)).toBe(false)
+  })
+
+  it('marks lines whose content ends with a carriage return, without it in their text', () => {
+    const d = parseUnifiedDiff(LF_TO_CRLF)
+    expect(d.hunks[0].lines).toEqual([
+      { kind: 'context', text: 'keep', oldNo: 1, newNo: 1, cr: true },
+      { kind: 'del', text: 'x', oldNo: 2 },
+      { kind: 'del', text: 'y', oldNo: 3 },
+      { kind: 'add', text: 'x', newNo: 2, cr: true },
+      { kind: 'add', text: 'y', newNo: 3, cr: true },
+    ])
+    expect(mixedLineEndings(d)).toBe(true)
+    // In a diff text with CRLF endings of its own, a CRLF line of the file ends with two.
+    const both = parseUnifiedDiff(LF_TO_CRLF.replace(/\n/g, '\r\n'))
+    expect(both.hunks[0].lines.map((l) => l.cr ?? false)).toEqual([true, false, false, true, true])
+  })
+
+  it('finds no mixed line endings in a file that uses CRLF throughout', () => {
+    expect(mixedLineEndings(parseUnifiedDiff(SINGLE_HUNK.replace(/^([ +-][^+-].*)$/gm, '$1\r')))).toBe(false)
+    expect(mixedLineEndings(parseUnifiedDiff(SINGLE_HUNK))).toBe(false)
   })
   it('decodes git-quoted non-ASCII paths', () => {
     expect(parseUnifiedDiff(QUOTED_PATH)).toMatchObject({ oldPath: 'café.txt', newPath: 'café.txt' })
@@ -162,5 +190,37 @@ describe('parseUnifiedDiff', () => {
       { kind: 'context', text: 'three', oldNo: 4, newNo: 4 },
     ])
     expect(d.lineCount).toBe(5)
+  })
+
+  it('reads file modes and whether the file was added or deleted', () => {
+    expect(parseUnifiedDiff(MODE_ONLY)).toMatchObject({ oldMode: '100644', newMode: '100755', hunks: [] })
+    expect(parseUnifiedDiff(MODE_AND_CONTENT)).toMatchObject({ oldMode: '100644', newMode: '100755', lineCount: 3 })
+    expect(parseUnifiedDiff(EMPTY_ADDED)).toMatchObject({ status: 'added', newMode: '100644', hunks: [] })
+    expect(parseUnifiedDiff(EMPTY_DELETED)).toMatchObject({ status: 'deleted', oldMode: '100644', hunks: [] })
+    expect(parseUnifiedDiff(BINARY_ADDED)).toMatchObject({ status: 'added', binary: true })
+    expect(parseUnifiedDiff(ADDED_FILE).status).toBe('added')
+    expect(parseUnifiedDiff(DELETED_FILE).status).toBe('deleted')
+    expect(parseUnifiedDiff(SINGLE_HUNK)).not.toHaveProperty('status')
+    expect(parseUnifiedDiff(SINGLE_HUNK)).not.toHaveProperty('oldMode')
+  })
+
+  it('reads a file replaced by a symlink as a type change, not as an addition', () => {
+    const d = parseUnifiedDiff(FILE_TO_SYMLINK)
+    expect(d).toMatchObject({ oldMode: '100644', newMode: '120000', lineCount: 3 })
+    expect(d).not.toHaveProperty('status')
+  })
+})
+
+describe('modeChangeText', () => {
+  it('says how the mode changed, or null when it did not', () => {
+    expect(modeChangeText(parseUnifiedDiff(MODE_ONLY))).toBe('Made executable (mode 100644 → 100755)')
+    expect(modeChangeText({ oldMode: '100755', newMode: '100644' })).toBe('No longer executable (mode 100755 → 100644)')
+    expect(modeChangeText(parseUnifiedDiff(FILE_TO_SYMLINK))).toBe(
+      'Changed from a regular file to a symlink (mode 100644 → 120000)',
+    )
+    expect(modeChangeText({ oldMode: '100644', newMode: '100600' })).toBe('Mode changed (100644 → 100600)')
+    expect(modeChangeText(parseUnifiedDiff(SINGLE_HUNK))).toBeNull()
+    expect(modeChangeText(parseUnifiedDiff(EMPTY_ADDED))).toBeNull()
+    expect(modeChangeText(parseUnifiedDiff(DELETED_FILE))).toBeNull()
   })
 })

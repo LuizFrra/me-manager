@@ -2018,6 +2018,9 @@ body.resizing .side-panel {
   border-color: var(--border);
   font-size: 12px;
 }
+.viewer-copy {
+  flex: 0 0 auto;
+}
 .segmented {
   display: flex;
   flex: 0 0 auto;
@@ -2163,13 +2166,14 @@ body.resizing .side-panel {
   min-height: 100%;
   font: 12px/18px var(--mono);
 }
-/* A search result's line: over both the gutter and the text, 8px (the pre padding) + 18px per line down. */
+/* A search result's line or a comment's lines: over the gutter and the text, 8px (the pre padding) + 18px
+   per line down. */
 .code-line-mark {
   position: absolute;
   left: 0;
   right: 0;
   top: calc(8px + var(--mark-line, 0) * 18px);
-  height: 18px;
+  height: calc(var(--mark-lines, 1) * 18px);
   background: color-mix(in srgb, var(--waiting) 12%, transparent);
   box-shadow:
     inset 2px 0 0 var(--waiting),
@@ -2398,6 +2402,11 @@ pre code.hljs {
   color: var(--muted);
   font-style: italic;
 }
+/* A carriage return, shown when the diff mixes CRLF and LF line endings. */
+.diff-eol {
+  margin-left: 1px;
+  color: var(--faint);
+}
 /* Split layout: old | new, each with its line numbers. Lines wrap, so both halves stay in view. */
 .diff-view.diff-view-split {
   min-width: 0;
@@ -2471,6 +2480,18 @@ pre code.hljs {
 .diff-unified tr.diff-selected td:first-child,
 .diff-split td.diff-ln.diff-selected {
   box-shadow: inset 2px 0 0 var(--accent);
+}
+/* A review comment's lines, opened from the tray: marked like the code view's .code-line-mark. */
+.diff-unified tr.diff-marked td,
+.diff-split td.diff-marked {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--waiting) 12%, transparent),
+    color-mix(in srgb, var(--waiting) 12%, transparent)
+  );
+}
+.diff-unified tr.diff-marked td:first-child,
+.diff-split td.diff-ln.diff-marked {
+  box-shadow: inset 2px 0 0 var(--waiting);
 }
 /* A long diff renders only the rows in view (see DiffView): every row is one 18 px line (DIFF_ROW_HEIGHT), and
    spacer rows stand for the others. */

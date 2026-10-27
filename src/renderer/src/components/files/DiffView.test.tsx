@@ -9,6 +9,14 @@ import { DIFF_ROW_HEIGHT, DiffView } from './DiffView'
 import {
   ADDED_FILE,
   BINARY,
+  BINARY_ADDED,
+  BINARY_DELETED,
+  EMPTY_ADDED,
+  EMPTY_DELETED,
+  FILE_TO_SYMLINK,
+  LF_TO_CRLF,
+  MODE_AND_CONTENT,
+  MODE_ONLY,
   MULTI_HUNK,
   NO_NEWLINE,
   RENAME_ONLY,
@@ -65,6 +73,53 @@ describe('DiffView', () => {
     expect(screen.getByText('Binary file changed.')).toBeInTheDocument()
   })
 
+  it('says a binary file was added or deleted', () => {
+    const { unmount } = render(<DiffView diff={BINARY_ADDED} />)
+    expect(screen.getByText('Binary file added.')).toBeInTheDocument()
+    unmount()
+    render(<DiffView diff={BINARY_DELETED} />)
+    expect(screen.getByText('Binary file deleted.')).toBeInTheDocument()
+  })
+
+  it('says an empty file was added or deleted instead of "No changes."', () => {
+    const { unmount } = render(<DiffView diff={EMPTY_ADDED} />)
+    expect(screen.getByText('Empty file added.')).toBeInTheDocument()
+    expect(screen.queryByText('No changes.')).not.toBeInTheDocument()
+    unmount()
+    render(<DiffView diff={EMPTY_DELETED} />)
+    expect(screen.getByText('Empty file deleted.')).toBeInTheDocument()
+  })
+
+  it('shows a change of the file mode alone, or above the lines', () => {
+    const { unmount } = render(<DiffView diff={MODE_ONLY} />)
+    expect(screen.getByText('Made executable (mode 100644 → 100755)')).toBeInTheDocument()
+    expect(screen.queryByText('No changes.')).not.toBeInTheDocument()
+    unmount()
+    const { unmount: unmount2 } = render(<DiffView diff={MODE_AND_CONTENT} />)
+    expect(screen.getByText('Made executable (mode 100644 → 100755)')).toBeInTheDocument()
+    expect(screen.getByText('B').closest('tr')).toHaveClass('diff-add')
+    unmount2()
+    render(<DiffView diff={FILE_TO_SYMLINK} layout="split" />)
+    expect(screen.getByText('Changed from a regular file to a symlink (mode 100644 → 120000)')).toBeInTheDocument()
+  })
+
+  it('marks CRLF line endings when the diff mixes them with LF ones', () => {
+    const { container, unmount } = render(<DiffView diff={LF_TO_CRLF} />)
+    expect(screen.getByText('Line endings differ: ␍ marks the lines that end in CRLF.')).toBeInTheDocument()
+    const marked = [...container.querySelectorAll('.diff-eol')].map((m) => m.closest('tr')?.className)
+    expect(marked).toEqual(['diff-context', 'diff-add', 'diff-add'])
+    unmount()
+    const split = render(<DiffView diff={LF_TO_CRLF} layout="split" />)
+    // The unchanged line on both sides, and the two added lines.
+    expect(split.container.querySelectorAll('.diff-eol')).toHaveLength(4)
+    split.unmount()
+    // A file with CRLF endings throughout: nothing to tell apart.
+    const crlf = render(<DiffView diff={SINGLE_HUNK.replace(/^([ +-][^+-].*)$/gm, '$1\r')} />)
+    expect(crlf.container.querySelector('.diff-eol')).toBeNull()
+    expect(screen.queryByText(/Line endings differ/)).not.toBeInTheDocument()
+    expect(screen.getByText('BETA')).toBeInTheDocument()
+  })
+
   it('shows the old path for a pure rename', () => {
     render(<DiffView diff={RENAME_ONLY} />)
     expect(screen.getByText('Renamed from old-name.txt')).toBeInTheDocument()
@@ -99,6 +154,40 @@ describe('DiffView', () => {
     const { container } = render(<DiffView diff={UNTRACKED_NO_INDEX} />)
     expect(screen.getByText('<script>alert(1)</script>')).toBeInTheDocument()
     expect(container.querySelector('script')).toBeNull()
+  })
+})
+
+describe('DiffView marked lines', () => {
+  it("marks a comment's lines, new ones by their new number and removed ones by their old one, and scrolls to them", () => {
+    const scroll = vi.fn()
+    const original = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scroll
+    try {
+      const mark = { lines: { start: 27, end: 28 }, removed: { start: 27, end: 27 } }
+      const { rerender } = render(<DiffView diff={MULTI_HUNK} mark={mark} />)
+      const marked = (): string[] =>
+        [...document.querySelectorAll('.diff-marked')].map((el) => el.querySelector('.diff-text')?.textContent ?? '')
+      expect(marked()).toEqual(['line 27', 'line twenty-seven', 'line 28'])
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect(scroll.mock.contexts[0]).toHaveTextContent('line 27')
+      // Not again for the same request (a poll, another layout), but for a new one.
+      rerender(<DiffView diff={`${MULTI_HUNK}`} mark={mark} layout="split" />)
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect([...document.querySelectorAll('td.diff-text.diff-marked')].map((td) => td.textContent)).toEqual([
+        'line 27',
+        'line twenty-seven',
+        'line 28',
+        'line 28',
+      ])
+      rerender(<DiffView diff={MULTI_HUNK} mark={{ ...mark }} layout="split" />)
+      expect(scroll).toHaveBeenCalledTimes(2)
+      // Lines the diff doesn't show: nothing to mark or scroll to.
+      rerender(<DiffView diff={MULTI_HUNK} mark={{ lines: { start: 12, end: 14 } }} />)
+      expect(document.querySelector('.diff-marked')).toBeNull()
+      expect(scroll).toHaveBeenCalledTimes(2)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original
+    }
   })
 })
 
@@ -275,19 +364,24 @@ describe('DiffView line selection', () => {
  * Renders `ui` in a scroller 10 rows high. jsdom has no layout: the scroller gets its height, and the table's body a
  * position that follows its scrollTop (call `layOut` again when the table is replaced).
  */
-function renderScrolled(ui: React.ReactElement): { scroller: HTMLElement; layOut: () => void } {
-  render(
+function renderScrolled(ui: React.ReactElement): {
+  scroller: HTMLElement
+  layOut: () => void
+  rerender: (ui: React.ReactElement) => void
+} {
+  const inScroller = (child: React.ReactElement): React.JSX.Element => (
     <div data-testid="scroller" style={{ overflowY: 'auto' }}>
-      {ui}
-    </div>,
+      {child}
+    </div>
   )
+  const { rerender } = render(inScroller(ui))
   const scroller = screen.getByTestId('scroller')
   Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 10 * DIFF_ROW_HEIGHT })
   const layOut = (): void => {
     scroller.querySelector('tbody')!.getBoundingClientRect = () => ({ top: -scroller.scrollTop }) as DOMRect
   }
   layOut()
-  return { scroller, layOut }
+  return { scroller, layOut, rerender: (next) => rerender(inScroller(next)) }
 }
 
 const scrollTo = (scroller: HTMLElement, top: number): void => {
@@ -363,6 +457,22 @@ describe('DiffView virtualization', () => {
     fireEvent.click(newNo('added 25003'), { shiftKey: true })
     expect(screen.getByRole('status')).toHaveTextContent('Lines 25001–25003')
     expect(screen.getByText('added 25002')).toHaveClass('diff-selected')
+  })
+
+  it('scrolls to marked lines far down a long diff, rendering them', () => {
+    const scroll = vi.fn()
+    const original = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scroll
+    try {
+      const diff = largeDiff(50_000)
+      const { scroller, rerender } = renderScrolled(<DiffView diff={diff} />)
+      rerender(<DiffView diff={diff} mark={{ lines: { start: 30_000, end: 30_000 } }} />)
+      expect(scroller.scrollTop).toBeGreaterThan(rowTop(29_900))
+      expect(screen.getByText('added 30000').closest('tr')).toHaveClass('diff-marked')
+      expect(scroll.mock.contexts.at(-1)).toHaveTextContent('added 30000')
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original
+    }
   })
 
   it('renders every row of a small diff, without row counts', () => {

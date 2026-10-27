@@ -7,13 +7,17 @@ import {
   type LineSelection,
   type LineSelectProps,
 } from '../../lib/lineSelection'
+import type { LineRange } from '../../lib/review'
 
 export interface CodeViewProps {
   /** Root-relative path, used to pick the language. */
   path: string
   content: string
-  /** A 1-based line to mark and scroll into view (a search result). Scrolls when it or the path changes. */
-  highlightLine?: number
+  /**
+   * Lines to mark and scroll into view (a search result, a review comment's lines). Scrolls when the path changes or
+   * another object is passed, not when the content does.
+   */
+  markLines?: LineRange
   /** Lines can be selected by their numbers, for a review comment; row `i` is line `i + 1`. */
   select?: LineSelectProps
 }
@@ -29,11 +33,15 @@ function rowAt(e: React.MouseEvent<HTMLElement>, lines: number): number {
   return Math.min(Math.max(row, 0), lines - 1)
 }
 
-export function CodeView({ path, content, highlightLine, select }: CodeViewProps): React.JSX.Element {
+export function CodeView({ path, content, markLines, select }: CodeViewProps): React.JSX.Element {
   const html = useMemo(() => highlight(path, content), [path, content])
   const lines = lineCount(content)
   const gutter = useMemo(() => Array.from({ length: lines }, (_, i) => String(i + 1)).join('\n'), [lines])
-  const mark = highlightLine !== undefined && highlightLine >= 1 && highlightLine <= lines ? highlightLine : undefined
+  const mark =
+    markLines && markLines.start >= 1 && markLines.start <= lines
+      ? { start: markLines.start, end: Math.min(Math.max(markLines.end, markLines.start), lines) }
+      : undefined
+  const markStart = mark?.start
   const markRef = useRef<HTMLDivElement>(null)
   const cursorRef = useRef<HTMLDivElement>(null)
   const hintId = useId()
@@ -51,7 +59,7 @@ export function CodeView({ path, content, highlightLine, select }: CodeViewProps
   useEffect(() => {
     const el = markRef.current
     if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', inline: 'nearest' })
-  }, [path, mark])
+  }, [path, markLines, markStart])
 
   return (
     <div className="code-view">
@@ -109,9 +117,9 @@ export function CodeView({ path, content, highlightLine, select }: CodeViewProps
         <div
           ref={markRef}
           className="code-line-mark"
-          data-line={mark}
+          data-line={mark.start}
           aria-hidden="true"
-          style={{ '--mark-line': mark - 1 } as React.CSSProperties}
+          style={{ '--mark-line': mark.start - 1, '--mark-lines': mark.end - mark.start + 1 } as React.CSSProperties}
         />
       )}
     </div>

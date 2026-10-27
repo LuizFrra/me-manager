@@ -44,31 +44,40 @@ describe('CodeView', () => {
   })
 })
 
-describe('CodeView highlightLine', () => {
-  it('marks the line and scrolls it into view, again only when the line or file changes', () => {
+describe('CodeView markLines', () => {
+  it('marks the lines and scrolls them into view, again only for another file or another request', () => {
     const scroll = vi.fn()
     const original = HTMLElement.prototype.scrollIntoView
     HTMLElement.prototype.scrollIntoView = scroll
     try {
       const content = 'a\nb\nc\nd\n'
-      const { container, rerender } = render(<CodeView path="a.txt" content={content} highlightLine={3} />)
+      const at3 = { start: 3, end: 3 }
+      const { container, rerender } = render(<CodeView path="a.txt" content={content} markLines={at3} />)
       const mark = container.querySelector('.code-line-mark') as HTMLElement
       expect(mark).toHaveAttribute('data-line', '3')
       expect(mark.style.getPropertyValue('--mark-line')).toBe('2')
+      expect(mark.style.getPropertyValue('--mark-lines')).toBe('1')
       expect(scroll).toHaveBeenCalledTimes(1)
-      rerender(<CodeView path="a.txt" content={`${content}e\n`} highlightLine={3} />)
+      rerender(<CodeView path="a.txt" content={`${content}e\n`} markLines={at3} />)
       expect(scroll).toHaveBeenCalledTimes(1)
-      rerender(<CodeView path="a.txt" content={content} highlightLine={4} />)
+      // The same line asked for again (a second click on a result or a comment).
+      rerender(<CodeView path="a.txt" content={content} markLines={{ start: 3, end: 3 }} />)
       expect(scroll).toHaveBeenCalledTimes(2)
+      rerender(<CodeView path="a.txt" content={content} markLines={{ start: 2, end: 9 }} />)
+      expect(scroll).toHaveBeenCalledTimes(3)
+      const range = container.querySelector('.code-line-mark') as HTMLElement
+      expect(range.style.getPropertyValue('--mark-line')).toBe('1')
+      // Cut at the last line.
+      expect(range.style.getPropertyValue('--mark-lines')).toBe('3')
     } finally {
       HTMLElement.prototype.scrollIntoView = original
     }
   })
 
-  it('marks nothing without a line, or for a line past the end', () => {
+  it('marks nothing without lines, or for lines past the end', () => {
     const { container, rerender } = render(<CodeView path="a.txt" content={'a\nb\n'} />)
     expect(container.querySelector('.code-line-mark')).toBeNull()
-    rerender(<CodeView path="a.txt" content={'a\nb\n'} highlightLine={9} />)
+    rerender(<CodeView path="a.txt" content={'a\nb\n'} markLines={{ start: 9, end: 9 }} />)
     expect(container.querySelector('.code-line-mark')).toBeNull()
   })
 })

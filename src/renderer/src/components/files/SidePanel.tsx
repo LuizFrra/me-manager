@@ -8,9 +8,9 @@ import type {
   SearchMatch,
   Target,
 } from '../../../../shared/types'
-import { ancestorDirs, buildTree, filterPaths, memoByIdentity, sameFileList } from '../../lib/fileTree'
+import { ancestorDirs, buildTree, filterPaths, flattenTree, memoByIdentity, sameFileList } from '../../lib/fileTree'
 import { isSvgPath } from '../../../../shared/images'
-import { isMarkdown } from '../../lib/files'
+import { folderIndex, isMarkdown } from '../../lib/files'
 import { autoDiffLayout, loadDiffLayout, saveDiffLayout, type DiffLayout } from '../../lib/diff/layout'
 import type { PanelState, PanelTab, SearchState } from '../../lib/panelState'
 import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
@@ -19,7 +19,8 @@ import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { ReviewTray } from './ReviewTray'
 import { SearchView } from './SearchView'
-import type { ReviewComment, ReviewDraft } from '../../lib/review'
+import type { LineRange, ReviewComment, ReviewDraft } from '../../lib/review'
+import { cleanError } from '../../lib/toasts'
 import { startVisibleInterval } from '../../lib/visibleInterval'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 
@@ -60,10 +61,8 @@ export const PANEL_POLL_MS = 3000
 const FILES_EVERY_N_POLLS = 5
 
 type Alive = () => boolean
-interface Loaded {
-  key: string
-  value: FileContent | string
-}
+/** What the viewer shows for `key`: the file's content or diff, or why it couldn't be read. */
+type Loaded = { key: string; value: FileContent | string; error?: undefined } | { key: string; error: string }
 
 /** Stores the JSON of `value` under `slot`; true if it differs from what was stored before. */
 function changed(cache: Map<string, string>, slot: string, value: unknown): boolean {
@@ -172,17 +171,20 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     }
   }, [missing, fetchFiles, fetchChanges, onError, reload])
 
-  // The selected file or diff, whenever the selection changes, and again on ⟳.
+  // The selected file or diff, whenever the selection changes, and again on ⟳. A failure shows in the viewer (a
+  // poll that reads it later replaces it).
   useEffect(() => {
     if (missing || !viewKey) return
     let alive = true
     fetchView(() => alive).catch((err) => {
-      if (alive) onError(err)
+      if (!alive) return
+      lastJson.current.delete('view')
+      setView({ key: viewKey, error: cleanError(err) })
     })
     return () => {
       alive = false
     }
-  }, [missing, viewKey, fetchView, onError, reload])
+  }, [missing, viewKey, fetchView, reload])
 
   // Polling while the panel is mounted (= open). Errors are silent and only mark ⟳ stale.
   useEffect(() => {
@@ -234,20 +236,24 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   )
 
   const select = (nextTab: PanelTab, path: string): void =>
-    onState({ ...state, tab: nextTab, selected: path, line: undefined, history: [] })
+    onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
-  const openLink = useLatestCallback((path: string): void =>
+  // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown. A link
+  // to a folder opens its README, as on GitHub.
+  const openLink = useLatestCallback((link: string, lines?: LineRange): void => {
+    const path = files && !lines && !files.includes(link) ? (folderIndex(files, link) ?? link) : link
     onState({
       ...state,
       tab: 'files',
       selected: path,
-      line: undefined,
+      reveal: lines && { path, lines: { ...lines } },
       history: state.selected ? [...state.history, state.selected] : state.history,
-    }),
-  )
+      mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
+    })
+  })
   const back = useLatestCallback((): void => {
     const history = state.history.slice(0, -1)
-    onState({ ...state, tab: 'files', selected: state.history.at(-1), line: undefined, history })
+    onState({ ...state, tab: 'files', selected: state.history.at(-1), reveal: undefined, history })
   })
   // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.
   const openMatch = useLatestCallback((m: SearchMatch): void => {
@@ -256,19 +262,22 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       ...state,
       tab: 'files',
       selected: m.path,
-      line: m.line,
+      reveal: { path: m.path, lines: { start: m.line, end: m.line } },
       history: [],
       mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
     })
   })
-  // A comment opens where it was made: the diff, or the file at its first line (Markdown and SVG as their text).
+  // A comment opens at its lines, where it was made: the diff, or the file (Markdown and SVG as their text).
   const openComment = (c: ReviewComment): void => {
     const inFiles = c.tab === 'files' || !isRepo
     onState({
       ...state,
       tab: inFiles ? 'files' : 'changes',
       selected: c.path,
-      line: inFiles ? (c.lines?.start ?? c.removed?.start) : undefined,
+      // New objects: a click on the same comment again scrolls back to its lines.
+      reveal: inFiles
+        ? { path: c.path, lines: { ...((c.lines ?? c.removed) as LineRange) } }
+        : { path: c.path, lines: c.lines && { ...c.lines }, removed: c.removed && { ...c.removed } },
       history: [],
       mdMode: inFiles && (isMarkdown(c.path) || isSvgPath(c.path)) ? 'raw' : state.mdMode,
     })
@@ -295,7 +304,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void => onState({ ...state, mdMode }))
   const openFile = useLatestCallback((path: string): void => select('files', path))
 
-  const loaded = view && view.key === viewKey ? view.value : undefined
+  const shown = view && view.key === viewKey ? view : undefined
+  const loaded = shown?.error === undefined ? shown?.value : undefined
   const change = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath) : undefined
 
   return (
@@ -386,6 +396,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
                   onChange={(e) => setFilter(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') setFilter('')
+                    else if (e.key === 'ArrowDown') {
+                      const row = panelRef.current?.querySelector<HTMLElement>('.file-tree [data-row]')
+                      if (row) {
+                        e.preventDefault()
+                        row.focus()
+                      }
+                    } else if (e.key === 'Enter' && filtering) {
+                      // The first file the narrowed tree shows.
+                      const first = flattenTree(tree, isOpen).find((r) => !r.node.dir)
+                      if (first) select('files', first.node.path)
+                    }
                   }}
                 />
                 <div className="panel-list-scroll">
@@ -437,10 +458,11 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             content={tab === 'files' && typeof loaded === 'object' ? loaded : undefined}
             diff={tab === 'changes' && typeof loaded === 'string' ? loaded : undefined}
             change={change}
+            error={shown?.error}
             mdMode={state.mdMode}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}
-            highlightLine={tab === 'files' ? state.line : undefined}
+            reveal={state.reveal?.path === shownPath ? state.reveal : undefined}
             canGoBack={state.history.length > 0}
             onBack={back}
             onMdMode={setMdMode}

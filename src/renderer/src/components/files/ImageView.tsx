@@ -12,11 +12,13 @@ export interface ImageViewProps {
   compact?: boolean
   /** A caption above the image, e.g. "New version". */
   label?: string
+  /** Something that changes with the image's contents (an SVG's text, a diff's blob ids): it is read again then. */
+  version?: string
 }
 
 type Zoom = 'fit' | 'actual'
 
-type Loaded = { key: string; url: string | null } | null
+type Loaded = { key: string; path: string; url: string | null } | null
 
 /** Bytes encoded in a base64 data: URL. */
 function dataUrlBytes(url: string): number {
@@ -30,21 +32,21 @@ function dataUrlBytes(url: string): number {
  * scripts and external references can't run or load. Centered on a checkerboard so transparency shows; Fit (the
  * default) scales it down to the panel, 100% shows it at its natural size.
  */
-export function ImageView({ path, size, load, compact, label }: ImageViewProps): React.JSX.Element {
+export function ImageView({ path, size, load, compact, label, version }: ImageViewProps): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded>(null)
   const [zoom, setZoom] = useState<Zoom>('fit')
-  const [dims, setDims] = useState<{ key: string; w: number; h: number } | null>(null)
+  const [dims, setDims] = useState<{ url: string; w: number; h: number } | null>(null)
   const [broken, setBroken] = useState<string | null>(null)
   const tooLarge = size !== undefined && size > MAX_IMAGE_BYTES
-  // A new size means new contents: read the image again.
-  const key = `${path}\0${size ?? ''}`
+  // A new size or version means new contents: read the image again.
+  const key = `${path}\0${size ?? ''}\0${version ?? ''}`
 
   useEffect(() => {
     if (tooLarge) return
     let alive = true
     load(path).then(
-      (url) => alive && setLoaded({ key, url }),
-      () => alive && setLoaded({ key, url: null }),
+      (url) => alive && setLoaded({ key, path, url }),
+      () => alive && setLoaded({ key, path, url: null }),
     )
     return () => {
       alive = false
@@ -54,8 +56,10 @@ export function ImageView({ path, size, load, compact, label }: ImageViewProps):
   if (tooLarge) {
     return <p className="viewer-message">Image too large to preview ({formatSize(size)})</p>
   }
-  if (!loaded || loaded.key !== key) return <p className="panel-hint">Loading image…</p>
-  if (loaded.url === null) {
+  // While a new version of the image is read, the last one stays: no "Loading" flash, no jump of what is below.
+  const shown = loaded && (loaded.key === key || (loaded.path === path && loaded.url !== null)) ? loaded : null
+  if (!shown) return <p className="panel-hint">Loading image…</p>
+  if (shown.url === null) {
     return (
       <p className="viewer-message">
         {size === undefined
@@ -64,8 +68,9 @@ export function ImageView({ path, size, load, compact, label }: ImageViewProps):
       </p>
     )
   }
-  const bytes = size ?? dataUrlBytes(loaded.url)
-  const shownDims = dims?.key === key ? dims : null
+  const { url } = shown
+  const bytes = size ?? dataUrlBytes(url)
+  const shownDims = dims?.url === url ? dims : null
   const name = path.slice(path.lastIndexOf('/') + 1)
   return (
     <div className={compact ? 'image-view compact' : 'image-view'}>
@@ -86,18 +91,18 @@ export function ImageView({ path, size, load, compact, label }: ImageViewProps):
           </div>
         )}
       </div>
-      {broken === key ? (
+      {broken === url ? (
         <p className="viewer-message">
           The image could not be displayed: it may be damaged or in an unsupported format.
         </p>
       ) : (
         <div className={`image-stage zoom-${compact ? 'fit' : zoom}`}>
           <img
-            src={loaded.url}
+            src={url}
             alt={name}
             draggable={false}
-            onLoad={(e) => setDims({ key, w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-            onError={() => setBroken(key)}
+            onLoad={(e) => setDims({ url, w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+            onError={() => setBroken(url)}
           />
         </div>
       )}

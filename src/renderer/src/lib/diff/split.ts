@@ -6,6 +6,8 @@ export interface SplitCell {
   text: string
   /** The line number on this side; notes have none. */
   no?: number
+  /** The line ends with a carriage return (see DiffLine.cr). */
+  cr?: true
 }
 
 /** A row of the side-by-side view. A null side is padding: that side has no line here. */
@@ -52,18 +54,19 @@ export function splitHunk(hunk: DiffHunk): SplitHunk {
   for (const line of hunk.lines) {
     if (line.kind === 'context') {
       flush()
+      const cr = line.cr && ({ cr: true } as const)
       rows.push({
-        left: { kind: 'context', text: line.text, no: line.oldNo },
-        right: { kind: 'context', text: line.text, no: line.newNo },
+        left: { kind: 'context', text: line.text, no: line.oldNo, ...cr },
+        right: { kind: 'context', text: line.text, no: line.newNo, ...cr },
       })
       last = null
     } else if (line.kind === 'del') {
       // git writes a block's deletions before its additions; a deletion after additions starts a new block.
       if (adds.length > 0) flush()
-      last = { cell: { kind: 'del', text: line.text, no: line.oldNo } }
+      last = { cell: { kind: 'del', text: line.text, no: line.oldNo, ...(line.cr && { cr: true }) } }
       dels.push(last)
     } else if (line.kind === 'add') {
-      last = { cell: { kind: 'add', text: line.text, no: line.newNo } }
+      last = { cell: { kind: 'add', text: line.text, no: line.newNo, ...(line.cr && { cr: true }) } }
       adds.push(last)
     } else {
       const note: SplitCell = { kind: 'note', text: line.text }

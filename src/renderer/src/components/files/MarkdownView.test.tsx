@@ -168,12 +168,37 @@ describe('MarkdownView', () => {
       expect(props.onOpenLink).not.toHaveBeenCalled()
     })
 
-    it('renders an anchor-only link as plain text', () => {
-      const { container, props } = setup('[jump](#section)')
-      expect(screen.getByText('jump')).toBeInTheDocument()
-      expect(container.querySelector('a')).toBeNull()
-      click(screen.getByText('jump'))
-      expect(props.onOpenLink).not.toHaveBeenCalled()
+    it('scrolls to the heading an anchor-only link names, GitHub-style, repeats numbered', () => {
+      const scroll = vi.fn()
+      const original = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scroll
+      try {
+        const { container, props } = setup(
+          '[jump](#getting-started) [again](#usage-1) [nowhere](#missing)\n\n## Getting Started\n\n## Usage\n\n### Usage\n',
+        )
+        const jump = screen.getByText('jump')
+        expect(jump.closest('[href]')).toBeNull()
+        expect(jump).toHaveAttribute('role', 'link')
+        click(jump)
+        expect(scroll.mock.contexts.at(-1)).toBe(container.querySelector('h2'))
+        fireEvent.keyDown(screen.getByText('again'), { key: 'Enter' })
+        expect(scroll.mock.contexts.at(-1)).toBe(container.querySelector('h3'))
+        click(screen.getByText('nowhere'))
+        expect(scroll).toHaveBeenCalledTimes(2)
+        expect(props.onOpenLink).not.toHaveBeenCalled()
+        // No ids: a heading must not take an id the app's own elements use.
+        expect(container.querySelector('[id]')).toBeNull()
+      } finally {
+        HTMLElement.prototype.scrollIntoView = original
+      }
+    })
+
+    it('opens a link to lines of a file (#L10-L12) at those lines', () => {
+      const { props } = setup('[code](../src/app.ts#L10-L12) [doc](b.md#usage)')
+      click(screen.getByText('code'))
+      expect(props.onOpenLink).toHaveBeenCalledWith('src/app.ts', { start: 10, end: 12 })
+      click(screen.getByText('doc'))
+      expect(props.onOpenLink).toHaveBeenLastCalledWith('docs/b.md')
     })
 
     it('renders a link escaping the root as plain text', () => {

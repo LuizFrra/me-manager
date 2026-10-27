@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseUnifiedDiff } from './parse'
 import { splitHunk, splitHunks, type SplitRow } from './split'
-import { ADDED_FILE, DELETED_FILE, MULTI_HUNK, NO_NEWLINE, SINGLE_HUNK } from './fixtures'
+import { ADDED_FILE, DELETED_FILE, LF_TO_CRLF, MULTI_HUNK, NO_NEWLINE, SINGLE_HUNK } from './fixtures'
 
 /** Rows as compact strings: `<left> | <right>`, each side `kind:no:text`, `·` for padding. */
 function show(rows: SplitRow[]): string[] {
@@ -93,6 +93,15 @@ describe('splitHunk', () => {
       'del:1:a | add:1:A',
       'context:2:last | context:2:last',
       'note::\\ No newline at end of file | note::\\ No newline at end of file',
+    ])
+  })
+
+  it("keeps each line's carriage return mark on its side", () => {
+    const rows = hunksOf(LF_TO_CRLF)[0].rows
+    expect(rows.map((r) => [r.left?.cr ?? false, r.right?.cr ?? false])).toEqual([
+      [true, true],
+      [false, true],
+      [false, true],
     ])
   })
 

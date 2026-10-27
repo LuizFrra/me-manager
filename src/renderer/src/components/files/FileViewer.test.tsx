@@ -122,10 +122,104 @@ describe('FileViewer images', () => {
     expect(img.compareDocumentPosition(screen.getByTestId('diff')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('reads a changed image again when its diff or its source changes', async () => {
+    const change: ChangedFile = { path: 'img/logo.png', status: 'M', added: 0, removed: 0, binary: true }
+    let n = 0
+    const readImage = vi.fn(async () => `data:image/png;base64,v${++n}`)
+    const api = { readImage, openExternal: async () => {} }
+    const at = (over: Partial<FileViewerProps>): React.JSX.Element => (
+      <FileViewer
+        api={api}
+        target={TARGET}
+        tab="changes"
+        path="img/logo.png"
+        change={change}
+        mdMode="view"
+        canGoBack={false}
+        onBack={() => {}}
+        onMdMode={() => {}}
+        onOpenLink={() => {}}
+        onOpenFile={() => {}}
+        onError={() => {}}
+        {...over}
+      />
+    )
+    const diff = (index: string): string =>
+      `diff --git a/img/logo.png b/img/logo.png\nindex ${index} 100644\nBinary files a/img/logo.png and b/img/logo.png differ\n`
+    // Not before the diff is in: it says which version the image is.
+    const { rerender } = render(at({ diff: undefined }))
+    expect(readImage).not.toHaveBeenCalled()
+    rerender(at({ diff: diff('f584f40..6bf43ff') }))
+    expect(await screen.findByRole('img', { name: 'logo.png' })).toHaveAttribute('src', 'data:image/png;base64,v1')
+    rerender(at({ diff: diff('f584f40..6bf43ff') }))
+    expect(readImage).toHaveBeenCalledTimes(1)
+    rerender(at({ diff: diff('f584f40..0aa0f34') }))
+    // The last version stays while the new one is read.
+    expect(screen.getByRole('img', { name: 'logo.png' })).toHaveAttribute('src', 'data:image/png;base64,v1')
+    await vi.waitFor(() =>
+      expect(screen.getByRole('img', { name: 'logo.png' })).toHaveAttribute('src', 'data:image/png;base64,v2'),
+    )
+
+    // An SVG edited without changing its size (a colour swapped) in the Files tab.
+    const svg = (fill: string): FileContent => {
+      const content = `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="${fill}"/></svg>`
+      return { kind: 'text', content, size: content.length, truncated: false }
+    }
+    rerender(at({ tab: 'files', path: 'icon.svg', change: undefined, diff: undefined, content: svg('#ff0000') }))
+    await vi.waitFor(() => expect(readImage).toHaveBeenCalledTimes(3))
+    rerender(at({ tab: 'files', path: 'icon.svg', change: undefined, diff: undefined, content: svg('#00ff00') }))
+    await vi.waitFor(() => expect(readImage).toHaveBeenCalledTimes(4))
+    expect(await screen.findByRole('img', { name: 'icon.svg' })).toHaveAttribute('src', 'data:image/png;base64,v4')
+  })
+
   it('shows no image for a deleted one', () => {
     const change: ChangedFile = { path: 'old.png', status: 'D', added: 0, removed: 0, binary: true }
     const { readImage } = renderViewer({ tab: 'changes', path: 'old.png', change, diff: 'Binary files differ' })
     expect(screen.queryByText('New version')).not.toBeInTheDocument()
     expect(readImage).not.toHaveBeenCalled()
+  })
+})
+
+describe('FileViewer scrolling', () => {
+  const text = (content: string): FileContent => ({ kind: 'text', content, size: content.length, truncated: false })
+  const props = (over: Partial<FileViewerProps>): FileViewerProps => ({
+    api: { readImage: async () => null, openExternal: async () => {} },
+    target: TARGET,
+    tab: 'files',
+    mdMode: 'view',
+    canGoBack: false,
+    onBack: () => {},
+    onMdMode: () => {},
+    onOpenLink: () => {},
+    onOpenFile: () => {},
+    onError: () => {},
+    ...over,
+  })
+
+  it('opens another file at its top, but keeps the place when the same file is read again', () => {
+    const { container, rerender } = render(<FileViewer {...props({ path: 'a.ts', content: text('a\n') })} />)
+    const body = container.querySelector('.viewer-body') as HTMLElement
+    body.scrollTop = 500
+    body.scrollLeft = 40
+    rerender(<FileViewer {...props({ path: 'a.ts', content: text('a changed\n') })} />)
+    expect(body.scrollTop).toBe(500)
+    rerender(<FileViewer {...props({ path: 'b.ts', content: undefined })} />)
+    expect(body.scrollTop).toBe(0)
+    expect(body.scrollLeft).toBe(0)
+    body.scrollTop = 300
+    rerender(<FileViewer {...props({ tab: 'changes', path: 'b.ts', diff: '' })} />)
+    expect(body.scrollTop).toBe(0)
+  })
+})
+
+describe('FileViewer empty files', () => {
+  it('says a file is empty instead of showing a blank line 1, in code or Markdown', () => {
+    const empty: FileContent = { kind: 'text', content: '', size: 0, truncated: false }
+    const { container } = renderViewer({ path: 'src/empty.ts', content: empty })
+    expect(screen.getByText('Empty file')).toBeInTheDocument()
+    expect(container.querySelector('.code-view')).toBeNull()
+    renderViewer({ path: 'NOTES.md', content: empty })
+    expect(screen.queryByTestId('markdown')).toBeNull()
+    expect(screen.getAllByText('Empty file')).toHaveLength(2)
   })
 })

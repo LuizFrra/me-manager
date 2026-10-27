@@ -47,3 +47,35 @@ export function isExternal(href: string): boolean {
     return false
   }
 }
+
+/** The decoded `#fragment` of a link, or null when it has none (or it doesn't decode). */
+export function linkFragment(href: string): string | null {
+  const hash = href.indexOf('#')
+  if (hash === -1 || hash === href.length - 1) return null
+  try {
+    return decodeURIComponent(href.slice(hash + 1))
+  } catch {
+    return null
+  }
+}
+
+/** The lines a GitHub-style line anchor names (`L12`, `L12-L20`, `L12-20`), or null for any other fragment. */
+export function lineFragment(fragment: string | null): { start: number; end: number } | null {
+  const m = fragment === null ? null : /^L(\d+)(?:-L?(\d+))?$/.exec(fragment)
+  if (!m) return null
+  const a = Number(m[1])
+  const b = m[2] === undefined ? a : Number(m[2])
+  if (a < 1 || b < 1) return null
+  return { start: Math.min(a, b), end: Math.max(a, b) }
+}
+
+/**
+ * The anchor GitHub gives a heading with this text: lowercased, punctuation dropped (letters, digits, `_` and `-`
+ * kept), spaces turned into dashes. Repeats get `-1`, `-2`… (see MarkdownView).
+ */
+export function headingSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '')
+    .replace(/ /g, '-')
+}

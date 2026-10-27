@@ -49,6 +49,7 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
   // Only the latest search's answer is shown.
   const seq = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -114,6 +115,37 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
       return next
     })
 
+  /** The files' and matches' buttons shown, top to bottom. */
+  const resultButtons = (): HTMLElement[] => [
+    ...(resultsRef.current?.querySelectorAll<HTMLElement>('.search-file, .search-hit') ?? []),
+  ]
+  // ↑/↓ move through the files and matches (↑ from the first goes back to the input), Home/End to the ends; on a
+  // file ←/→ fold and unfold its matches, on a match ← goes to its file.
+  const onResultsKey = (e: React.KeyboardEvent): void => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+    const buttons = resultButtons()
+    const i = buttons.indexOf(e.target as HTMLElement)
+    if (i === -1) return
+    const el = buttons[i]
+    const file = el.classList.contains('search-file')
+    const open = el.getAttribute('aria-expanded') === 'true'
+    let next: HTMLElement | null | undefined
+    if (e.key === 'ArrowDown') next = buttons[i + 1]
+    else if (e.key === 'ArrowUp') next = i === 0 ? inputRef.current : buttons[i - 1]
+    else if (e.key === 'Home') next = buttons[0]
+    else if (e.key === 'End') next = buttons.at(-1)
+    else if (e.key === 'ArrowLeft' && !file)
+      next = buttons.slice(0, i).findLast((b) => b.classList.contains('search-file'))
+    else if ((e.key === 'ArrowLeft' && file && open) || (e.key === 'ArrowRight' && file && !open)) {
+      e.preventDefault()
+      el.click()
+      return
+    }
+    if (!next) return
+    e.preventDefault()
+    next.focus()
+  }
+
   const result = outcome?.kind === 'done' ? outcome.result : null
   return (
     <div className="search-view">
@@ -131,6 +163,13 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
             if (e.key === 'Enter') {
               e.preventDefault()
               run()
+            } else if (e.key === 'ArrowDown') {
+              // Into the results, at the first match.
+              const first = resultsRef.current?.querySelector<HTMLElement>('.search-hit')
+              if (first) {
+                e.preventDefault()
+                first.focus()
+              }
             } else if (e.key === 'Escape' && query !== '') {
               e.preventDefault()
               onState({ ...state, query: '' })
@@ -167,7 +206,7 @@ export function SearchView(p: SearchViewProps): React.JSX.Element {
           )
         ) : null}
       </div>
-      <div className="search-results">
+      <div className="search-results" ref={resultsRef} onKeyDown={onResultsKey}>
         {outcome?.kind === 'error' && (
           <p className="search-error" role="alert">
             {outcome.message}

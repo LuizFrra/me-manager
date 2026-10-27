@@ -12,7 +12,7 @@ interface MdProps {
   source: string
   filePath: string
   loadImage: unknown
-  onOpenLink: (path: string) => void
+  onOpenLink: (path: string, lines?: { start: number; end: number }) => void
   onOpenExternal: unknown
 }
 const mdRenders = vi.hoisted(() => [] as MdProps[])
@@ -23,6 +23,8 @@ vi.mock('./MarkdownView', () => ({
       <div data-testid="markdown">
         MD:{p.source}
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('docs')}>folder link from {p.filePath}</button>
       </div>
     )
   },
@@ -40,8 +42,8 @@ vi.mock('../../lib/fileTree', async (importOriginal) => {
   }
 })
 vi.mock('./DiffView', () => ({
-  DiffView: (p: { diff: string; layout?: string }) => (
-    <pre data-testid="diff" data-layout={p.layout ?? 'unified'}>
+  DiffView: (p: { diff: string; layout?: string; mark?: unknown }) => (
+    <pre data-testid="diff" data-layout={p.layout ?? 'unified'} data-mark={p.mark && JSON.stringify(p.mark)}>
       DIFF:{p.diff}
     </pre>
   ),
@@ -106,6 +108,19 @@ describe('SidePanel', () => {
     expect(src).toHaveAttribute('aria-expanded', 'true')
     expect(fileButton('app\\.ts')).toHaveTextContent('M')
     expect(fileButton('notes\\.txt')).toHaveTextContent('U')
+  })
+
+  it('opens the first matching file with Enter in the filter, and moves into the tree with ↓', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} />)
+    await screen.findByRole('button', { name: 'README.md' })
+    const filter = screen.getByRole('textbox', { name: 'Filter files' })
+    await user.type(filter, 'format{ArrowDown}')
+    expect(screen.getByRole('button', { name: 'src' })).toHaveFocus()
+    await user.click(filter)
+    await user.keyboard('{Enter}')
+    expect(fileButton('format\\.ts')).toHaveAttribute('aria-current', 'true')
+    await vi.waitFor(() => expect(codeText()).toContain('formatName'))
   })
 
   it('narrows the tree with the filter, showing matching directories expanded', async () => {
@@ -196,6 +211,31 @@ describe('SidePanel', () => {
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
+  })
+
+  it('opens a Markdown link to lines of a file at those lines, with Back to the document', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'line link from README.md' }))
+    await vi.waitFor(() => expect(codeText()).toContain('greetAll'))
+    const mark = document.querySelector('.code-line-mark') as HTMLElement
+    expect(mark).toHaveAttribute('data-line', '9')
+    expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+  })
+
+  it("opens a Markdown link to a folder at the folder's README", async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({
+      listFiles: async () => ({ paths: ['README.md', 'docs/README.md', 'docs/guide.md'], truncated: false }),
+    })
+    const readFile = vi.spyOn(api, 'readFile')
+    render(<Harness api={api} initial={{ selected: 'README.md' }} />)
+    await screen.findByRole('button', { name: 'docs' })
+    await user.click(await screen.findByRole('button', { name: 'folder link from README.md' }))
+    await vi.waitFor(() => expect(readFile).toHaveBeenLastCalledWith(TASK, 'docs/README.md'))
+    expect(readFile).not.toHaveBeenCalledWith(TASK, 'docs')
   })
 
   it('passes MarkdownView the same callbacks when the panel re-renders', async () => {
@@ -369,6 +409,44 @@ describe('SidePanel', () => {
       <Harness api={createMockApi({ listFiles: async () => Promise.reject(new Error('boom')) })} onError={onError} />,
     )
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(new Error('boom')))
+  })
+
+  it('shows why a file or diff could not be read in the viewer, until a poll reads it', async () => {
+    vi.useFakeTimers()
+    let fail = true
+    const api = createMockApi({
+      readFile: async () => {
+        if (fail) throw new Error("Error invoking remote method 'readFile': Error: EACCES: permission denied")
+        return { kind: 'text', content: 'readable', size: 8, truncated: false }
+      },
+      fileDiff: async () => Promise.reject(new Error('Path is a directory')),
+    })
+    const onError = vi.fn()
+    render(<Harness api={api} initial={{ selected: 'src/app.ts' }} onError={onError} />)
+    const flush = (ms = 0): Promise<void> =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    await flush()
+    const viewer = screen.getByRole('region', { name: 'File viewer' })
+    expect(within(viewer).getByRole('alert')).toHaveTextContent("Can't show this file: EACCES: permission denied")
+    expect(within(viewer).queryByText('Loading…')).not.toBeInTheDocument()
+    // Shown where it happened, not as a toast too.
+    expect(onError).not.toHaveBeenCalled()
+
+    fail = false
+    await flush(PANEL_POLL_MS)
+    expect(codeText()).toBe('readable')
+    expect(within(viewer).queryByRole('alert')).not.toBeInTheDocument()
+
+    act(() => screen.getByRole('tab', { name: /Changes/ }).click())
+    act(() =>
+      within(document.querySelector('.changes-list') as HTMLElement)
+        .getByRole('button', { name: /src\/app\.ts/ })
+        .click(),
+    )
+    await flush()
+    expect(within(viewer).getByRole('alert')).toHaveTextContent("Can't show this diff: Path is a directory")
   })
 
   it('polls changes and the selected file every 3 s, silently marking failures, until unmounted', async () => {
@@ -573,6 +651,32 @@ describe('SidePanel', () => {
       expect(await screen.findByText(note)).toBeInTheDocument()
     })
 
+    it('moves between the results with the arrow keys, from the input and back to it', async () => {
+      const user = userEvent.setup()
+      render(<Harness api={createMockApi()} initial={{ tab: 'search' }} />)
+      const input = await screen.findByRole('textbox', { name: 'Search in files' })
+      await user.type(input, 'formatName{Enter}')
+      await screen.findByText('4 results in 3 files')
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('button', { name: /^notes\.txt, line 1:/ })).toHaveFocus()
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('button', { name: /app\.ts/, expanded: true })).toHaveFocus()
+      // ← folds a file's results, → shows them again.
+      await user.keyboard('{ArrowLeft}')
+      expect(screen.getByRole('button', { name: /app\.ts/, expanded: false })).toHaveFocus()
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('button', { name: /format\.ts/, expanded: true })).toHaveFocus()
+      await user.keyboard('{ArrowUp}{ArrowRight}{ArrowDown}')
+      expect(document.activeElement).toHaveAccessibleName(/^src\/app\.ts, line \d+:/)
+      // ← on a result goes to its file.
+      await user.keyboard('{ArrowLeft}')
+      expect(screen.getByRole('button', { name: /app\.ts/, expanded: true })).toHaveFocus()
+      await user.keyboard('{End}')
+      expect(screen.getByRole('button', { name: /^src\/util\/format\.ts, line/ })).toHaveFocus()
+      await user.keyboard('{Home}{ArrowUp}')
+      expect(input).toHaveFocus()
+    })
+
     it('opens a result in Files at its line', async () => {
       const user = userEvent.setup()
       const api = createMockApi()
@@ -637,6 +741,58 @@ describe('SidePanel', () => {
         { path: 'src/app.ts', tab: 'files', lines: { start: 2, end: 2 } },
         expect.any(Function),
       )
+    })
+
+    it("marks all of a comment's lines, and scrolls back to them when it is opened again", async () => {
+      const user = userEvent.setup()
+      const scroll = vi.fn()
+      const original = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scroll
+      try {
+        render(<Harness api={createMockApi()} review={review({ comments: [COMMENT] })} />)
+        await user.click(screen.getByRole('button', { name: 'src/app.ts:9-10' }))
+        await vi.waitFor(() => expect(document.querySelector('.code-line-mark')).not.toBeNull())
+        const mark = document.querySelector('.code-line-mark') as HTMLElement
+        expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
+        const scrolls = scroll.mock.calls.length
+        expect(scrolls).toBeGreaterThan(0)
+        await user.click(screen.getByRole('button', { name: 'src/app.ts:9-10' }))
+        expect(scroll.mock.calls.length).toBeGreaterThan(scrolls)
+      } finally {
+        HTMLElement.prototype.scrollIntoView = original
+      }
+    })
+
+    it('opens a comment made in a diff at its lines there', async () => {
+      const user = userEvent.setup()
+      const onDiff: ReviewComment = {
+        id: 2,
+        tab: 'changes',
+        path: 'src/app.ts',
+        lines: { start: 3, end: 4 },
+        removed: { start: 2, end: 2 },
+        note: 'Why?',
+      }
+      render(<Harness api={createMockApi()} review={review({ comments: [onDiff] })} />)
+      await user.click(screen.getByRole('button', { name: 'src/app.ts:3-4 (and removed line 2)' }))
+      expect(screen.getByRole('tab', { name: /Changes/ })).toHaveAttribute('aria-selected', 'true')
+      const diff = await screen.findByTestId('diff')
+      expect(JSON.parse(diff.dataset.mark ?? '')).toEqual({
+        path: 'src/app.ts',
+        lines: { start: 3, end: 4 },
+        removed: { start: 2, end: 2 },
+      })
+    })
+
+    it('shows the lines to reveal only on their own file (not one opened from elsewhere)', async () => {
+      render(
+        <Harness
+          api={createMockApi()}
+          initial={{ selected: 'src/util/format.ts', reveal: { path: 'src/app.ts', lines: { start: 2, end: 2 } } }}
+        />,
+      )
+      await vi.waitFor(() => expect(codeText()).toContain('formatName'))
+      expect(document.querySelector('.code-line-mark')).toBeNull()
     })
 
     it('moves focus to the Files tab when the last comment is deleted', async () => {
