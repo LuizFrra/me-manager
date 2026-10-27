@@ -217,6 +217,26 @@ describe('SidePanel', () => {
     expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
   })
 
+  it('goes Back to a document where it was scrolled', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await screen.findByText(/MD:# Demo project/)
+    const body = document.querySelector('.viewer-body') as HTMLElement
+    body.scrollTop = 420
+    await user.click(screen.getByRole('button', { name: 'link from README.md' }))
+    expect(await screen.findByText(/MD:# Guide/)).toBeInTheDocument()
+    expect(body.scrollTop).toBe(0)
+    body.scrollTop = 80
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+    expect(body.scrollTop).toBe(420)
+    // Only once: a poll bringing the document again leaves the scroll alone.
+    body.scrollTop = 10
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await act(() => new Promise((r) => setTimeout(r, 0)))
+    expect(body.scrollTop).toBe(10)
+  })
+
   it('opens a Markdown link to lines of a file at those lines, with Back to the document', async () => {
     const user = userEvent.setup()
     render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)

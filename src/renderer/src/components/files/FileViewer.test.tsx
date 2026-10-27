@@ -240,6 +240,45 @@ describe('FileViewer scrolling', () => {
     rerender(<FileViewer {...props({ tab: 'changes', path: 'b.ts', diff: '' })} />)
     expect(body.scrollTop).toBe(0)
   })
+
+  it('goes back to a scroll position once the content is in, following its late growth until the user scrolls', () => {
+    const observers: (() => void)[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb)
+        }
+        observe(): void {
+          // the callbacks are called by hand below
+        }
+        disconnect(): void {
+          observers.length = 0
+        }
+      },
+    )
+    try {
+      const reveal = { scrollTop: 300 }
+      const { container, rerender } = render(<FileViewer {...props({ path: 'a.md', reveal })} />)
+      const body = container.querySelector('.viewer-body') as HTMLElement
+      expect(body.scrollTop).toBe(0)
+      rerender(<FileViewer {...props({ path: 'a.md', reveal, content: text('a\n') })} />)
+      expect(body.scrollTop).toBe(300)
+      // The browser clamped it to a shorter document; images then loaded.
+      body.scrollTop = 120
+      observers.forEach((cb) => cb())
+      expect(body.scrollTop).toBe(300)
+      fireEvent.wheel(body)
+      body.scrollTop = 250
+      observers.forEach((cb) => cb())
+      expect(body.scrollTop).toBe(250)
+      // A new version of the file doesn't go back again.
+      rerender(<FileViewer {...props({ path: 'a.md', reveal, content: text('a changed\n') })} />)
+      expect(body.scrollTop).toBe(250)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('FileViewer empty files', () => {

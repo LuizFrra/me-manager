@@ -242,18 +242,29 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   // to a heading (`#usage`) opens the file there. A link to a folder opens its README, as on GitHub.
   const openLink = useLatestCallback((link: string, lines?: LineRange, heading?: string): void => {
     const path = files && !lines && !files.includes(link) ? (folderIndex(files, link) ?? link) : link
+    const scrollTop = panelRef.current?.querySelector('.viewer-body')?.scrollTop ?? 0
     onState({
       ...state,
       tab: 'files',
       selected: path,
       reveal: lines ? { path, lines: { ...lines } } : heading ? { path, heading } : undefined,
-      history: state.selected ? [...state.history, state.selected] : state.history,
+      history: state.selected ? [...state.history, { path: state.selected, scrollTop }] : state.history,
       mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
     })
   })
+  // Back to the file where it was scrolled.
   const back = useLatestCallback((): void => {
+    const visit = state.history.at(-1)
+    if (!visit) return
     const history = state.history.slice(0, -1)
-    onState({ ...state, tab: 'files', selected: state.history.at(-1), reveal: undefined, history })
+    const { path, scrollTop } = visit
+    onState({
+      ...state,
+      tab: 'files',
+      selected: path,
+      reveal: scrollTop > 0 ? { path, scrollTop } : undefined,
+      history,
+    })
   })
   // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.
   const openMatch = useLatestCallback((m: SearchMatch): void => {

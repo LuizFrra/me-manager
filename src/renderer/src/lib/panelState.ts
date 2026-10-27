@@ -21,6 +21,14 @@ export interface PanelReveal extends SelectedLines {
   path: string
   /** A heading's anchor (a link to `doc.md#usage`). */
   heading?: string
+  /** Where the viewer was scrolled (Back to a document). */
+  scrollTop?: number
+}
+
+/** A file visited before following a link: where to go Back to. */
+export interface PanelVisit {
+  path: string
+  scrollTop: number
 }
 
 /** What the side panel shows for one target. */
@@ -32,7 +40,7 @@ export interface PanelState {
   search: SearchState
   mdMode: 'view' | 'raw'
   /** Files visited before following Markdown links, most recent last. */
-  history: string[]
+  history: PanelVisit[]
 }
 
 export interface PanelEntry extends PanelState {
