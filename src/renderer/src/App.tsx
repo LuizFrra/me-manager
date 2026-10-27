@@ -874,6 +874,36 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
     setTabs(result ?? [])
     refresh()
+    if (result) void warnIfSignedOut(target)
+  }
+
+  // Targets already warned that their account isn't signed in, by targetKey and profile id: once per run each.
+  const signedOutWarned = useRef(new Set<string>())
+  /**
+   * After a task or folder opened (its Claude started, or was already running): a toast with "Log in" when its
+   * account is one the user added that has no login in its folder. Default is left alone, as before accounts
+   * existed (its login may come from elsewhere, an API key in the environment say). The profiles are read again,
+   * for their login state.
+   */
+  const warnIfSignedOut = async (target: Target): Promise<void> => {
+    const list = await api.listProfiles().catch(() => undefined)
+    if (!list) return
+    setProfiles(list)
+    const profile = targetProfile(stateRef.current, list, target)
+    if (!profile || profile.isDefault || profile.login !== 'notSignedIn') return
+    const key = `${targetKey(target)} ${profile.id}`
+    if (signedOutWarned.current.has(key)) return
+    signedOutWarned.current.add(key)
+    showInfo(`Claude account “${profile.name}” isn’t signed in`, {
+      warning: true,
+      action: { label: 'Log in', run: () => loginIn(target, profile.id) },
+    })
+  }
+
+  /** Opens a login tab for the profile in the target's session (see loginProfile), shown if it is still selected. */
+  const loginIn = async (target: Target, profileId: string): Promise<void> => {
+    const tabs = await attempt(() => api.loginProfile(profileId, target))
+    if (tabs && sameTarget(selectedRef.current, target)) setTabs(tabs)
   }
 
   // The UI as it was left (ui-state.json in main): restored once at start, then saved debounced and on unload.

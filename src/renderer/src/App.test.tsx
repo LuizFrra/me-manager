@@ -4750,6 +4750,32 @@ describe('App Claude accounts', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   })
 
+  it('offers to log in when a task opens in an account that is not signed in, once', async () => {
+    const user = userEvent.setup()
+    const { api, workId } = await withWork()
+    const loginProfile = vi.spyOn(api, 'loginProfile')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'fix login bug', 'docs') // Default: never warned about
+    expect(screen.queryByText(/isn’t signed in/)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
+    await user.click(screen.getByRole('radio', { name: /^Work/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await user.click(taskButton('fix login bug'))
+    const toast = (await screen.findByText('Claude account “Work” isn’t signed in')).closest('.toast') as HTMLElement
+    await user.click(within(toast).getByRole('button', { name: 'Log in' }))
+    expect(loginProfile).toHaveBeenCalledWith(workId, expect.objectContaining({ taskId: expect.any(String) }))
+    await waitFor(() => expect(screen.queryByText(/isn’t signed in/)).not.toBeInTheDocument())
+
+    await user.click(taskButton('docs'))
+    expect(await screen.findByText('Claude account “Work” isn’t signed in')).toBeInTheDocument() // docs's
+    const listProfiles = vi.spyOn(api, 'listProfiles')
+    await user.click(taskButton('fix login bug'))
+    await waitFor(() => expect(listProfiles).toHaveBeenCalled()) // its account read again: still not signed in
+    await act(async () => {})
+    expect(screen.getAllByText(/isn’t signed in/)).toHaveLength(1)
+  })
+
   it('offers no choice of account while Default is the only one', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
