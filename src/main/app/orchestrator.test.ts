@@ -1228,15 +1228,24 @@ describe('Orchestrator: Claude profiles', () => {
     if (options.themeProfile) s = m.setThemeProfile(s, themeId, options.themeProfile)
     if (options.taskProfile) s = m.setTaskProfile(s, themeId, repoId, fixTask.id, options.taskProfile)
     const missing = options.missing ?? []
+    const store = new MemoryStore(s)
     const ctx = makeDeps({
-      store: new MemoryStore(s),
+      store,
       defaultClaudeDir: '/home/me/.claude',
       pathExists: (path) => !missing.includes(path),
     })
     await ctx.settings.update({ profiles: [work, home] })
     const orch = new Orchestrator(ctx.deps, { runGraceMs: 0 })
     await orch.init()
-    return { ...ctx, orch, themeId, repoId, folderId, target: { themeId, itemId: repoId, taskId: fixTask.id } }
+    const target = { themeId, itemId: repoId, taskId: fixTask.id }
+    return { ...ctx, store, orch, themeId, repoId, folderId, target }
+  }
+  /** The theme's profile changed to `profileId` (null: Default) while its sessions run, as an app restart sees it. */
+  async function switchTheme(ctx: Ctx, profileId: string | null): Promise<Orchestrator> {
+    await ctx.store.save(m.setThemeProfile(await ctx.store.load(), ctx.themeId, profileId))
+    const orch = new Orchestrator(ctx.deps, { runGraceMs: 0 })
+    await orch.init()
+    return orch
   }
   const envOf = (ctx: Ctx, session: string, window?: string): Record<string, string> | undefined => {
     const s = ctx.tmux.sessions.get(session)
@@ -1298,6 +1307,39 @@ describe('Orchestrator: Claude profiles', () => {
     await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
     await ctx.orch.startRun(ctx.target)
     expect(envOf(ctx, SESSION, 'run')).toEqual(env)
+  })
+
+  it('opens tabs and starts Claude and the run tab again in the current profile, Default included', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.openTarget(ctx.target)
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    await ctx.orch.startRun(ctx.target)
+    expect(envOf(ctx, SESSION, 'run')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+
+    // Default: the session's CLAUDE_CONFIG_DIR is removed, so nothing started from now on inherits Work's.
+    let orch = await switchTheme(ctx, null)
+    await orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION)).toBeUndefined()
+    expect(envOf(ctx, SESSION, 'shell')).toBeUndefined()
+    await orch.closeTab(ctx.target, 0) // Claude's
+    await orch.restartClaude(ctx.target)
+    expect(envOf(ctx, SESSION, 'claude')).toBeUndefined()
+    await orch.restartRun(ctx.target)
+    expect(envOf(ctx, SESSION, 'run')).toBeUndefined()
+
+    orch = await switchTheme(ctx, 'p-home')
+    await orch.restartRun(ctx.target)
+    const home = { CLAUDE_CONFIG_DIR: '/home/me/.claude-home' }
+    expect(envOf(ctx, SESSION)).toEqual(home)
+    expect(envOf(ctx, SESSION, 'run')).toEqual(home)
+    expect(ctx.tmux.calls.at(-1)).toMatch(/^respawnWindow .* env CLAUDE_CONFIG_DIR=\/home\/me\/\.claude-home$/)
+    // Claude asked to resolve, its tab closed, starts in it too.
+    await orch.closeTab(
+      ctx.target,
+      (await orch.listTabs(ctx.target)).findIndex((t) => t.name === 'claude'),
+    )
+    await orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
+    expect(envOf(ctx, SESSION, 'claude')).toEqual(home)
   })
 
   it("refuses to start anything when the profile's folder is gone, never falling back to another account", async () => {
