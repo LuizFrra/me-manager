@@ -30,6 +30,8 @@ export const INVOKE_METHODS = [
   'renameTask',
   'setTaskNotes',
   'setTaskBudget',
+  'setThemeProfile',
+  'setTaskProfile',
   'checkTaskRemoval',
   'removeTask',
   'archiveTask',

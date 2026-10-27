@@ -1,4 +1,4 @@
-import type { AppState } from '../../../shared/types'
+import type { AppState, Task } from '../../../shared/types'
 import { describe, expect, it } from 'vitest'
 import { createMockApi } from './mockApi'
 
@@ -215,6 +215,24 @@ describe('createMockApi', () => {
     const budgets = await api.getBudgets()
     expect(budgets.tasks[taskId]).toMatchObject({ level: 'over', limit: 0.01 })
     expect(budgets.daily).toMatchObject({ level: 'ok', limit: 100_000 })
+  })
+
+  it("sets and clears a theme's and a task's Claude profile like main", async () => {
+    const api = createMockApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const repo = (await api.createTask(themeId, repoId, 'fix')).themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    const taskOf = (s: AppState): Task | undefined => {
+      const r = s.themes[0].items[0]
+      return r.kind === 'repo' ? r.tasks[0] : undefined
+    }
+    await expect(api.setThemeProfile(themeId, 'nope')).rejects.toThrow('Claude account not found')
+    expect((await api.setThemeProfile(themeId, 'default')).themes[0].profileId).toBe('default')
+    expect((await api.setThemeProfile(themeId, null)).themes[0]).not.toHaveProperty('profileId')
+    await expect(api.setTaskProfile(themeId, repoId, taskId, 'nope')).rejects.toThrow('Claude account not found')
+    expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, 'default'))?.profileId).toBe('default')
+    expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, null))).not.toHaveProperty('profileId')
   })
 
   it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {

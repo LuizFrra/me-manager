@@ -875,6 +875,30 @@ export class Orchestrator implements AppService {
     return this.exclusive(async () => this.commit(m.setTaskBudget(this.state, themeId, repoId, taskId, budgetUsd)))
   }
 
+  /** In the state queue, as removeProfile is: a profile can't be removed between the check and the save. */
+  async setThemeProfile(themeId: string, profileId: string | null): Promise<AppState> {
+    return this.exclusive(async () => {
+      const next = m.setThemeProfile(this.state, themeId, profileId)
+      this.assertProfile(profileId)
+      return this.commit(next)
+    })
+  }
+
+  async setTaskProfile(themeId: string, repoId: string, taskId: string, profileId: string | null): Promise<AppState> {
+    return this.exclusive(async () => {
+      const next = m.setTaskProfile(this.state, themeId, repoId, taskId, profileId)
+      this.assertProfile(profileId)
+      return this.commit(next)
+    })
+  }
+
+  /** Refuses an id no profile has (null, for none, is fine). */
+  private assertProfile(profileId: string | null): void {
+    if (profileId === null) return
+    const profiles = allProfiles(this.deps.settings.get(), this.deps.defaultClaudeDir)
+    if (!profiles.some((p) => p.id === profileId)) throw new Error('Claude account not found')
+  }
+
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)

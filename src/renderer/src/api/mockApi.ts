@@ -29,8 +29,12 @@ import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { moveActiveTask, moveEntry } from '../../../shared/reorder'
 import { normalizeBudget } from '../../../shared/budget'
+import { allProfiles } from '../../../shared/profiles'
 import { demoBudgets, demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
+
+/** The demo's Default Claude profile folder. */
+const DEMO_CLAUDE_DIR = '/home/demo/.claude'
 
 /** The branches a demo task can start from; listBranches' default is the first. */
 const DEMO_BRANCHES = ['origin/main', 'origin/develop', 'origin/release/2.0', 'main']
@@ -113,6 +117,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     if (restart) delete tab.dead
     activate(tab.index)
     return clone(tabs)
+  }
+
+  /** Like main: an id no profile has is refused (null, for none, is fine). */
+  const checkProfile = (profileId: string | null): void => {
+    if (profileId !== null && !allProfiles(settings, DEMO_CLAUDE_DIR).some((p) => p.id === profileId))
+      throw new Error('Claude account not found')
   }
 
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
@@ -281,6 +291,19 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         const budget = normalizeBudget(budgetUsd)
         if (budget === null) delete task.budgetUsd
         else task.budgetUsd = budget
+      }),
+    setThemeProfile: (themeId, profileId) =>
+      edit(themeId, (t) => {
+        checkProfile(profileId)
+        if (profileId === null) delete t.profileId
+        else t.profileId = profileId
+      }),
+    setTaskProfile: (themeId, repoId, taskId, profileId) =>
+      edit(themeId, (t) => {
+        const task = taskIn(t, repoId, taskId)
+        checkProfile(profileId)
+        if (profileId === null) delete task.profileId
+        else task.profileId = profileId
       }),
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: async (themeId, repoId, taskId) => ({

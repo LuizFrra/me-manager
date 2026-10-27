@@ -1371,6 +1371,39 @@ describe('Orchestrator: Claude profiles', () => {
     expect(ctx.git.calls.filter((c) => c.startsWith('addWorktree'))).toEqual([])
     expect((await ctx.orch.getState()).themes[0].items[0]).toMatchObject({ tasks: [fixTask] }) // no new task
   })
+
+  it('assigns a profile to a theme and a task, saved, and takes it away again', async () => {
+    const ctx = await withProfiles()
+    const { themeId, repoId } = ctx
+    let s = await ctx.orch.setThemeProfile(themeId, 'p-work')
+    expect(s.themes[0].profileId).toBe('p-work')
+    s = await ctx.orch.setTaskProfile(themeId, repoId, fixTask.id, 'default')
+    expect(taskOf(s).profileId).toBe('default')
+    expect(await ctx.store.load()).toEqual(s)
+    // The task's Default wins over its theme's Work; the folder gets the theme's.
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toBeUndefined()
+    await ctx.orch.openTarget({ themeId, itemId: ctx.folderId })
+    expect(envOf(ctx, 'mmf_client-x_site')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+
+    s = await ctx.orch.setTaskProfile(themeId, repoId, fixTask.id, null)
+    expect(taskOf(s)).not.toHaveProperty('profileId')
+    s = await ctx.orch.setThemeProfile(themeId, null)
+    expect(s.themes[0]).not.toHaveProperty('profileId')
+    expect(await ctx.store.load()).toEqual(s)
+  })
+
+  it('refuses a profile no account has, and a task or theme that is not there', async () => {
+    const ctx = await withProfiles()
+    const { themeId, repoId } = ctx
+    await expect(ctx.orch.setThemeProfile(themeId, 'p-gone')).rejects.toThrow('Claude account not found')
+    await expect(ctx.orch.setTaskProfile(themeId, repoId, fixTask.id, 'p-gone')).rejects.toThrow(
+      'Claude account not found',
+    )
+    await expect(ctx.orch.setThemeProfile('nope', 'p-work')).rejects.toThrow()
+    await expect(ctx.orch.setTaskProfile(themeId, repoId, 'nope', 'p-work')).rejects.toThrow()
+    expect(ctx.store.saved).toEqual([])
+  })
 })
 
 describe('Orchestrator: transcripts', () => {

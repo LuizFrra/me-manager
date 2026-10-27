@@ -488,6 +488,13 @@ export interface MeManagerApi {
    */
   setTaskBudget(themeId: string, repoId: string, taskId: string, budgetUsd: number | null): Promise<AppState>
   /**
+   * Sets the Claude profile (ClaudeProfile.id, see listProfiles) the theme's sessions start in; null removes it, so
+   * Default applies. Running sessions keep theirs until Claude restarts. Rejects an id no profile has.
+   */
+  setThemeProfile(themeId: string, profileId: string | null): Promise<AppState>
+  /** Sets the task's own Claude profile, as setThemeProfile; null removes it, so the theme's applies. */
+  setTaskProfile(themeId: string, repoId: string, taskId: string, profileId: string | null): Promise<AppState>
+  /**
    * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
    * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.
    */
