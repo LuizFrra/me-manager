@@ -1641,6 +1641,18 @@ describe('Orchestrator: Claude profiles', () => {
     expect(ctx.tmux.calls).toEqual([])
   })
 
+  it("refuses a login tab in a running session whose task's folder is gone, like openTarget", async () => {
+    const missing: string[] = []
+    const ctx = await withProfiles({ missing })
+    await ctx.orch.openTarget(ctx.target)
+    missing.push(fixTask.worktreePath)
+    ctx.tmux.calls = []
+    await expect(ctx.orch.loginProfile('p-home', ctx.target)).rejects.toThrow(
+      `Folder not found: ${fixTask.worktreePath}`,
+    )
+    expect(ctx.tmux.calls).toEqual([])
+  })
+
   it('starts and lists profiles with a theme or task on a profile that is gone', async () => {
     const ctx = await withProfiles({ themeProfile: 'p-gone', taskProfile: 'p-gone-too' })
     await expect(ctx.orch.listProfiles()).resolves.toHaveLength(3)

@@ -1245,6 +1245,7 @@ export class Orchestrator implements AppService {
 
   async loginProfile(profileId: string, target: Target): Promise<TabInfo[]> {
     const { session, cwd } = this.resolveOpenable(target)
+    if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     const { command, windowEnv } = this.loginWindow(this.getProfile(profileId))
     if (!(await this.deps.tmux.hasSession(session))) await this.openTarget(target)
     this.resolveOpenable(target) // archived or removed meanwhile, or on its way
