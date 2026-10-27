@@ -253,6 +253,8 @@ const RENAME_NOTE = {
 const EMPTY: AppState = { version: 1, themes: [] }
 const NO_COMMENTS: readonly ReviewComment[] = []
 const NO_URLS: readonly DevUrl[] = []
+/** How many of the tasks and folders opened last the palette lists first, before its actions. */
+const PALETTE_RECENT = 5
 /** Terminal zoom saves the font size once the keys have been still this long. */
 export const ZOOM_SAVE_MS = 500
 /** UI state (selection, collapsed groups, panels, filter) is saved once it has been still this long. */
@@ -566,10 +568,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const panelsRef = useRef(new Map<string, PanelEntry>())
   const [panel, setPanel] = useState<PanelEntry>(DEFAULT_PANEL)
   const [panelFraction, setPanelFraction] = useState(loadPanelFraction)
+  // Targets opened, by targetKey, most recent first: what the palette lists first. For the session only.
+  const [recentTargets, setRecentTargets] = useState<readonly string[]>([])
   const select = (target: Target | null): void => {
     selectedRef.current = target
     setSelected(target)
     const key = target && targetKey(target)
+    if (key)
+      setRecentTargets((prev) =>
+        prev[0] === key ? prev : [key, ...prev.filter((k) => k !== key)].slice(0, PALETTE_RECENT + 1),
+      )
     if (key)
       setUnread((prev) => {
         if (!prev.has(key)) return prev
@@ -1921,6 +1929,14 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const urls = devUrls.urls.filter((u) => tabs.some((t) => t.index === u.index && t.name === u.tab))
     return urls.length > 0 ? urls : NO_URLS
   }, [selected, devUrls, tabs])
+  // The current target is left out: the user is there already.
+  const paletteRecent = useMemo(() => {
+    const current = selected && targetKey(selected)
+    return recentTargets
+      .filter((key) => key !== current)
+      .slice(0, PALETTE_RECENT)
+      .map((key) => `target:${key}`)
+  }, [recentTargets, selected])
   // Built once per change of what it lists, not per App render: the palette re-runs its fuzzy matching (over up
   // to 50k files) whenever its commands change.
   const paletteCommands = useMemo(
@@ -2499,6 +2515,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       {paletteOpen && (
         <CommandPalette
           commands={paletteCommands}
+          recentIds={paletteRecent}
           onRun={runCommand}
           loadFiles={loadPaletteFiles}
           onOpenFile={openFileInPanel}

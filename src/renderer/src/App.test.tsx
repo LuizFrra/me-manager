@@ -709,6 +709,26 @@ describe('App command palette', () => {
     )
   })
 
+  it('lists the targets opened last first with an empty query, then the actions, however many tasks there are', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    let s = await api.createTheme('Work')
+    s = await api.addRepo(s.themes[0].id, '/home/me/code/my-api')
+    for (let i = 1; i <= 60; i++) await api.createTask(s.themes[0].id, s.themes[0].items[0].id, `task ${i}`)
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: /^\S task 7$/ }))
+    await user.click(taskButton('task 42'))
+    await user.click(taskButton('task 3'))
+    await user.click(taskButton('task 42'))
+    const dialog = await openPalette()
+    const names = optionNames(dialog)
+    // The current task is where the user is already: not offered first.
+    expect(names.slice(0, 2)).toEqual(['Work › my-api › task 3', 'Work › my-api › task 7'])
+    expect(names).toEqual(expect.arrayContaining(['New task…', 'Git: Push branch', 'Open settings']))
+    await user.type(search(), 'task 59')
+    expect(optionNames(dialog)[0]).toBe('Work › my-api › task 59')
+  })
+
   it('leaves Ctrl+K and Ctrl+/ to the terminal on Linux', async () => {
     render(<App api={repoApi()} />)
     const k = fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
