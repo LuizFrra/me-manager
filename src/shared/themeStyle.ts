@@ -20,8 +20,11 @@ export const isThemeColor = (v: unknown): v is ThemeColor => THEME_COLORS.some((
 /** The CSS colour of a stored colour name; undefined for none or an unknown name (e.g. a hand-edited state.json). */
 export const themeColorCss = (color: unknown): string | undefined => THEME_COLORS.find((c) => c.name === color)?.css
 
-/** The longest icon accepted, in UTF-16 code units: room for a ZWJ pair or a flag, not for a sentence. */
-export const MAX_THEME_ICON = 8
+/**
+ * The longest icon accepted, in UTF-16 code units: a bound on what is stored, not the single-emoji check (that
+ * counts graphemes). Room for the longest emoji (a family, a subdivision flag, a couple with skin tones: 11 to 15).
+ */
+export const MAX_THEME_ICON = 32
 
 /** A small choice of common emoji for the Customize dialog. */
 export const THEME_EMOJI: readonly string[] = [

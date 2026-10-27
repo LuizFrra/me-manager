@@ -262,6 +262,8 @@ export interface UsageSummaries {
 
 /** Claude Code usage from its transcripts. Read-only: never writes to the Claude config folder. */
 export interface UsageApi {
+  /** The folder the transcripts are read from (`<Claude config folder>/projects`). */
+  readonly projectsDir: string
   /**
    * Usage per root (a task worktree or folder path) and per named group of roots. A message counts for the most
    * specific root (requested directly or through a group) whose path contains its working directory; pass every

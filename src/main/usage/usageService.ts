@@ -446,7 +446,7 @@ export function aggregateUsage(
  * from the start. Results are cached until a transcript changes (or the day does).
  */
 export class UsageService implements UsageApi {
-  private readonly projectsDir: string
+  readonly projectsDir: string
   private readonly now: () => Date
   private readonly minRefreshMs: number
   private files = new Map<string, FileState>()

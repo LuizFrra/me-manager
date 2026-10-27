@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
@@ -319,5 +319,43 @@ describe('SettingsDialog: Esc with unsaved changes', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onCancel).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('SettingsDialog: number fields and the mouse wheel', () => {
+  it("doesn't let the wheel change a focused number, scrolling the dialog instead", async () => {
+    const user = userEvent.setup()
+    render(<SettingsDialog settings={DEFAULT_SETTINGS} onSave={vi.fn()} onCancel={vi.fn()} />)
+    const dialog = screen.getByRole('dialog', { name: 'Settings' })
+    let scrollTop = 0
+    Object.defineProperty(dialog, 'scrollTop', { get: () => scrollTop, set: (v: number) => (scrollTop = v) })
+    for (const name of ['Refresh interval', 'Terminal font size']) {
+      const field = screen.getByLabelText(name)
+      // Not focused: the wheel is the page's, as usual.
+      expect(fireEvent.wheel(field, { deltaY: 40 })).toBe(true)
+      await user.click(field)
+      const before = scrollTop
+      expect(fireEvent.wheel(field, { deltaY: 40 })).toBe(false) // Chromium would step the value
+      expect(scrollTop).toBe(before + 40)
+      expect(field).toHaveFocus()
+    }
+  })
+})
+
+describe('SettingsDialog: while saving', () => {
+  it("doesn't close on Esc, as Cancel doesn't", async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    const onSave = vi.fn(() => new Promise<void>(() => {}))
+    render(
+      <SettingsDialog settings={{ ...DEFAULT_SETTINGS, skipPermissions: false }} onSave={onSave} onCancel={onCancel} />,
+    )
+    await user.type(screen.getByLabelText('Editor command'), 'subl')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    await user.click(screen.getByLabelText('Editor command'))
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

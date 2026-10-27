@@ -1554,9 +1554,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       openDialog({ kind: 'commit', target: found.target, taskName: found.task.name, branch: found.task.branch })
   }
 
+  /** Rejects when committing fails: the Commit dialog shows why and keeps the message. */
   const doCommit = async (dialogId: number, target: Target, message: string): Promise<void> => {
-    const result = await gitAction(target, 'commit', () => api.commitAll(target, message))
-    if (!result) return
+    const running = gitBusyRef.current[targetKey(target)]
+    if (running) throw new Error(`Wait for the task's other git action to finish (${GIT_ACTION_BUSY[running]})`)
+    const result = await withGitBusy(target, 'commit', () => api.commitAll(target, message))
     closeDialog(dialogId)
     showInfo(`Committed ${plural(result.files, 'file')}`)
   }

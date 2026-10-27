@@ -737,3 +737,267 @@ describe('BulkConfirmDialog', () => {
     expect(screen.getByRole('button', { name: 'Update 2 tasks' })).toHaveFocus()
   })
 })
+
+describe('CommitDialog', () => {
+  const CHANGES = { files: [{ path: 'a.ts', status: 'M' as const, added: 1, removed: 0, binary: false }] }
+
+  it("can't be closed with Esc while committing, so a failure still finds the message", async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    // Resolves without closing the dialog, as App does when the commit fails.
+    const onCommit = vi.fn(() => new Promise<void>((r) => (finish = r)))
+    const onCancel = vi.fn()
+    render(
+      <CommitDialog
+        taskName="t"
+        branch="b"
+        loadChanges={async () => CHANGES}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />,
+    )
+    await screen.findByText('1 file will be committed')
+    const message = screen.getByRole('textbox', { name: 'Commit message' })
+    await user.type(message, 'Fix it{Control>}{Enter}{/Control}')
+    expect(onCommit).toHaveBeenCalledWith('Fix it')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    finish()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Commit' })).toBeEnabled())
+    expect(message).toHaveValue('Fix it')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows why the commit failed in the dialog, keeping the message, with the full output on demand', async () => {
+    const user = userEvent.setup()
+    const output = `git commit failed: husky - pre-commit script failed (code 1) ${'eslint: no-unused-vars '.repeat(20)}`
+    const onCommit = vi.fn().mockRejectedValueOnce(new Error(output)).mockResolvedValueOnce(undefined)
+    render(
+      <CommitDialog taskName="t" branch="b" loadChanges={async () => CHANGES} onCommit={onCommit} onCancel={vi.fn()} />,
+    )
+    await screen.findByText('1 file will be committed')
+    const message = screen.getByRole('textbox', { name: 'Commit message' })
+    await user.type(message, 'Fix it')
+    await user.click(screen.getByRole('button', { name: 'Commit' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/^Could not commit husky - pre-commit script failed \(code 1\) eslint/)
+    expect(within(alert).getAllByText(/husky/)[0].textContent!.length).toBeLessThan(200)
+    expect(message).toHaveValue('Fix it')
+    expect(screen.getByRole('button', { name: 'Commit' })).toBeEnabled()
+
+    await user.click(within(alert).getByText('Full output'))
+    expect(within(alert).getByText(output.replace('git commit failed: ', '').trim())).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'Commit' })) // tried again: the error goes
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('Esc asks before discarding typed text', () => {
+  it('Notes: asks when the notes were edited; Keep editing goes back, a second Esc or Discard discards', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<NotesDialog taskName="t" initial="old" onSave={vi.fn()} onCancel={onCancel} />)
+    const notes = screen.getByRole('textbox', { name: 'Notes' })
+    await user.type(notes, ' and new')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard your changes? Esc again discards them.')
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(notes).toHaveFocus()
+    expect(notes).toHaveValue('old and new')
+
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(onCancel).toHaveBeenCalledTimes(2)
+    await user.click(screen.getByRole('button', { name: 'Cancel' })) // needs no confirmation
+    expect(onCancel).toHaveBeenCalledTimes(3)
+  })
+
+  it('Notes: closes at once when the notes are as they were', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<NotesDialog taskName="t" initial="old" onSave={vi.fn()} onCancel={onCancel} />)
+    await user.type(screen.getByRole('textbox', { name: 'Notes' }), 'x{Backspace}')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  const LIST: BranchList = { default: 'origin/main', branches: ['origin/main'] }
+  const PROMPT: TaskTemplate = { name: 'Explain', prompt: 'Explain this repo' }
+  const renderNewTask = (props: Partial<React.ComponentProps<typeof NewTaskDialog>> = {}): ReturnType<typeof vi.fn> => {
+    const onCancel = vi.fn()
+    render(
+      <NewTaskDialog
+        repoName="api"
+        loadBranches={async () => LIST}
+        templates={[PROMPT]}
+        onSubmit={vi.fn()}
+        onCancel={onCancel}
+        {...props}
+      />,
+    )
+    return onCancel
+  }
+
+  it('New task: asks when a prompt was typed', async () => {
+    const user = userEvent.setup()
+    const onCancel = renderNewTask()
+    const prompt = screen.getByRole('textbox', { name: 'Initial prompt (optional)' })
+    await user.type(prompt, 'Fix the login')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard the prompt you typed? Esc again discards it.')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it("New task: closes at once with only a name, or a template's prompt", async () => {
+    const user = userEvent.setup()
+    const onCancel = renderNewTask()
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'fix')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Template' }), 'Explain')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it("New task: closes at once with the composer's prompt, which the composer keeps", async () => {
+    const user = userEvent.setup()
+    const onCancel = renderNewTask({ initialName: 'fix', initialPrompt: 'Fix the login' })
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NewTaskDialog base branch filter', () => {
+  const MANY: BranchList = {
+    default: 'origin/main',
+    branches: [
+      'origin/main',
+      ...Array.from({ length: 12 }, (_, i) => `origin/feature-${i + 1}`),
+      'origin/release/1.0',
+      'origin/release/2.0',
+    ],
+  }
+  const base = (): HTMLSelectElement => screen.getByRole('combobox', { name: 'Base branch' })
+  const filter = (): HTMLElement => screen.getByRole('textbox', { name: 'Filter branches' })
+  const options = (): string[] =>
+    within(base())
+      .getAllByRole('option')
+      .map((o) => o.textContent ?? '')
+
+  const renderDialog = (list: BranchList = MANY): { onSubmit: ReturnType<typeof vi.fn>; onCancel: () => void } => {
+    const onSubmit = vi.fn(async () => {})
+    const onCancel = vi.fn()
+    render(
+      <NewTaskDialog
+        repoName="api"
+        initialName="fix"
+        loadBranches={async () => list}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />,
+    )
+    return { onSubmit, onCancel }
+  }
+
+  it('is offered only when there are many branches', async () => {
+    renderDialog({ default: 'origin/main', branches: ['origin/main', 'origin/dev'] })
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(screen.queryByRole('textbox', { name: 'Filter branches' })).not.toBeInTheDocument()
+  })
+
+  it('lists only the matching branches, selecting the first, and arrows pick among them', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(base()).toHaveValue('origin/main')
+    await user.type(filter(), 'RELEASE')
+    expect(options()).toEqual(['origin/release/1.0', 'origin/release/2.0'])
+    expect(base()).toHaveValue('origin/release/1.0')
+    await user.keyboard('{ArrowDown}')
+    expect(base()).toHaveValue('origin/release/2.0')
+    await user.keyboard('{ArrowDown}{ArrowUp}{ArrowUp}')
+    expect(base()).toHaveValue('origin/release/1.0')
+    expect(filter()).toHaveFocus()
+    await user.keyboard('{Enter}') // doesn't create from the filter
+    expect(onSubmit).not.toHaveBeenCalled()
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(onSubmit).toHaveBeenCalledWith('fix', { baseRef: 'origin/release/1.0' }, undefined)
+  })
+
+  it('keeps the selection when nothing matches, and Esc clears the filter before closing', async () => {
+    const user = userEvent.setup()
+    const { onCancel } = renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    await user.selectOptions(base(), 'origin/feature-3')
+    await user.type(filter(), 'nope')
+    expect(screen.getByRole('status')).toHaveTextContent('No branch matches “nope”.')
+    expect(base()).toHaveValue('origin/feature-3')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(filter()).toHaveValue('')
+    expect(options()).toHaveLength(MANY.branches.length)
+    expect(base()).toHaveValue('origin/feature-3')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("Esc doesn't close a dialog while it saves, as Cancel doesn't", () => {
+  const pending = (): (() => Promise<void>) => vi.fn(() => new Promise<void>(() => {}))
+  it.each([
+    [
+      'Notes',
+      (onCancel: () => void) => <NotesDialog taskName="t" initial="" onSave={pending()} onCancel={onCancel} />,
+      'notes',
+    ],
+    [
+      'Budget',
+      (onCancel: () => void) => (
+        <BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={pending()} onCancel={onCancel} />
+      ),
+      '5',
+    ],
+    [
+      'RunCommand',
+      (onCancel: () => void) => (
+        <RunCommandDialog itemName="api" kind="repo" initial="" onSave={pending()} onCancel={onCancel} />
+      ),
+      'npm run dev',
+    ],
+  ])('%s', async (_name, dialog, text) => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(dialog(onCancel))
+    await user.keyboard(text)
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled()
+    await user.click(screen.getByRole('textbox'))
+    await user.keyboard('{Escape}{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('ReviewCommentDialog: Esc with a typed comment', () => {
+  it('asks before discarding a new or edited comment, and closes at once when unchanged', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    const { unmount } = render(<ReviewCommentDialog location="a.ts:3" onSave={vi.fn()} onCancel={onCancel} />)
+    await user.type(screen.getByRole('textbox', { name: 'Comment' }), 'Rename this')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard your comment? Esc again discards it.')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    unmount()
+
+    render(<ReviewCommentDialog location="a.ts:3" initial="Rename this" onSave={vi.fn()} onCancel={onCancel} />)
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(2)
+  })
+})

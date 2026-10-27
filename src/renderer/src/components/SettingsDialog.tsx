@@ -14,7 +14,29 @@ import {
   type SettingsForm,
   type TemplateForm,
 } from '../lib/settingsForm'
+import { useConfirmDiscard } from '../lib/useConfirmDiscard'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
+
+/**
+ * A number input the mouse wheel doesn't change. Chromium steps a focused number field's value on wheel, so
+ * scrolling the dialog with the pointer over the field just edited would change it unseen; the wheel scrolls the
+ * dialog (its form) instead. React's onWheel is passive and can't prevent that, hence the listener.
+ */
+function NumberInput(props: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>): React.JSX.Element {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const input = ref.current
+    if (!input) return
+    const onWheel = (e: WheelEvent): void => {
+      if (document.activeElement !== input) return
+      e.preventDefault()
+      if (input.form) input.form.scrollTop += e.deltaY
+    }
+    input.addEventListener('wheel', onWheel, { passive: false })
+    return () => input.removeEventListener('wheel', onWheel)
+  }, [])
+  return <input ref={ref} type="number" {...props} />
+}
 
 /**
  * A labelled field with an optional hint and warning, and its validation message (which also marks the input
@@ -263,9 +285,7 @@ export function SettingsDialog(props: {
 }): React.JSX.Element {
   const [form, setForm] = useState<SettingsForm>(() => toForm(props.settings))
   const [start] = useState(form)
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
-  // What had focus when Esc asked: "Keep editing" goes back to it.
-  const editing = useRef<HTMLElement | null>(null)
+  const discard = useConfirmDiscard(() => formChanged(start, form), props.onCancel)
   // A one-line input can't show (or keep) a line break: such arguments are only saved back as they were, unless
   // the field is edited, and a warning points to settings.json.
   const [argsEdited, setArgsEdited] = useState(false)
@@ -333,9 +353,7 @@ export function SettingsDialog(props: {
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return
           e.preventDefault()
-          if (confirmDiscard || !formChanged(start, form)) return props.onCancel()
-          editing.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-          setConfirmDiscard(true)
+          if (!busyRef.current) discard.escape() // like Cancel: a failed save keeps the dialog and the edits
         }}
       >
         <h2>Settings</h2>
@@ -487,9 +505,8 @@ export function SettingsDialog(props: {
               suffix="s"
             >
               {(aria) => (
-                <input
+                <NumberInput
                   {...aria}
-                  type="number"
                   inputMode="decimal"
                   min={POLL_SECONDS.min}
                   max={POLL_SECONDS.max}
@@ -506,9 +523,8 @@ export function SettingsDialog(props: {
               suffix="px"
             >
               {(aria) => (
-                <input
+                <NumberInput
                   {...aria}
-                  type="number"
                   inputMode="numeric"
                   min={FONT_SIZE_LIMITS.min}
                   max={FONT_SIZE_LIMITS.max}
@@ -601,23 +617,7 @@ export function SettingsDialog(props: {
 
         {/* Stays at the bottom of the scrolling dialog, so Save and the Esc question are always in view. */}
         <div className="settings-footer">
-          {confirmDiscard && (
-            <div className="settings-discard" role="alert">
-              <span>Discard your changes? Esc again discards them.</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmDiscard(false)
-                  editing.current?.focus()
-                }}
-              >
-                Keep editing
-              </button>
-              <button type="button" className="danger" onClick={props.onCancel}>
-                Discard
-              </button>
-            </div>
-          )}
+          {discard.prompt}
           <div className="dialog-actions">
             {toFix > 0 && (
               <button

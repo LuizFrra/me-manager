@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ACTION_MS, cleanError, INFO_MS, RESUME_MS, useToasts } from './toasts'
+import { ACTION_MS, cleanError, errorSummary, INFO_MS, RESUME_MS, useToasts } from './toasts'
 
 describe('cleanError', () => {
   it('strips the Electron IPC prefix', () => {
@@ -9,6 +9,20 @@ describe('cleanError', () => {
   })
   it('handles non-errors', () => {
     expect(cleanError('plain')).toBe('plain')
+  })
+})
+
+describe('errorSummary', () => {
+  it('keeps a short error whole', () => {
+    expect(errorSummary('Nothing to commit')).toEqual({ summary: 'Nothing to commit', more: false })
+  })
+  it('cuts a long one at a word, marking that there is more', () => {
+    const { summary, more } = errorSummary(`pre-commit hook failed ${'word '.repeat(60)}`, 40)
+    expect(summary).toBe('pre-commit hook failed word word word…')
+    expect(more).toBe(true)
+  })
+  it('cuts a text without spaces at the limit', () => {
+    expect(errorSummary('x'.repeat(50), 10)).toEqual({ summary: `${'x'.repeat(9)}…`, more: true })
   })
 })
 

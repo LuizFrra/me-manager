@@ -1424,6 +1424,10 @@ export class Orchestrator implements AppService {
     return { daily: budgetStatus(usage.groups.total?.today.cost ?? 0, settings.dailyBudgetUsd), tasks }
   }
 
+  async getUsageFolder(): Promise<string> {
+    return this.deps.usage.projectsDir
+  }
+
   async getUsageReport(): Promise<UsageReport> {
     const { targets, usage } = await this.allUsage()
     return {

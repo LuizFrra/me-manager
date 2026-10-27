@@ -74,7 +74,7 @@ describe('theme style', () => {
       [{ color: 'red; background: url(x)' }, /Unknown theme colour/],
       [{ icon: 'X' }, 'Use an emoji, not a letter or symbol'],
       [{ icon: '🚀🔥' }, 'Use a single emoji'],
-      [{ icon: '👨‍👩‍👧‍👦' }, 'Use a single emoji'],
+      [{ icon: '👨‍👩‍👧‍👦👨‍👩‍👧‍👦' }, 'Use a single emoji'],
       [{ icon: 5 }, 'The icon must be an emoji'],
       ['blue', 'Invalid theme style'],
     ] as const)

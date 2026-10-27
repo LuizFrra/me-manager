@@ -28,6 +28,15 @@ describe('theme icons', () => {
       expect(themeIconError(icon), icon).toBeNull()
   })
 
+  it('accepts a single emoji however many code units it takes', () => {
+    // A family (11 units), a subdivision flag (14) and a couple with skin tones (15).
+    for (const icon of ['👨‍👩‍👧‍👦', '🏴󠁧󠁢󠁳󠁣󠁴󠁿', '🧑🏻‍❤️‍💋‍🧑🏼']) {
+      expect(icon.length).toBeGreaterThan(8)
+      expect(themeIconError(icon), icon).toBeNull()
+      expect(graphemeCount(icon, false), icon).toBe(1)
+    }
+  })
+
   it("treats '' and whitespace as no icon", () => {
     expect(themeIconError('')).toBeNull()
     expect(themeIconError('   ')).toBeNull()
@@ -38,8 +47,9 @@ describe('theme icons', () => {
     expect(themeIconError('#')).toBe('Use an emoji, not a letter or symbol')
     expect(themeIconError('🚀🔥')).toBe('Use a single emoji')
     expect(themeIconError('ab')).toBe('Use a single emoji')
-    expect(themeIconError('👨‍👩‍👧‍👦')).toBe('Use a single emoji') // one grapheme, but 11 code units
-    expect('👨‍👩‍👧‍👦'.length).toBeGreaterThan(MAX_THEME_ICON)
+    const chain = `🚀${'\u200d🚀'.repeat(20)}` // one grapheme, but no emoji is that long
+    expect(chain.length).toBeGreaterThan(MAX_THEME_ICON)
+    expect(themeIconError(chain)).toBe('Use a single emoji')
     expect(themeIconError('🚀\n')).toBeNull() // trimmed
     expect(themeIconError('\u0007🚀')).toBe('The icon must be an emoji')
     expect(themeIconError(42)).toBe('The icon must be an emoji')

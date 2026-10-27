@@ -19,20 +19,24 @@ import { expandTaskName, templateBase } from '../../../shared/templates'
 import { archiveSkipReason, type BulkAction } from '../lib/bulk'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
-import { cleanError } from '../lib/toasts'
+import { cleanError, errorSummary } from '../lib/toasts'
 import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
+import { useConfirmDiscard } from '../lib/useConfirmDiscard'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
 import { newTaskNameError, type ExistingTask } from '../lib/names'
 
-/** A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. */
+/**
+ * A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. Not
+ * while `busy` (saving): Cancel is off then, and a failed save would find the dialog, and what was typed, gone.
+ */
 const cancelOnEscape =
-  (cancel: () => void) =>
+  (cancel: () => void, busy = false) =>
   (e: React.KeyboardEvent): void => {
     if (e.key !== 'Escape') return
     e.preventDefault()
-    cancel()
+    if (!busy) cancel()
   }
 
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
@@ -155,7 +159,7 @@ export function RunCommandDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Run command for ${props.itemName}`}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -707,7 +711,7 @@ export function CloneRepoDialog(props: {
 
 /**
  * Writes or edits a review comment's note on `location` (see reviewLocation). With `initial`, saving it unchanged is
- * disabled.
+ * disabled. Esc cancels, asking first when there is a new or changed comment.
  */
 export function ReviewCommentDialog(props: {
   location: string
@@ -721,6 +725,11 @@ export function ReviewCommentDialog(props: {
   const editing = props.initial !== undefined
   const title = editing ? `Edit the comment on ${props.location}` : `Comment on ${props.location}`
   const blocked = !note.trim() || (editing && note.trim() === props.initial?.trim())
+  const discard = useConfirmDiscard(
+    () => note.trim() !== (props.initial ?? '').trim(),
+    props.onCancel,
+    'Discard your comment? Esc again discards it.',
+  )
   const save = (): void => {
     if (!blocked) props.onSave(note.trim())
   }
@@ -731,7 +740,7 @@ export function ReviewCommentDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(discard.escape)}
         onSubmit={(e) => {
           e.preventDefault()
           save()
@@ -758,6 +767,7 @@ export function ReviewCommentDialog(props: {
           <span>{MOD_ENTER_LABEL} to save</span>
           <span id={counterId}>{`${note.length} / ${MAX_REVIEW_NOTE}`}</span>
         </div>
+        {discard.prompt}
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel}>
             Cancel
@@ -771,7 +781,10 @@ export function ReviewCommentDialog(props: {
   )
 }
 
-/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
+/**
+ * Edits a task's free-text notes. Mod+Enter saves, Esc cancels (asking first once they were edited); saving an
+ * empty text removes the notes.
+ */
 export function NotesDialog(props: {
   taskName: string
   initial: string
@@ -784,6 +797,7 @@ export function NotesDialog(props: {
   const busyRef = useRef(false)
   const counterId = useId()
   const unchanged = notes.trim() === props.initial.trim()
+  const discard = useConfirmDiscard(() => !unchanged, props.onCancel)
   const save = async (): Promise<void> => {
     if (busyRef.current || unchanged) return
     busyRef.current = true
@@ -802,7 +816,7 @@ export function NotesDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Notes for ${props.taskName}`}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(discard.escape, busy)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -828,6 +842,7 @@ export function NotesDialog(props: {
           <span>{MOD_ENTER_LABEL} to save</span>
           <span id={counterId}>{`${notes.length} / ${MAX_TASK_NOTES}`}</span>
         </div>
+        {discard.prompt}
         <div className="dialog-actions">
           <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
@@ -887,7 +902,7 @@ export function BudgetDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-label={`Budget for ${props.taskName}`}
-        onKeyDown={cancelOnEscape(props.onCancel)}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -931,6 +946,15 @@ export function BudgetDialog(props: {
 
 type BranchLoad = { kind: 'loading' } | { kind: 'ready'; list: BranchList } | { kind: 'failed'; error: string }
 
+/** From this many branches on, New task offers a filter above the list. */
+const BRANCH_FILTER_MIN = 10
+
+/** The branches containing `query`, ignoring case; all of them for an empty query. */
+const matchingBranches = (branches: readonly string[], query: string): readonly string[] => {
+  const q = query.trim().toLowerCase()
+  return q ? branches.filter((b) => b.toLowerCase().includes(q)) : branches
+}
+
 /** What the chosen template filled in, so choosing another one (or None) can tell it from what the user typed. */
 interface Prefill {
   name: string
@@ -942,9 +966,12 @@ interface Prefill {
 /**
  * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
  * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
- * default base. Mod+Enter creates from anywhere in the form, Esc cancels. A name main would refuse (no letters or
- * numbers, or another task's name or branch) is explained under the field, with Create off; a valid one shows its
- * branch.
+ * default base. Mod+Enter creates from anywhere in the form, Esc cancels (asking first when a prompt was typed: the
+ * composer's and a template's are not lost). A name main would refuse (no letters or numbers, or another task's
+ * name or branch) is explained under the field, with Create off; a valid one shows its branch.
+ *
+ * A repo with many branches gets a filter: typing lists only the matching ones (selecting the first when the
+ * selected one doesn't match) and the arrow keys pick among them, without leaving the field.
  *
  * With templates, a "Template" choice comes first: picking one fills in the fields it sets (all stay editable),
  * and clears what the previous template filled in unless the user has changed it since. A template's base that
@@ -988,6 +1015,7 @@ export function NewTaskDialog(props: {
   const [baseRef, setBaseRef] = useState('')
   // A template's base that the repo doesn't have (the default was selected instead).
   const [missingBase, setMissingBase] = useState<string | null>(null)
+  const [branchFilter, setBranchFilter] = useState('')
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const templateId = useId()
@@ -1046,13 +1074,33 @@ export function NewTaskDialog(props: {
       baseRef: '',
     }
     wantedBase.current = template?.base
+    setBranchFilter('') // its base must be listed
     if (branches.kind !== 'ready') return
     if (template?.base || baseRef === last.baseRef) selectBase(branches.list)
     else setMissingBase(null)
   }
 
+  const allBranches = branches.kind === 'ready' ? branches.list.branches : []
+  const matches = matchingBranches(allBranches, branchFilter)
+  // With no match the selection stays, alone in the list.
+  const listed = matches.length > 0 ? matches : allBranches.filter((b) => b === baseRef)
+  const pickBase = (ref: string): void => {
+    setBaseRef(ref)
+    setMissingBase(null)
+  }
+  const filterBranches = (text: string): void => {
+    setBranchFilter(text)
+    const next = matchingBranches(allBranches, text)
+    if (next.length > 0 && !next.includes(baseRef)) pickBase(next[0])
+  }
+
   const nameError = newTaskNameError(name, props.tasks ?? [])
   const slug = slugify(name)
+  const discard = useConfirmDiscard(
+    () => prompt.trim() !== '' && prompt !== (props.initialPrompt ?? '') && prompt !== prefill.current.prompt,
+    props.onCancel,
+    'Discard the prompt you typed? Esc again discards it.',
+  )
 
   const submit = async (): Promise<void> => {
     if (busyRef.current || !name.trim() || nameError) return
@@ -1083,7 +1131,7 @@ export function NewTaskDialog(props: {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
-            props.onCancel()
+            discard.escape()
           } else if (isModEnter(e.nativeEvent)) {
             e.preventDefault()
             void submit()
@@ -1140,18 +1188,40 @@ export function NewTaskDialog(props: {
         </div>
         <div className="dialog-field">
           <label htmlFor={baseId}>Base branch</label>
+          {allBranches.length >= BRANCH_FILTER_MIN && (
+            <input
+              className="branch-filter"
+              aria-label="Filter branches"
+              aria-controls={baseId}
+              placeholder={`Filter ${allBranches.length} branches…`}
+              spellCheck={false}
+              autoComplete="off"
+              value={branchFilter}
+              onChange={(e) => filterBranches(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  const i = matches.indexOf(baseRef) + (e.key === 'ArrowDown' ? 1 : -1)
+                  if (i >= 0 && i < matches.length) pickBase(matches[i])
+                } else if (e.key === 'Enter' && !isModEnter(e.nativeEvent)) {
+                  e.preventDefault() // Enter here picks nothing more; it must not create the task
+                } else if (e.key === 'Escape' && branchFilter) {
+                  e.preventDefault()
+                  e.stopPropagation() // clears the filter, not the dialog
+                  setBranchFilter('')
+                }
+              }}
+            />
+          )}
           <select
             id={baseId}
             aria-describedby={baseHintId}
             disabled={branches.kind !== 'ready'}
             value={branches.kind === 'ready' ? baseRef : ''}
-            onChange={(e) => {
-              setBaseRef(e.target.value)
-              setMissingBase(null)
-            }}
+            onChange={(e) => pickBase(e.target.value)}
           >
             {branches.kind === 'ready' ? (
-              branches.list.branches.map((b) => (
+              listed.map((b) => (
                 <option key={b} value={b}>
                   {b === branches.list.default ? `${b} (default)` : b}
                 </option>
@@ -1163,6 +1233,10 @@ export function NewTaskDialog(props: {
           {branches.kind === 'failed' ? (
             <p id={baseHintId} className="dialog-field-hint dialog-field-error" role="alert">
               Could not list the branches: {branches.error}. The task will start from the default branch.
+            </p>
+          ) : matches.length === 0 && branchFilter.trim() !== '' ? (
+            <p id={baseHintId} className="dialog-field-hint dialog-field-warning" role="status">
+              No branch matches “{branchFilter.trim()}”.
             </p>
           ) : branches.kind === 'ready' && missingBase !== null ? (
             <p id={baseHintId} className="dialog-field-hint dialog-field-warning" role="status">
@@ -1193,6 +1267,7 @@ export function NewTaskDialog(props: {
             <span>{`${prompt.length} / ${MAX_TASK_PROMPT}`}</span>
           </div>
         </div>
+        {discard.prompt}
         <div className="dialog-actions">
           <span className="dialog-actions-hint">{MOD_ENTER_LABEL} to create</span>
           <button type="button" onClick={props.onCancel} disabled={busy}>
@@ -1209,14 +1284,33 @@ export function NewTaskDialog(props: {
 
 type ChangesLoad = { kind: 'loading' } | { kind: 'ready'; list: ChangeList } | { kind: 'failed'; error: string }
 
+/** Why a commit failed: its start on a line, and git's whole output (a hook's can be long) behind a disclosure. */
+function CommitError({ error }: { error: string }): React.JSX.Element {
+  const text = error.replace(/^git commit failed: /, '')
+  const { summary, more } = errorSummary(text)
+  return (
+    <div className="dialog-warning commit-error" role="alert">
+      <strong>Could not commit</strong> <p>{summary}</p>
+      {more && (
+        <details>
+          <summary>Full output</summary>
+          <p className="commit-error-output">{text}</p>
+        </details>
+      )}
+    </div>
+  )
+}
+
 /**
  * "Commit all": the files `git add -A` will stage (the task's uncommitted changes, loaded when the dialog opens)
- * and a required message. Mod+Enter commits, Esc cancels. Stays open with the message when committing fails.
+ * and a required message. Mod+Enter commits, Esc cancels (not while committing). When committing fails (a
+ * pre-commit hook, a missing identity) it stays open with the message and shows git's error.
  */
 export function CommitDialog(props: {
   taskName: string
   branch: string
   loadChanges: () => Promise<ChangeList>
+  /** Rejects with the reason when committing fails. */
   onCommit: (message: string) => Promise<void>
   onCancel: () => void
 }): React.JSX.Element {
@@ -1227,6 +1321,7 @@ export function CommitDialog(props: {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const [error, setError] = useState<string | null>(null)
   const messageId = useId()
   const counterId = useId()
   const filesId = useId()
@@ -1249,8 +1344,11 @@ export function CommitDialog(props: {
     if (busyRef.current || !canCommit) return
     busyRef.current = true
     setBusy(true)
+    setError(null)
     try {
       await props.onCommit(message.trim())
+    } catch (err) {
+      setError(cleanError(err))
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -1271,7 +1369,8 @@ export function CommitDialog(props: {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
-            props.onCancel()
+            // Like Cancel, off while committing: closing then would lose the message if the commit fails.
+            if (!busyRef.current) props.onCancel()
           } else if (isModEnter(e.nativeEvent)) {
             e.preventDefault()
             void commit()
@@ -1331,6 +1430,7 @@ export function CommitDialog(props: {
             <span id={counterId}>{`${message.length} / ${MAX_COMMIT_MESSAGE}`}</span>
           </div>
         </div>
+        {error && <CommitError error={error} />}
         <div className="dialog-actions">
           <span className="dialog-actions-hint">{MOD_ENTER_LABEL} to commit</span>
           <button type="button" onClick={props.onCancel} disabled={busy}>

@@ -489,6 +489,7 @@ export class FakePromptFiles implements PromptFilesApi {
 
 /** Returns `byRoot[root]` for each root and `byGroup[name]` for each group (empty usage otherwise). */
 export class FakeUsage implements UsageApi {
+  projectsDir = '/home/me/.claude/projects'
   calls: { roots: string[]; groups: Record<string, string[]> }[] = []
   byRoot: Record<string, UsageSummary> = {}
   byGroup: Record<string, UsageSummary> = {}

@@ -1017,6 +1017,9 @@ button:disabled {
   line-height: 1.5;
   resize: vertical;
 }
+.dialog-field .branch-filter {
+  font-size: 12px;
+}
 .dialog-field select:focus,
 .dialog-field textarea:focus,
 .dialog input[aria-label='Name']:focus,
@@ -1083,7 +1086,7 @@ button:disabled {
 .settings-footer .dialog-actions {
   margin-top: 0;
 }
-.settings-discard {
+.dialog-discard {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1093,10 +1096,10 @@ button:disabled {
   border: 1px solid var(--danger);
   border-radius: 6px;
 }
-.settings-discard span {
+.dialog-discard span {
   flex: 1;
 }
-.settings-discard button {
+.dialog-discard button {
   flex: none;
   padding: 3px 10px;
   font-size: 12px;
@@ -1383,6 +1386,20 @@ button:disabled {
 .clone-error p {
   font-family: var(--mono);
   font-size: 12px;
+  white-space: pre-wrap;
+}
+.commit-error details {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.commit-error summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.commit-error-output {
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--mono);
   white-space: pre-wrap;
 }
 .confirm-remove-dialog {
