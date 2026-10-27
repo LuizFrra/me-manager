@@ -24,6 +24,15 @@ import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
 
+/** A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. */
+const cancelOnEscape =
+  (cancel: () => void) =>
+  (e: React.KeyboardEvent): void => {
+    if (e.key !== 'Escape') return
+    e.preventDefault()
+    cancel()
+  }
+
 /** Asks for a name: a new theme or task, or a new display name for one (`initial` prefills it). */
 export function NameDialog(props: {
   title: string
@@ -47,7 +56,9 @@ export function NameDialog(props: {
       <form
         className="dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={props.title}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={async (e) => {
           e.preventDefault()
           if (!name.trim() || unchanged) return
@@ -68,7 +79,6 @@ export function NameDialog(props: {
           value={name}
           onFocus={(e) => props.initial !== undefined && e.currentTarget.select()}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
         />
         {props.note && (
           <p id={noteId} className="dialog-note">
@@ -130,7 +140,9 @@ export function RunCommandDialog(props: {
       <form
         className="dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={`Run command for ${props.itemName}`}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -148,7 +160,6 @@ export function RunCommandDialog(props: {
           maxLength={MAX_RUN_COMMAND + 100}
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
         />
         {error && (
           <p id={errorId} className="dialog-field-hint dialog-field-error" role="alert">
@@ -681,7 +692,6 @@ export function CloneRepoDialog(props: {
   )
 }
 
-/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
 /**
  * Writes or edits a review comment's note on `location` (see reviewLocation). With `initial`, saving it unchanged is
  * disabled.
@@ -706,7 +716,9 @@ export function ReviewCommentDialog(props: {
       <form
         className="dialog notes-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={title}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           save()
@@ -724,13 +736,9 @@ export function ReviewCommentDialog(props: {
           onFocus={(e) => editing && e.currentTarget.select()}
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              props.onCancel()
-            } else if (isModEnter(e.nativeEvent)) {
-              e.preventDefault()
-              save()
-            }
+            if (!isModEnter(e.nativeEvent)) return
+            e.preventDefault()
+            save()
           }}
         />
         <div className="notes-meta">
@@ -750,6 +758,7 @@ export function ReviewCommentDialog(props: {
   )
 }
 
+/** Edits a task's free-text notes. Mod+Enter saves, Esc cancels; saving an empty text removes the notes. */
 export function NotesDialog(props: {
   taskName: string
   initial: string
@@ -778,7 +787,9 @@ export function NotesDialog(props: {
       <form
         className="dialog notes-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={`Notes for ${props.taskName}`}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -795,13 +806,9 @@ export function NotesDialog(props: {
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              props.onCancel()
-            } else if (isModEnter(e.nativeEvent)) {
-              e.preventDefault()
-              void save()
-            }
+            if (!isModEnter(e.nativeEvent)) return
+            e.preventDefault()
+            void save()
           }}
         />
         <div className="notes-meta">
@@ -865,7 +872,9 @@ export function BudgetDialog(props: {
       <form
         className="dialog"
         role="dialog"
+        aria-modal="true"
         aria-label={`Budget for ${props.taskName}`}
+        onKeyDown={cancelOnEscape(props.onCancel)}
         onSubmit={(e) => {
           e.preventDefault()
           void save()
@@ -883,7 +892,6 @@ export function BudgetDialog(props: {
             placeholder={props.defaultBudget === null ? 'None' : budgetText(props.defaultBudget)}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && props.onCancel()}
           />
         </div>
         {error && (

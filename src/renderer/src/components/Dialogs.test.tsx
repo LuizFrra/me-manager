@@ -16,6 +16,7 @@ import {
   NewTaskDialog,
   NotesDialog,
   RemoveTaskDialog,
+  ReviewCommentDialog,
   RunCommandDialog,
 } from './Dialogs'
 
@@ -364,6 +365,42 @@ describe('dialogs give focus back when they close', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(opener).toHaveFocus()
+  })
+})
+
+describe('dialogs cancel with Esc from any of their controls, not only the text field', () => {
+  it.each([
+    [
+      'Name',
+      (onCancel: () => void) => <NameDialog title="New theme" placeholder="" onSubmit={vi.fn()} onCancel={onCancel} />,
+    ],
+    [
+      'RunCommand',
+      (onCancel: () => void) => (
+        <RunCommandDialog itemName="api" kind="repo" initial="" onSave={vi.fn()} onCancel={onCancel} />
+      ),
+    ],
+    [
+      'Budget',
+      (onCancel: () => void) => (
+        <BudgetDialog taskName="t" initial={null} defaultBudget={null} onSave={vi.fn()} onCancel={onCancel} />
+      ),
+    ],
+    ['Notes', (onCancel: () => void) => <NotesDialog taskName="t" initial="" onSave={vi.fn()} onCancel={onCancel} />],
+    [
+      'ReviewComment',
+      (onCancel: () => void) => <ReviewCommentDialog location="a.ts:3" onSave={vi.fn()} onCancel={onCancel} />,
+    ],
+  ])('%s', async (_name, dialog) => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(dialog(onCancel))
+    const form = screen.getByRole('dialog')
+    expect(form).toHaveAttribute('aria-modal', 'true')
+    await user.tab() // from the text field to the first button
+    expect(within(form).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
 
