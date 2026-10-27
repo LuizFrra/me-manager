@@ -54,6 +54,24 @@ describe('resolveBaseRef', () => {
     const { repo } = await makeLocalRepo()
     await expect(svc.resolveBaseRef(repo)).resolves.toBe('main')
   })
+  it('uses the current branch when there is no main or master', async () => {
+    const { repo } = await makeLocalRepo()
+    await git(repo, 'branch', '-m', 'main', 'trunk')
+    await expect(svc.resolveBaseRef(repo)).resolves.toBe('trunk')
+  })
+  it('explains a repo without commits, and a detached HEAD without main or master', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'mm-git-')))
+    await run('git', ['init', '-b', 'main', root])
+    await expect(svc.resolveBaseRef(root)).rejects.toThrow(
+      `${root} has no commits yet: commit something first, then create the task`,
+    )
+    const { repo } = await makeLocalRepo()
+    await git(repo, 'checkout', '--detach')
+    await git(repo, 'branch', '-m', 'main', 'trunk')
+    await expect(svc.resolveBaseRef(repo)).rejects.toThrow(
+      `Could not find a base branch in ${repo}: it has no main or master, and its HEAD is not on a branch`,
+    )
+  })
 })
 
 describe('listBranches / verifyRef', () => {

@@ -224,9 +224,14 @@ export class GitService implements GitApi {
     for (const name of ['main', 'master']) {
       if (await this.refExists(repoPath, `refs/heads/${name}`)) return name
     }
-    const current = (await this.git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-    if (current && current !== 'HEAD') return current
-    throw new Error(`Could not find a base branch in ${repoPath}`)
+    // The checked-out branch, when it has a commit (a new repo's HEAD is on a branch that has none yet).
+    const current = (await this.git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')).trim()
+    if (current && (await this.refExists(repoPath, `refs/heads/${current}`))) return current
+    if ((await this.git(repoPath, ['rev-list', '-n', '1', '--all'])).trim() === '') {
+      throw new Error(`${repoPath} has no commits yet: commit something first, then create the task`)
+    }
+    const why = current ? `${current} has no commits yet` : 'its HEAD is not on a branch'
+    throw new Error(`Could not find a base branch in ${repoPath}: it has no main or master, and ${why}`)
   }
 
   async listBranches(repoPath: string): Promise<string[]> {
