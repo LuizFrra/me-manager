@@ -51,6 +51,19 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession('mmt_conf')
   })
 
+  it("leaves copy mode in a session's active pane, and does nothing outside it", async () => {
+    await svc.newSession('mmt_mode', cwd, 'claude', 'exec cat')
+    const inMode = async (): Promise<string> =>
+      (await run('tmux', ['-L', socket, 'display-message', '-p', '-t', '=mmt_mode:', '#{pane_in_mode}'])).trim()
+    await run('tmux', ['-L', socket, 'copy-mode', '-t', '=mmt_mode:'])
+    expect(await inMode()).toBe('1')
+    await svc.leaveCopyMode('mmt_mode')
+    expect(await inMode()).toBe('0')
+    await svc.leaveCopyMode('mmt_mode')
+    expect(await inMode()).toBe('0')
+    await svc.killSession('mmt_mode')
+  })
+
   it('creates a session with a named first window', async () => {
     await svc.newSession('mmt_a_b_c', cwd, 'claude', 'sh')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(true)

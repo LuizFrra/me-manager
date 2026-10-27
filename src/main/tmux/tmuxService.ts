@@ -267,6 +267,10 @@ export class TmuxService implements TmuxApi {
     await this.tmux(['send-keys', '-t', target, 'C-c'])
   }
 
+  async leaveCopyMode(session: string): Promise<void> {
+    await this.leaveMode(`=${session}:`) // the session's active window
+  }
+
   async listWindowActivity(session: string): Promise<WindowActivity[]> {
     let out: string
     try {

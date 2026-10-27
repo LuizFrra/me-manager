@@ -849,6 +849,7 @@ describe('Orchestrator: archiving tasks', () => {
       () => orch.selectTab(target, 0),
       () => orch.closeTab(target, 0),
       () => orch.restartClaude(target),
+      () => orch.leaveCopyMode(target),
       () => orch.askClaudeToResolve(target, 'rebase', ['a.ts']),
       () => orch.copyTranscript(target, 0),
       () => orch.captureTranscript(target, 0),
@@ -1881,6 +1882,12 @@ describe('Orchestrator: update from base', () => {
     const target = { themeId: ctx.themeId, itemId: ctx.repoId, taskId: task.id }
     return { ...ctx, target, task, session: 'mmt_client-x_my-api_fix' }
   }
+
+  it("leaves copy mode in the task's session", async () => {
+    const { orch, tmux, target, session } = await withTask()
+    await orch.leaveCopyMode(target)
+    expect(tmux.calls).toEqual([`leaveCopyMode ${session}`])
+  })
 
   it('fetches, then rebases onto the base by default', async () => {
     const { orch, git, target } = await withTask()

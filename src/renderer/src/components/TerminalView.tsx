@@ -36,6 +36,8 @@ export interface TerminalViewProps {
   onOpenFile?: (path: string, line?: number) => void
   /** The shown task's root and files, so paths to them in the output become links. */
   loadLinkFiles?: () => Promise<LinkFiles | null>
+  /** Leaves tmux's copy mode in the shown session (see MeManagerApi.leaveCopyMode). */
+  onLeaveCopyMode?: () => Promise<void>
 }
 
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
@@ -50,6 +52,9 @@ const COPY_KEY = isMac ? '⌘C' : 'Ctrl+C'
 /** Following a link takes Ctrl+click (Cmd+click on macOS), so a plain click still focuses or selects. */
 const followsLink = (e: MouseEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
 const isHttp = (url: string): boolean => /^https?:\/\//i.test(url)
+/** One cursor or paging key (arrows, Page Up/Down, Home/End): in copy mode tmux scrolls with these. */
+// eslint-disable-next-line no-control-regex -- escape sequences are exactly what is matched
+const NAVIGATION_KEY = /^\x1b(?:\[[0-9;]*[A-Za-z~]|O[A-Za-z])$/
 
 export function TerminalView({
   api,
@@ -62,17 +67,22 @@ export function TerminalView({
   onOpenUrl,
   onOpenFile,
   loadLinkFiles,
+  onLeaveCopyMode,
 }: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   // Read by the handlers, which are attached once with the terminal.
   const modalOpenRef = useRef(modalOpen)
   const claudeTabRef = useRef(claudeTab)
-  const handlersRef = useRef({ onOpenUrl, onOpenFile, loadLinkFiles })
+  const handlersRef = useRef({ onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode })
   useEffect(() => {
     modalOpenRef.current = modalOpen
     claudeTabRef.current = claudeTab
-    handlersRef.current = { onOpenUrl, onOpenFile, loadLinkFiles }
-  }, [modalOpen, claudeTab, onOpenUrl, onOpenFile, loadLinkFiles])
+    handlersRef.current = { onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode }
+  }, [modalOpen, claudeTab, onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode])
+  // The wheel scrolled back since the last keystroke, so tmux may be in copy mode, where it would take keys itself.
+  const scrolledBackRef = useRef(false)
+  // Input held while copy mode is left; it goes to the program once tmux is out of it.
+  const pendingRef = useRef<string[] | null>(null)
   const termRef = useRef<Terminal | null>(null)
   // The last mouse selection tmux copied; it reaches the clipboard only on an explicit copy.
   const heldRef = useRef('')
@@ -198,6 +208,36 @@ export function TerminalView({
       showNotice('Copied')
     }
     host.addEventListener('copy', onCopy)
+    /**
+     * Input for the program. After a scroll back tmux is likely in copy mode, where typed text would be swallowed or
+     * read as copy-mode commands: the first key that isn't a scrolling one leaves copy mode, and it and what follows
+     * are held until tmux is out of it. Escape only leaves.
+     */
+    const send = (data: string): void => {
+      const mouse = data.startsWith('\x1b[<')
+      // Typing (not a mouse report) ends the moment when Ctrl+C copies the tmux selection.
+      if (!mouse) setFresh(false)
+      if (pendingRef.current) {
+        pendingRef.current.push(data)
+        return
+      }
+      const leave = handlersRef.current.onLeaveCopyMode
+      if (scrolledBackRef.current && !mouse && !NAVIGATION_KEY.test(data) && leave) {
+        scrolledBackRef.current = false
+        const pending = data === '\x1b' ? [] : [data]
+        pendingRef.current = pending
+        void leave()
+          .catch(() => undefined)
+          .then(() => {
+            if (pendingRef.current !== pending) return // another session is shown now
+            pendingRef.current = null
+            for (const queued of pending) api.ptyWrite(queued)
+          })
+        return
+      }
+      api.ptyWrite(data)
+    }
+
     const pasteClipboard = (orImage: boolean): void => {
       void navigator.clipboard
         .readText()
@@ -205,7 +245,7 @@ export function TerminalView({
         .then((text) => {
           if (text) term.paste(text)
           // Nothing to paste as text: maybe an image, which Claude Code reads from the clipboard itself on ^V.
-          else if (orImage) api.ptyWrite(PASTE_IMAGE_SEQUENCE)
+          else if (orImage) send(PASTE_IMAGE_SEQUENCE)
         })
     }
     const menuItems = (link: TextLink | null): MenuItem[] => {
@@ -237,6 +277,11 @@ export function TerminalView({
       setMenu({ x: e.clientX, y: e.clientY, trigger: term.textarea ?? host, items })
     }
     host.addEventListener('contextmenu', onContextMenu)
+    // Captured: in mouse mode xterm stops the wheel event once it has reported it to tmux.
+    const onWheel = (e: WheelEvent): void => {
+      if (e.deltaY < 0) scrolledBackRef.current = true
+    }
+    host.addEventListener('wheel', onWheel, { capture: true, passive: true })
     // A new click or drag replaces the selection; tmux reports a drag's text once the button is released.
     const onMouseDown = (e: MouseEvent): void => {
       if (e.button === 0) setFresh(false)
@@ -253,7 +298,7 @@ export function TerminalView({
       // Handled here, on keydown; the keypress (and Chromium's native paste) must not act on it too.
       e.preventDefault()
       if (e.type !== 'keydown') return false
-      if (action === 'newline') api.ptyWrite(NEWLINE_SEQUENCE)
+      if (action === 'newline') send(NEWLINE_SEQUENCE)
       else if (action === 'copy' || action === 'copyOrInterrupt') {
         const text = copyText()
         if (text) copy(text)
@@ -262,11 +307,7 @@ export function TerminalView({
     })
 
     const offData = api.onPtyData((data) => term.write(data))
-    const input = term.onData((data) => {
-      // Typing (not a mouse report) ends the moment when Ctrl+C copies the tmux selection.
-      if (!data.startsWith('\x1b[<')) setFresh(false)
-      api.ptyWrite(data)
-    })
+    const input = term.onData(send)
     const doFit = (): void => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return
       fit.fit()
@@ -285,6 +326,7 @@ export function TerminalView({
       host.removeEventListener('copy', onCopy)
       host.removeEventListener('contextmenu', onContextMenu)
       host.removeEventListener('mousedown', onMouseDown)
+      host.removeEventListener('wheel', onWheel, { capture: true })
       settled.cancel()
       offData()
       input.dispose()
@@ -301,6 +343,8 @@ export function TerminalView({
     heldRef.current = ''
     setFresh(false)
     linkFilesCache.current = null
+    scrolledBackRef.current = false
+    pendingRef.current = null
     fitRef.current?.fit()
     api.ptyResize(term.cols, term.rows)
     term.focus()

@@ -42,6 +42,7 @@ export const INVOKE_METHODS = [
   'selectTab',
   'closeTab',
   'restartClaude',
+  'leaveCopyMode',
   'startRun',
   'restartRun',
   'stopRun',

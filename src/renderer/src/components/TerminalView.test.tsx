@@ -443,3 +443,42 @@ describe('TerminalView context menu', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('sel')
   })
 })
+
+describe('TerminalView after a scroll back', () => {
+  const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+  beforeEach(() => api.ptyWrite.mockClear())
+
+  it('leaves copy mode before the next typed key, and holds what is typed meanwhile', async () => {
+    let leave = (): void => {}
+    const onLeaveCopyMode = vi.fn(() => new Promise<void>((resolve) => (leave = resolve)))
+    const { container } = render(
+      <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
+    )
+    const type = (data: string): void => terms.at(-1)?.input?.(data)
+    type('a') // no scroll yet: straight through
+    expect(onLeaveCopyMode).not.toHaveBeenCalled()
+    fireEvent.wheel(container.querySelector('.terminal-host') as Element, { deltaY: -120 })
+    type('\x1b[A') // ↑ still scrolls in copy mode
+    expect(api.ptyWrite.mock.calls.map(([d]) => d)).toEqual(['a', '\x1b[A'])
+    type('h')
+    type('i')
+    expect(onLeaveCopyMode).toHaveBeenCalledTimes(1)
+    expect(api.ptyWrite).toHaveBeenCalledTimes(2) // held until tmux is out of copy mode
+    await act(async () => leave())
+    expect(api.ptyWrite.mock.calls.map(([d]) => d)).toEqual(['a', '\x1b[A', 'h', 'i'])
+    type('!')
+    expect(onLeaveCopyMode).toHaveBeenCalledTimes(1)
+    expect(api.ptyWrite).toHaveBeenLastCalledWith('!')
+  })
+
+  it('only leaves copy mode on Escape, so it does not also interrupt Claude', async () => {
+    const onLeaveCopyMode = vi.fn(async () => {})
+    const { container } = render(
+      <TerminalView api={api} sessionKey="s" fontSize={13} onLeaveCopyMode={onLeaveCopyMode} />,
+    )
+    fireEvent.wheel(container.querySelector('.terminal-host') as Element, { deltaY: -120 })
+    await act(async () => terms.at(-1)?.input?.('\x1b'))
+    expect(onLeaveCopyMode).toHaveBeenCalledTimes(1)
+    expect(api.ptyWrite).not.toHaveBeenCalled()
+  })
+})

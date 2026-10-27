@@ -1816,6 +1816,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         : undefined,
     [api, selected, linkRoot],
   )
+  const leaveCopyMode = useMemo(() => (selected ? () => api.leaveCopyMode(selected) : undefined), [api, selected])
   // Stable while the selection is, so the palette lists the files once per opening.
   const loadPaletteFiles = useMemo(
     () => (selected ? (): Promise<PaletteFiles> => api.listFiles(selected) : undefined),
@@ -2143,6 +2144,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                   onOpenUrl={openUrl}
                   onOpenFile={openFileInPanel}
                   loadLinkFiles={loadLinkFiles}
+                  onLeaveCopyMode={leaveCopyMode}
                 />
                 {sessionEnded && (
                   <div className="session-ended">
