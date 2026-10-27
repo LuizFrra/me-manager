@@ -404,6 +404,69 @@ describe('dialogs cancel with Esc from any of their controls, not only the text 
   })
 })
 
+describe('NewTaskDialog name', () => {
+  const LIST: BranchList = { default: 'origin/main', branches: ['origin/main'] }
+  const TASKS = [
+    { name: 'fix login bug', slug: 'fix-login-bug' },
+    { name: 'Old idea', slug: 'old-idea', archived: true },
+  ]
+  const name = (): HTMLElement => screen.getByRole('textbox', { name: 'Name' })
+  const create = (): HTMLElement => screen.getByRole('button', { name: 'Create' })
+
+  const renderDialog = (): ReturnType<typeof vi.fn> => {
+    const onSubmit = vi.fn(async () => {})
+    render(
+      <NewTaskDialog
+        repoName="my-api"
+        themeSlug="client-x"
+        loadBranches={async () => LIST}
+        tasks={TASKS}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    )
+    return onSubmit
+  }
+
+  it('shows the branch the name gives as it is typed', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    expect(name()).toHaveAccessibleDescription('Also names the task’s branch and folder.')
+    await user.type(name(), 'Add search!')
+    expect(name()).toHaveAccessibleDescription('Branch: claude/client-x/add-search')
+    expect(name()).not.toHaveAttribute('aria-invalid', 'true')
+    expect(create()).toBeEnabled()
+  })
+
+  it('explains a name main would refuse before anything is created, with Create off', async () => {
+    const user = userEvent.setup()
+    const onSubmit = renderDialog()
+    await user.type(name(), '!!!')
+    expect(screen.getByRole('alert')).toHaveTextContent(/letters or numbers/)
+    expect(name()).toHaveAttribute('aria-invalid', 'true')
+    expect(create()).toBeDisabled()
+
+    await user.clear(name())
+    await user.type(name(), 'Fix Login Bug')
+    expect(name()).toHaveAccessibleDescription('A task named “fix login bug” already exists.')
+    await user.keyboard('{Control>}{Enter}{/Control}{Enter}')
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    await user.clear(name())
+    await user.type(name(), 'fix-login-bug')
+    expect(screen.getByRole('alert')).toHaveTextContent('already uses the branch this name gives (…/fix-login-bug)')
+
+    await user.clear(name())
+    await user.type(name(), 'old idea')
+    expect(screen.getByRole('alert')).toHaveTextContent('A task named “Old idea” already exists (archived).')
+
+    await user.type(name(), ' 2')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(create())
+    expect(onSubmit).toHaveBeenCalledWith('old idea 2', expect.anything(), undefined)
+  })
+})
+
 describe('NewTaskDialog templates', () => {
   const LIST: BranchList = { default: 'origin/main', branches: ['origin/main', 'origin/develop', 'main'] }
   const REVIEW: TaskTemplate = {
@@ -425,7 +488,10 @@ describe('NewTaskDialog templates', () => {
         repoName="my-api"
         loadBranches={async () => LIST}
         templates={[REVIEW, PROMPT_ONLY]}
-        taskNames={['review-1', 'Review-4']}
+        tasks={[
+          { name: 'review-1', slug: 'review-1' },
+          { name: 'Review-4', slug: 'review-4' },
+        ]}
         onSubmit={onSubmit}
         onCancel={vi.fn()}
         {...props}

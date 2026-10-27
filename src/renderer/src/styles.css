@@ -1192,7 +1192,8 @@ button:disabled {
   flex: none;
   border-color: var(--border);
 }
-.clone-dialog .dialog-field-hint code {
+.clone-dialog .dialog-field-hint code,
+.new-task-dialog .dialog-field-hint code {
   font-family: var(--mono);
   font-size: 11px;
   padding: 0 3px;

@@ -75,6 +75,7 @@ import { applyMove, moveAnnouncement, sendMove, stepMove, type Move, type MoveEn
 import { effectiveSessionFlags } from './lib/sessionFlags'
 import { sessionState } from './lib/sessionState'
 import { runLabel, runState, type RunState } from './lib/run'
+import type { ExistingTask } from './lib/taskName'
 import { CommandPalette, type PaletteCommand, type PaletteFiles } from './components/CommandPalette'
 import { ShortcutHelp } from './components/ShortcutHelp'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -283,10 +284,10 @@ const isArchivedTarget = (state: AppState, target: Target | null): boolean => {
   return task !== undefined && isArchived(task)
 }
 
-/** The names of a repo's tasks, archived ones included: what a task template's `{n}` counts. */
-function repoTaskNames(state: AppState, themeId: string, repoId: string): string[] {
+/** A repo's tasks, archived ones included: the names and branches a new task can't take, and what `{n}` counts. */
+function repoTasks(state: AppState, themeId: string, repoId: string): ExistingTask[] {
   const repo = state.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
-  return repo?.kind === 'repo' ? repo.tasks.map((t) => t.name) : []
+  return repo?.kind === 'repo' ? repo.tasks.map((t) => ({ name: t.name, slug: t.slug, archived: isArchived(t) })) : []
 }
 
 /** What "copy …" offers for `target`: its branch, path, attach command. */
@@ -2236,9 +2237,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       {dialog?.kind === 'newTask' && (
         <NewTaskDialog
           repoName={dialog.repoName}
+          themeSlug={state.themes.find((t) => t.id === dialog.themeId)?.slug}
           loadBranches={() => api.listBranches(dialog.themeId, dialog.repoId)}
           templates={settings.taskTemplates}
-          taskNames={repoTaskNames(state, dialog.themeId, dialog.repoId)}
+          tasks={repoTasks(state, dialog.themeId, dialog.repoId)}
           initialTemplate={dialog.template}
           initialName={dialog.name}
           initialPrompt={dialog.prompt}

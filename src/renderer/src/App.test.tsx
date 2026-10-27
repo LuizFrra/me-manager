@@ -2116,6 +2116,9 @@ describe('App new task options', () => {
       'main',
     ])
     await user.type(dialog.getByRole('textbox', { name: 'Name' }), 'fix login')
+    expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveAccessibleDescription(
+      'Branch: claude/client-x/fix-login',
+    )
     await user.selectOptions(base, 'origin/develop')
     const prompt = dialog.getByRole('textbox', { name: 'Initial prompt (optional)' })
     expect(prompt).toHaveAttribute('maxLength', '10000')

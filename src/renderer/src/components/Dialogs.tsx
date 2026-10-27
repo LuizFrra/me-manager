@@ -13,6 +13,7 @@ import {
 } from '../../../shared/types'
 import { budgetFromText, budgetText } from '../../../shared/budget'
 import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared/clone'
+import { branchName, slugify } from '../../../shared/naming'
 import { MAX_RUN_COMMAND, runCommandError } from '../../../shared/runCommand'
 import { expandTaskName, templateBase } from '../../../shared/templates'
 import { archiveSkipReason, type BulkAction } from '../lib/bulk'
@@ -23,6 +24,7 @@ import { formatCost } from '../lib/usageFormat'
 import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
+import { newTaskNameError, type ExistingTask } from '../lib/taskName'
 
 /** A dialog's keydown handler: Esc cancels from any of its controls, not only from the field being typed in. */
 const cancelOnEscape =
@@ -929,7 +931,9 @@ interface Prefill {
 /**
  * Asks for a new task's name, the branch it starts from and an optional first message for Claude. The branches
  * are fetched once, when the dialog opens; until they arrive (or if they can't be listed) the task starts from the repo's
- * default base. Mod+Enter creates from anywhere in the form, Esc cancels.
+ * default base. Mod+Enter creates from anywhere in the form, Esc cancels. A name main would refuse (no letters or
+ * numbers, or another task's name or branch) is explained under the field, with Create off; a valid one shows its
+ * branch.
  *
  * With templates, a "Template" choice comes first: picking one fills in the fields it sets (all stay editable),
  * and clears what the previous template filled in unless the user has changed it since. A template's base that
@@ -937,11 +941,13 @@ interface Prefill {
  */
 export function NewTaskDialog(props: {
   repoName: string
+  /** The theme's slug, for the branch the name gives (see branchName). */
+  themeSlug?: string
   loadBranches: () => Promise<BranchList>
   /** The task templates to choose from (Settings.taskTemplates). */
   templates?: TaskTemplate[]
-  /** The names of the repo's tasks, archived ones included: what a template's `{n}` counts. */
-  taskNames?: string[]
+  /** The repo's tasks, archived ones included: names taken, and what a template's `{n}` counts. */
+  tasks?: readonly ExistingTask[]
   /** The template chosen when the dialog opens, by name; None when no template has that name. */
   initialTemplate?: string
   /** The name and prompt it opens with (the home composer's), kept as typed when a template is chosen. */
@@ -953,11 +959,12 @@ export function NewTaskDialog(props: {
 }): React.JSX.Element {
   useRestoreFocus()
   const templates = props.templates ?? []
+  const taskNames = (props.tasks ?? []).map((t) => t.name)
   // The loader the dialog opened with: App re-renders (and passes a new function) on every status poll.
   const [loadBranches] = useState(() => props.loadBranches)
   const [initial] = useState(() => {
     const template = templates.find((t) => t.name === props.initialTemplate)
-    const name = template?.taskName ? expandTaskName(template.taskName, props.taskNames ?? [], new Date()) : ''
+    const name = template?.taskName ? expandTaskName(template.taskName, taskNames, new Date()) : ''
     return { template, prefill: { name, prompt: template?.prompt ?? '', baseRef: '' } }
   })
   const [templateName, setTemplateName] = useState(initial.template?.name ?? '')
@@ -974,6 +981,7 @@ export function NewTaskDialog(props: {
   const busyRef = useRef(false)
   const templateId = useId()
   const nameId = useId()
+  const nameHintId = useId()
   const baseId = useId()
   const baseHintId = useId()
   const promptId = useId()
@@ -1013,7 +1021,7 @@ export function NewTaskDialog(props: {
     const nextName = keepName
       ? name
       : template?.taskName
-        ? expandTaskName(template.taskName, props.taskNames ?? [], new Date())
+        ? expandTaskName(template.taskName, taskNames, new Date())
         : name === last.name
           ? ''
           : name
@@ -1032,8 +1040,11 @@ export function NewTaskDialog(props: {
     else setMissingBase(null)
   }
 
+  const nameError = newTaskNameError(name, props.tasks ?? [])
+  const slug = slugify(name)
+
   const submit = async (): Promise<void> => {
-    if (busyRef.current || !name.trim()) return
+    if (busyRef.current || !name.trim() || nameError) return
     busyRef.current = true
     setBusy(true)
     const options: NewTaskOptions = {}
@@ -1094,10 +1105,27 @@ export function NewTaskDialog(props: {
           <input
             id={nameId}
             autoFocus
+            aria-describedby={nameHintId}
+            aria-invalid={nameError ? true : undefined}
             placeholder="e.g. fix login bug"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          {nameError ? (
+            <p id={nameHintId} className="dialog-field-hint dialog-field-error" role="alert">
+              {nameError}
+            </p>
+          ) : (
+            <p id={nameHintId} className="dialog-field-hint">
+              {slug && props.themeSlug ? (
+                <>
+                  Branch: <code>{branchName(props.themeSlug, slug)}</code>
+                </>
+              ) : (
+                'Also names the task’s branch and folder.'
+              )}
+            </p>
+          )}
         </div>
         <div className="dialog-field">
           <label htmlFor={baseId}>Base branch</label>
@@ -1159,7 +1187,7 @@ export function NewTaskDialog(props: {
           <button type="button" onClick={props.onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" disabled={busy || !name.trim()}>
+          <button type="submit" disabled={busy || !name.trim() || nameError !== null}>
             {busy ? 'Creating…' : 'Create'}
           </button>
         </div>
