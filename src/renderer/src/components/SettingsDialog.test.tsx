@@ -455,6 +455,15 @@ describe('SettingsDialog: Claude accounts', () => {
     await user.clear(input)
     await user.type(input, 'Job{Enter}')
     expect(await within(section()).findByRole('listitem', { name: 'Job' })).toBeInTheDocument()
+    expect(within(section()).getByRole('button', { name: 'Rename Job' })).toHaveFocus()
+    // Esc and Cancel give the focus back to Rename too, leaving the name as it was.
+    await user.click(within(section()).getByRole('button', { name: 'Rename Job' }))
+    await user.keyboard('x{Escape}')
+    expect(within(section()).getByRole('button', { name: 'Rename Job' })).toHaveFocus()
+    await user.click(within(section()).getByRole('button', { name: 'Rename Job' }))
+    await user.click(within(section()).getByRole('button', { name: 'Cancel' }))
+    expect(within(section()).getByRole('button', { name: 'Rename Job' })).toHaveFocus()
+    expect(within(section()).getByRole('listitem', { name: 'Job' })).toBeInTheDocument()
   })
 
   it('changes who pays for an account, Default included', async () => {
@@ -480,7 +489,7 @@ describe('SettingsDialog: Claude accounts', () => {
   it('says to open a task or folder first when none is selected', async () => {
     await setup(createMockApi(), null)
     expect(within(section()).getByRole('button', { name: 'Log in to Default' })).toBeDisabled()
-    expect(section()).toHaveTextContent('Open a task or folder first, the login runs in its terminal')
+    expect(section()).toHaveTextContent('Open a task or folder first: the login runs in its terminal.')
   })
 
   it('reads the login states again when the window gets the focus back', async () => {

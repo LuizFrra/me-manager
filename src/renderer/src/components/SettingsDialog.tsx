@@ -347,6 +347,18 @@ function AccountRow(props: {
   const [error, setError] = useState<string | null>(null)
   // The name being typed while renaming; null otherwise.
   const [renaming, setRenaming] = useState<string | null>(null)
+  // Set when renaming ends: Rename, which the name field took the place of, gets the focus back.
+  const refocus = useRef(false)
+  const renameRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (renaming !== null || !refocus.current) return
+    refocus.current = false
+    renameRef.current?.focus()
+  }, [renaming])
+  const endRename = (): void => {
+    refocus.current = true
+    setRenaming(null)
+  }
   const errorId = useId()
   const renameError = renaming === null ? null : accountError(renaming, p.configDir, props.others)
   const shown = renameError ?? error
@@ -356,10 +368,10 @@ function AccountRow(props: {
   }
   const rename = async (): Promise<void> => {
     if (renaming === null || renameError || busy) return
-    if (renaming.trim() === p.name) return setRenaming(null)
+    if (renaming.trim() === p.name) return endRename()
     const refused = await props.change(() => api.updateProfile(p.id, { name: renaming }))
     setError(refused)
-    if (!refused) setRenaming(null)
+    if (!refused) endRename()
   }
   return (
     <li className="account-row" aria-label={p.name}>
@@ -375,10 +387,7 @@ function AccountRow(props: {
               aria-describedby={shown ? errorId : undefined}
               value={renaming}
               onChange={(e) => setRenaming(e.target.value)}
-              onKeyDown={ownKeys(
-                () => void rename(),
-                () => setRenaming(null),
-              )}
+              onKeyDown={(e) => ownKeys(() => void rename(), endRename)(e)}
             />
           </span>
         )}
@@ -422,6 +431,7 @@ function AccountRow(props: {
               {!p.isDefault && (
                 <>
                   <button
+                    ref={renameRef}
                     type="button"
                     aria-label={`Rename ${p.name}`}
                     disabled={busy}
@@ -452,7 +462,7 @@ function AccountRow(props: {
             </>
           ) : (
             <>
-              <button type="button" onClick={() => setRenaming(null)}>
+              <button type="button" onClick={endRename}>
                 Cancel
               </button>
               <button type="button" disabled={busy || renameError !== null} onClick={() => void rename()}>
@@ -584,8 +594,8 @@ function ClaudeAccountsSection({ api, target, ...props }: AccountsProps): React.
       <h3>Claude accounts</h3>
       <p className="settings-hint">
         Each account is a Claude config folder, with its own login and settings.json (a company gateway, say). A theme
-        or task picks one: “Claude account…” in its menu. Changes here apply at once, not with Save; a running Claude
-        keeps its account until it restarts.
+        or task picks one: the account button on a theme’s row, or “Claude account…” in a task’s menu. Changes here
+        apply at once, not with Save; a running Claude keeps its account until it restarts.
       </p>
       {loadError && (
         <p className="settings-error" role="alert">
@@ -612,7 +622,7 @@ function ClaudeAccountsSection({ api, target, ...props }: AccountsProps): React.
       )}
       {!target && (
         <p id={loginHintId} className="settings-hint">
-          Open a task or folder first, the login runs in its terminal.
+          Open a task or folder first: the login runs in its terminal.
         </p>
       )}
       {loginNote && (
