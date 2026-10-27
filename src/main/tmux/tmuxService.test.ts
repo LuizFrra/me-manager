@@ -37,6 +37,20 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await expect(svc.windowActivity('claude')).resolves.toEqual({})
   })
 
+  it('applies the config again to a running server, without piling up array entries', async () => {
+    await svc.newSession('mmt_conf', cwd, 'claude', 'sh')
+    const features = (): Promise<string> => run('tmux', ['-L', socket, 'show', '-s', 'terminal-features'])
+    await run('tmux', ['-L', socket, 'set', '-su', 'terminal-features[90]'])
+    expect(await features()).not.toContain('hyperlinks')
+    await svc.ensureConfig()
+    await svc.ensureConfig()
+    const lines = (await features()).split('\n').filter((l) => l.includes('hyperlinks'))
+    expect(lines).toEqual(['terminal-features[90] xterm-256color:clipboard:hyperlinks'])
+    const keys = await run('tmux', ['-L', socket, 'list-keys', '-T', 'root', 'MouseDown3Pane'])
+    expect(keys).not.toContain('display-menu') // no pane menu with Kill on a right click
+    await svc.killSession('mmt_conf')
+  })
+
   it('creates a session with a named first window', async () => {
     await svc.newSession('mmt_a_b_c', cwd, 'claude', 'sh')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(true)
