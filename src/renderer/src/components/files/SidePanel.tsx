@@ -248,22 +248,25 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       tab: 'files',
       selected: path,
       reveal: lines ? { path, lines: { ...lines } } : heading ? { path, heading } : undefined,
-      history: state.selected ? [...state.history, { path: state.selected, scrollTop }] : state.history,
+      history: state.selected
+        ? [...state.history, { path: state.selected, scrollTop, mdMode: state.mdMode }]
+        : state.history,
       mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
     })
   })
-  // Back to the file where it was scrolled.
+  // Back to the file where it was scrolled, as it was shown (a link to lines of a document showed that one raw).
   const back = useLatestCallback((): void => {
     const visit = state.history.at(-1)
     if (!visit) return
     const history = state.history.slice(0, -1)
-    const { path, scrollTop } = visit
+    const { path, scrollTop, mdMode } = visit
     onState({
       ...state,
       tab: 'files',
       selected: path,
       reveal: scrollTop > 0 ? { path, scrollTop } : undefined,
       history,
+      mdMode,
     })
   })
   // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.

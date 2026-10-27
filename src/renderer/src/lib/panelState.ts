@@ -25,10 +25,11 @@ export interface PanelReveal extends SelectedLines {
   scrollTop?: number
 }
 
-/** A file visited before following a link: where to go Back to. */
+/** A file visited before following a link: where to go Back to, and how it was shown. */
 export interface PanelVisit {
   path: string
   scrollTop: number
+  mdMode: PanelState['mdMode']
 }
 
 /** What the side panel shows for one target. */

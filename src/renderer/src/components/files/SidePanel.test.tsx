@@ -26,6 +26,9 @@ vi.mock('./MarkdownView', () => ({
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('docs')}>folder link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('docs/guide.md', { start: 2, end: 2 })}>
+          doc line link from {p.filePath}
+        </button>
         <button onClick={() => p.onOpenLink('docs/guide.md', undefined, 'setup')}>
           heading link from {p.filePath}
         </button>
@@ -215,6 +218,17 @@ describe('SidePanel', () => {
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← Back' })).not.toBeInTheDocument()
+  })
+
+  it('goes Back to a rendered document as rendered, after a link opened lines of another one as its text', async () => {
+    const user = userEvent.setup()
+    render(<Harness api={createMockApi()} initial={{ selected: 'README.md' }} />)
+    await user.click(await screen.findByRole('button', { name: 'doc line link from README.md' }))
+    await vi.waitFor(() => expect(codeText()).toContain('# Guide'))
+    expect(screen.getByRole('button', { name: 'Raw' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: '← Back' }))
+    expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('goes Back to a document where it was scrolled', async () => {
