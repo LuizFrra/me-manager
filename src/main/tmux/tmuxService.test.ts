@@ -48,6 +48,8 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     expect(lines).toEqual(['terminal-features[90] xterm-256color:clipboard:hyperlinks'])
     const keys = await run('tmux', ['-L', socket, 'list-keys', '-T', 'root', 'MouseDown3Pane'])
     expect(keys).not.toContain('display-menu') // no pane menu with Kill on a right click
+    // Programs in new windows are told 24-bit colour works.
+    expect(await run('tmux', ['-L', socket, 'show-environment', '-g', 'COLORTERM'])).toBe('COLORTERM=truecolor\n')
     await svc.killSession('mmt_conf')
   })
 

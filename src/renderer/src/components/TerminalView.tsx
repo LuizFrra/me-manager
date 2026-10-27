@@ -12,6 +12,7 @@ import { createLinkProvider, type LinkFiles } from '../lib/terminalLinkProvider'
 import type { TextLink } from '../lib/terminalLinks'
 import { editingKeySequence, NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
 import { SYSTEM_UNICODE } from '../lib/unicodeWidths'
+import { showsCopyModePosition } from '../lib/copyMode'
 import { PopupMenu, type MenuItem } from './PopupMenu'
 import { joinShellWords } from '../../../shared/shell'
 
@@ -85,6 +86,9 @@ export function TerminalView({
   const scrolledBackRef = useRef(false)
   // Input held while copy mode is left; it goes to the program once tmux is out of it.
   const pendingRef = useRef<string[] | null>(null)
+  // tmux shows its copy-mode position on the screen: the user scrolled back (see showsCopyModePosition).
+  const [inCopyMode, setInCopyMode] = useState(false)
+  const inCopyModeRef = useRef(false)
   const termRef = useRef<Terminal | null>(null)
   // The last mouse selection tmux copied; it reaches the clipboard only on an explicit copy.
   const heldRef = useRef('')
@@ -228,7 +232,7 @@ export function TerminalView({
         return
       }
       const leave = handlersRef.current.onLeaveCopyMode
-      if (scrolledBackRef.current && !mouse && !NAVIGATION_KEY.test(data) && leave) {
+      if ((scrolledBackRef.current || inCopyModeRef.current) && !mouse && !NAVIGATION_KEY.test(data) && leave) {
         scrolledBackRef.current = false
         const pending = data === '\x1b' ? [] : [data]
         pendingRef.current = pending
@@ -338,6 +342,19 @@ export function TerminalView({
 
     const offData = api.onPtyData((data) => term.write(data))
     const input = term.onData(send)
+    // Once per frame with output: whether tmux shows its copy-mode position, for "Jump to the bottom".
+    let frame = 0
+    const checkCopyMode = (): void => {
+      frame = 0
+      const buffer = term.buffer.active
+      const top = buffer.getLine(buffer.viewportY)
+      const shown = !!top && showsCopyModePosition(top)
+      inCopyModeRef.current = shown
+      setInCopyMode(shown)
+    }
+    const parsed = term.onWriteParsed(() => {
+      frame ||= requestAnimationFrame(checkCopyMode)
+    })
     const doFit = (): void => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return
       fit.fit()
@@ -362,6 +379,8 @@ export function TerminalView({
       settled.cancel()
       offData()
       input.dispose()
+      parsed.dispose()
+      cancelAnimationFrame(frame)
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -377,6 +396,8 @@ export function TerminalView({
     linkFilesCache.current = null
     scrolledBackRef.current = false
     pendingRef.current = null
+    inCopyModeRef.current = false
+    setInCopyMode(false)
     fitRef.current?.fit()
     api.ptyResize(term.cols, term.rows)
     term.focus()
@@ -415,6 +436,18 @@ export function TerminalView({
         <div className="terminal-notice" role="status">
           {notice ?? `Selected · ${COPY_KEY} to copy`}
         </div>
+      )}
+      {inCopyMode && (
+        <button
+          className="terminal-jump"
+          onClick={() => {
+            scrolledBackRef.current = false
+            void handlersRef.current.onLeaveCopyMode?.().catch(() => undefined)
+            termRef.current?.focus()
+          }}
+        >
+          ↓ Jump to the bottom
+        </button>
       )}
       {menu && (
         <PopupMenu

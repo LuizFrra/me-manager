@@ -35,6 +35,12 @@ vi.mock('@xterm/xterm', () => ({
     input?: (data: string) => void
     textarea = undefined
     unicode = { register: noop, activeVersion: '6' }
+    buffer: unknown = { active: { viewportY: 0, getLine: () => undefined } }
+    parsed?: () => void
+    onWriteParsed(cb: () => void): { dispose: () => void } {
+      this.parsed = cb
+      return { dispose: noop }
+    }
     loadAddon = noop
     open = noop
     attachCustomKeyEventHandler(handler: KeyHandler): void {
@@ -531,5 +537,40 @@ describe('TerminalView editing keys', () => {
     expect(handlers.at(-1)?.(e)).toBe(false)
     expect(e.defaultPrevented).toBe(true)
     expect(api.ptyWrite).toHaveBeenCalledWith('\x17')
+  })
+})
+
+describe('TerminalView jump to the bottom', () => {
+  it('offers to jump back while tmux shows its copy-mode position, and leaves copy mode', async () => {
+    const onLeaveCopyMode = vi.fn(async () => {})
+    render(
+      <TerminalView
+        api={{ ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }}
+        sessionKey="s"
+        fontSize={13}
+        onLeaveCopyMode={onLeaveCopyMode}
+      />,
+    )
+    const term = terms.at(-1) as FakeTerm & { buffer: unknown; parsed?: () => void }
+    const top = (text: string, highlighted: number): void => {
+      const chars = [...text.padStart(20)]
+      term.buffer = {
+        active: {
+          viewportY: 0,
+          getLine: () => ({
+            length: 20,
+            getCell: (x: number) => ({ getChars: () => chars[x].trim(), isBgDefault: () => x < 20 - highlighted }),
+          }),
+        },
+      }
+    }
+    top('out [3/90]', 6)
+    act(() => term.parsed?.())
+    const jump = await screen.findByRole('button', { name: '↓ Jump to the bottom' })
+    fireEvent.click(jump)
+    expect(onLeaveCopyMode).toHaveBeenCalled()
+    top('out', 0)
+    act(() => term.parsed?.())
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: '↓ Jump to the bottom' })).toBeNull())
   })
 })
