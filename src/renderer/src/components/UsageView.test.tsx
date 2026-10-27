@@ -179,9 +179,17 @@ describe('UsageView Claude profiles', () => {
     expect(within(table).getAllByText('company')).not.toHaveLength(0)
     expect(table).not.toHaveTextContent('$')
     expect(screen.queryByRole('region', { name: 'Budgets' })).not.toBeInTheDocument()
+    // Sorted by tokens, as it has no cost to sort by.
+    expect(within(table).getByRole('columnheader', { name: /^Tokens/ })).toHaveAttribute('aria-sort', 'descending')
+    expect(within(table).getByRole('columnheader', { name: /^Est\. cost/ })).toHaveAttribute('aria-sort', 'none')
 
     await user.click(buttons[1])
     expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$3.00')
+    expect(
+      within(screen.getByRole('table', { name: 'Usage by task and folder' })).getByRole('columnheader', {
+        name: /^Est\. cost/,
+      }),
+    ).toHaveAttribute('aria-sort', 'descending')
     expect(screen.getByRole('region', { name: 'Budgets' })).toBeInTheDocument()
   })
 

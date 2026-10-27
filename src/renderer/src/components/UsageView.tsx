@@ -290,7 +290,8 @@ export function UsageView(props: {
   const [period, setPeriod] = useState<UsagePeriod>('month')
   // The Claude profile whose usage is shown (UsageReport.profiles), or all of them together.
   const [profileId, setProfileId] = useState<string>('all')
-  const [sort, setSort] = useState<Sort>({ key: 'cost', desc: true })
+  // The sort the user chose; until then, by cost, or by tokens in a company-billed view, which has no cost.
+  const [sortChoice, setSort] = useState<Sort | null>(null)
   useRestoreFocus()
   useEffect(() => ref.current?.focus(), [])
 
@@ -321,15 +322,15 @@ export function UsageView(props: {
     api.getUsageFolders().then(setFolders, () => {})
   }, [api])
 
-  const onSort = (key: SortKey): void =>
-    setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: key !== 'name' }))
-
   const profiles = report?.profiles ?? []
   // A profile removed meanwhile shows them all again.
   const shownProfile = profiles.find((p) => p.id === profileId)
   const view = shownProfile?.report ?? report
   const company = shownProfile?.billing === 'company'
   const anyCompany = profiles.some((p) => p.billing === 'company')
+  const sort: Sort = sortChoice ?? { key: company ? 'tokens' : 'cost', desc: true }
+  const onSort = (key: SortKey): void =>
+    setSort(sort.key === key ? { key, desc: !sort.desc } : { key, desc: key !== 'name' })
   const total = view?.total[period]
   const themes = view
     ? sortBy(
