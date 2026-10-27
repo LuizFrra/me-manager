@@ -937,6 +937,15 @@ export function BudgetDialog(props: {
 
 type BranchLoad = { kind: 'loading' } | { kind: 'ready'; list: BranchList } | { kind: 'failed'; error: string }
 
+/** From this many branches on, New task offers a filter above the list. */
+const BRANCH_FILTER_MIN = 10
+
+/** The branches containing `query`, ignoring case; all of them for an empty query. */
+const matchingBranches = (branches: readonly string[], query: string): readonly string[] => {
+  const q = query.trim().toLowerCase()
+  return q ? branches.filter((b) => b.toLowerCase().includes(q)) : branches
+}
+
 /** What the chosen template filled in, so choosing another one (or None) can tell it from what the user typed. */
 interface Prefill {
   name: string
@@ -951,6 +960,9 @@ interface Prefill {
  * default base. Mod+Enter creates from anywhere in the form, Esc cancels (asking first when a prompt was typed: the
  * composer's and a template's are not lost). A name main would refuse (no letters or numbers, or another task's
  * name or branch) is explained under the field, with Create off; a valid one shows its branch.
+ *
+ * A repo with many branches gets a filter: typing lists only the matching ones (selecting the first when the
+ * selected one doesn't match) and the arrow keys pick among them, without leaving the field.
  *
  * With templates, a "Template" choice comes first: picking one fills in the fields it sets (all stay editable),
  * and clears what the previous template filled in unless the user has changed it since. A template's base that
@@ -994,6 +1006,7 @@ export function NewTaskDialog(props: {
   const [baseRef, setBaseRef] = useState('')
   // A template's base that the repo doesn't have (the default was selected instead).
   const [missingBase, setMissingBase] = useState<string | null>(null)
+  const [branchFilter, setBranchFilter] = useState('')
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const templateId = useId()
@@ -1052,9 +1065,24 @@ export function NewTaskDialog(props: {
       baseRef: '',
     }
     wantedBase.current = template?.base
+    setBranchFilter('') // its base must be listed
     if (branches.kind !== 'ready') return
     if (template?.base || baseRef === last.baseRef) selectBase(branches.list)
     else setMissingBase(null)
+  }
+
+  const allBranches = branches.kind === 'ready' ? branches.list.branches : []
+  const matches = matchingBranches(allBranches, branchFilter)
+  // With no match the selection stays, alone in the list.
+  const listed = matches.length > 0 ? matches : allBranches.filter((b) => b === baseRef)
+  const pickBase = (ref: string): void => {
+    setBaseRef(ref)
+    setMissingBase(null)
+  }
+  const filterBranches = (text: string): void => {
+    setBranchFilter(text)
+    const next = matchingBranches(allBranches, text)
+    if (next.length > 0 && !next.includes(baseRef)) pickBase(next[0])
   }
 
   const nameError = newTaskNameError(name, props.tasks ?? [])
@@ -1151,18 +1179,40 @@ export function NewTaskDialog(props: {
         </div>
         <div className="dialog-field">
           <label htmlFor={baseId}>Base branch</label>
+          {allBranches.length >= BRANCH_FILTER_MIN && (
+            <input
+              className="branch-filter"
+              aria-label="Filter branches"
+              aria-controls={baseId}
+              placeholder={`Filter ${allBranches.length} branches…`}
+              spellCheck={false}
+              autoComplete="off"
+              value={branchFilter}
+              onChange={(e) => filterBranches(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  const i = matches.indexOf(baseRef) + (e.key === 'ArrowDown' ? 1 : -1)
+                  if (i >= 0 && i < matches.length) pickBase(matches[i])
+                } else if (e.key === 'Enter' && !isModEnter(e.nativeEvent)) {
+                  e.preventDefault() // Enter here picks nothing more; it must not create the task
+                } else if (e.key === 'Escape' && branchFilter) {
+                  e.preventDefault()
+                  e.stopPropagation() // clears the filter, not the dialog
+                  setBranchFilter('')
+                }
+              }}
+            />
+          )}
           <select
             id={baseId}
             aria-describedby={baseHintId}
             disabled={branches.kind !== 'ready'}
             value={branches.kind === 'ready' ? baseRef : ''}
-            onChange={(e) => {
-              setBaseRef(e.target.value)
-              setMissingBase(null)
-            }}
+            onChange={(e) => pickBase(e.target.value)}
           >
             {branches.kind === 'ready' ? (
-              branches.list.branches.map((b) => (
+              listed.map((b) => (
                 <option key={b} value={b}>
                   {b === branches.list.default ? `${b} (default)` : b}
                 </option>
@@ -1174,6 +1224,10 @@ export function NewTaskDialog(props: {
           {branches.kind === 'failed' ? (
             <p id={baseHintId} className="dialog-field-hint dialog-field-error" role="alert">
               Could not list the branches: {branches.error}. The task will start from the default branch.
+            </p>
+          ) : matches.length === 0 && branchFilter.trim() !== '' ? (
+            <p id={baseHintId} className="dialog-field-hint dialog-field-warning" role="status">
+              No branch matches “{branchFilter.trim()}”.
             </p>
           ) : branches.kind === 'ready' && missingBase !== null ? (
             <p id={baseHintId} className="dialog-field-hint dialog-field-warning" role="status">

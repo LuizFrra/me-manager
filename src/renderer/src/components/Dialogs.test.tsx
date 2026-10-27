@@ -872,3 +872,78 @@ describe('Esc asks before discarding typed text', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('NewTaskDialog base branch filter', () => {
+  const MANY: BranchList = {
+    default: 'origin/main',
+    branches: [
+      'origin/main',
+      ...Array.from({ length: 12 }, (_, i) => `origin/feature-${i + 1}`),
+      'origin/release/1.0',
+      'origin/release/2.0',
+    ],
+  }
+  const base = (): HTMLSelectElement => screen.getByRole('combobox', { name: 'Base branch' })
+  const filter = (): HTMLElement => screen.getByRole('textbox', { name: 'Filter branches' })
+  const options = (): string[] =>
+    within(base())
+      .getAllByRole('option')
+      .map((o) => o.textContent ?? '')
+
+  const renderDialog = (list: BranchList = MANY): { onSubmit: ReturnType<typeof vi.fn>; onCancel: () => void } => {
+    const onSubmit = vi.fn(async () => {})
+    const onCancel = vi.fn()
+    render(
+      <NewTaskDialog
+        repoName="api"
+        initialName="fix"
+        loadBranches={async () => list}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />,
+    )
+    return { onSubmit, onCancel }
+  }
+
+  it('is offered only when there are many branches', async () => {
+    renderDialog({ default: 'origin/main', branches: ['origin/main', 'origin/dev'] })
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(screen.queryByRole('textbox', { name: 'Filter branches' })).not.toBeInTheDocument()
+  })
+
+  it('lists only the matching branches, selecting the first, and arrows pick among them', async () => {
+    const user = userEvent.setup()
+    const { onSubmit } = renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    expect(base()).toHaveValue('origin/main')
+    await user.type(filter(), 'RELEASE')
+    expect(options()).toEqual(['origin/release/1.0', 'origin/release/2.0'])
+    expect(base()).toHaveValue('origin/release/1.0')
+    await user.keyboard('{ArrowDown}')
+    expect(base()).toHaveValue('origin/release/2.0')
+    await user.keyboard('{ArrowDown}{ArrowUp}{ArrowUp}')
+    expect(base()).toHaveValue('origin/release/1.0')
+    expect(filter()).toHaveFocus()
+    await user.keyboard('{Enter}') // doesn't create from the filter
+    expect(onSubmit).not.toHaveBeenCalled()
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(onSubmit).toHaveBeenCalledWith('fix', { baseRef: 'origin/release/1.0' }, undefined)
+  })
+
+  it('keeps the selection when nothing matches, and Esc clears the filter before closing', async () => {
+    const user = userEvent.setup()
+    const { onCancel } = renderDialog()
+    await waitFor(() => expect(base()).toBeEnabled())
+    await user.selectOptions(base(), 'origin/feature-3')
+    await user.type(filter(), 'nope')
+    expect(screen.getByRole('status')).toHaveTextContent('No branch matches “nope”.')
+    expect(base()).toHaveValue('origin/feature-3')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(filter()).toHaveValue('')
+    expect(options()).toHaveLength(MANY.branches.length)
+    expect(base()).toHaveValue('origin/feature-3')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})

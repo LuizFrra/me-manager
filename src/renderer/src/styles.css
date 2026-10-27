@@ -937,6 +937,9 @@ button:disabled {
   line-height: 1.5;
   resize: vertical;
 }
+.dialog-field .branch-filter {
+  font-size: 12px;
+}
 .dialog-field select:focus,
 .dialog-field textarea:focus,
 .dialog input[aria-label='Name']:focus,
