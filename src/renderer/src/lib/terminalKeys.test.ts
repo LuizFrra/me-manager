@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { terminalKeyAction } from './terminalKeys'
+import { editingKeySequence, terminalKeyAction } from './terminalKeys'
 
 const key = (init: Partial<KeyboardEvent>): KeyboardEvent =>
   ({ key: '', code: '', ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...init }) as KeyboardEvent
@@ -34,5 +34,19 @@ describe('terminalKeyAction', () => {
     expect(terminalKeyAction(key({ key: 'Enter', shiftKey: true }), false)).toBe('newline')
     expect(terminalKeyAction(key({ key: 'Enter', shiftKey: true }), true)).toBe('newline')
     expect(terminalKeyAction(key({ key: 'Enter', shiftKey: true, ctrlKey: true }), false)).toBeNull()
+  })
+})
+
+describe('editingKeySequence', () => {
+  it('deletes words with Ctrl+Backspace and Ctrl+Delete on Linux', () => {
+    expect(editingKeySequence(key({ key: 'Backspace', ctrlKey: true }), false)).toBe('\x17')
+    expect(editingKeySequence(key({ key: 'Delete', ctrlKey: true }), false)).toBe('\x1bd')
+    expect(editingKeySequence(key({ key: 'Backspace' }), false)).toBeNull()
+    expect(editingKeySequence(key({ key: 'Backspace', altKey: true }), false)).toBeNull() // xterm sends Meta+DEL
+  })
+
+  it('deletes to the start of the line with Cmd+Backspace on macOS', () => {
+    expect(editingKeySequence(key({ key: 'Backspace', metaKey: true }), true)).toBe('\x15')
+    expect(editingKeySequence(key({ key: 'Backspace', ctrlKey: true }), true)).toBeNull()
   })
 })

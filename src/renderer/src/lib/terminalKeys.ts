@@ -43,3 +43,19 @@ export function terminalKeyAction(e: KeyLike, mac: boolean): TerminalKeyAction |
   if (l === 'v') return e.shiftKey ? 'paste' : 'pasteOrImage'
   return null
 }
+
+/**
+ * Editing keys people expect from other editors, as the readline control codes Claude Code and shells understand
+ * (VS Code's terminal sends the same):
+ * - Ctrl+Backspace deletes the word before the cursor (^W) instead of one character;
+ * - Ctrl+Delete deletes the word after it (Meta+D);
+ * - on macOS, Cmd+Backspace deletes to the start of the line (^U).
+ */
+export function editingKeySequence(e: KeyLike, mac: boolean): string | null {
+  if (e.altKey || e.shiftKey) return null
+  if (mac) return e.metaKey && !e.ctrlKey && e.key === 'Backspace' ? '\x15' : null
+  if (!e.ctrlKey || e.metaKey) return null
+  if (e.key === 'Backspace') return '\x17'
+  if (e.key === 'Delete') return '\x1bd'
+  return null
+}

@@ -522,3 +522,14 @@ describe('TerminalView file drops', () => {
     expect(fireEvent.dragOver(host, { dataTransfer: { types: ['text/plain'], files: [] } })).toBe(true)
   })
 })
+
+describe('TerminalView editing keys', () => {
+  it('sends ^W for Ctrl+Backspace', () => {
+    const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    const e = new KeyboardEvent('keydown', { key: 'Backspace', ctrlKey: true, cancelable: true })
+    expect(handlers.at(-1)?.(e)).toBe(false)
+    expect(e.defaultPrevented).toBe(true)
+    expect(api.ptyWrite).toHaveBeenCalledWith('\x17')
+  })
+})

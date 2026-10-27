@@ -10,7 +10,7 @@ import { debounceSettled } from '../lib/settledResize'
 import { TERMINAL_MIN_CONTRAST, TERMINAL_THEMES } from '../lib/terminalTheme'
 import { createLinkProvider, type LinkFiles } from '../lib/terminalLinkProvider'
 import type { TextLink } from '../lib/terminalLinks'
-import { NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
+import { editingKeySequence, NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
 import { SYSTEM_UNICODE } from '../lib/unicodeWidths'
 import { PopupMenu, type MenuItem } from './PopupMenu'
 import { joinShellWords } from '../../../shared/shell'
@@ -316,6 +316,12 @@ export function TerminalView({
       if (modalOpenRef.current) return false
       // App shortcuts (palette, panel, …) are handled by App's window listener: never send them to tmux.
       if (matchShortcut(e)) return false
+      const sequence = editingKeySequence(e, isMac)
+      if (sequence) {
+        e.preventDefault()
+        if (e.type === 'keydown') send(sequence)
+        return false
+      }
       const action = terminalKeyAction(e, isMac)
       if (!action || (action === 'newline' && !claudeTabRef.current)) return true
       if (action === 'copyOrInterrupt' && !term.hasSelection() && !heldFreshRef.current) return true // ^C
