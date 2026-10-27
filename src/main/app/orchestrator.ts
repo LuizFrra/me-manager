@@ -26,6 +26,7 @@ import type {
   NewTaskOptions,
   PullRequestResult,
   PushResult,
+  RemoveTaskResult,
   Repo,
   SearchOptions,
   SearchResult,
@@ -793,7 +794,7 @@ export class Orchestrator implements AppService {
     return this.exclusive(() => this.exclusive(op), taskQueue(taskId))
   }
 
-  async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState> {
+  async removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<RemoveTaskResult> {
     return this.afterTaskActions(taskId, () => this.removeTaskNow(themeId, repoId, taskId, deleteBranch))
   }
 
@@ -802,7 +803,7 @@ export class Orchestrator implements AppService {
     repoId: string,
     taskId: string,
     deleteBranch: boolean,
-  ): Promise<AppState> {
+  ): Promise<RemoveTaskResult> {
     const theme = m.getTheme(this.state, themeId)
     const repo = m.getRepo(this.state, themeId, repoId)
     const task = m.getTask(this.state, themeId, repoId, taskId)
@@ -814,11 +815,17 @@ export class Orchestrator implements AppService {
         // GitService deletes the folder directly when the original repo was moved or deleted.
         await this.deps.git.removeWorktree(repo.path, task.worktreePath)
       }
-      // The branch lived in the original repo; if that is gone there is nothing to delete.
+      // The branch lived in the original repo; if that is gone there is nothing to delete. A branch git won't
+      // delete (checked out in the repo itself) is kept, and the task still goes: its worktree is gone already.
+      let warning: string | undefined
       if (deleteBranch && this.deps.pathExists(repo.path)) {
-        await this.deps.git.deleteBranch(repo.path, task.branch).catch(() => {}) // may already be gone
+        await this.deps.git.deleteBranch(repo.path, task.branch).catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err)
+          warning = `Removed "${task.name}" but kept its branch ${task.branch}: ${reason}`
+        })
       }
-      return this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+      const state = await this.commit(m.removeTask(this.state, themeId, repoId, taskId))
+      return warning === undefined ? { state } : { state, warning }
     })
   }
 

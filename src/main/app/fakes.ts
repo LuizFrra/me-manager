@@ -134,8 +134,11 @@ export class FakeGit implements GitApi {
     this.calls.push(`restoreWorktree ${wt} ${branch}`)
     if (this.failRestore) throw new Error(this.failRestore)
   }
+  /** When set, deleteBranch rejects with it (e.g. the branch is checked out in the repo). */
+  failDeleteBranch: string | null = null
   async deleteBranch(_repo: string, branch: string): Promise<void> {
     this.calls.push(`deleteBranch ${branch}`)
+    if (this.failDeleteBranch) throw new Error(this.failDeleteBranch)
   }
   async getUnsavedWork(_repo: string, wt: string): Promise<UnsavedWork> {
     this.calls.push(`getUnsavedWork ${wt}`)

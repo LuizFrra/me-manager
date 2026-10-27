@@ -69,6 +69,13 @@ export interface PushResult {
   branch: string
 }
 
+/** What removeTask did. */
+export interface RemoveTaskResult {
+  state: AppState
+  /** Set when the task went but its branch could not be deleted (e.g. it is checked out in the repo): why it stayed. */
+  warning?: string
+}
+
 export interface PullRequestResult {
   url: string
   /** False when the branch already had a pull request. */
@@ -455,9 +462,10 @@ export interface MeManagerApi {
   checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork>
   /**
    * Kills the session, removes the worktree and drops the task, deleting its branch too when asked. An archived
-   * task has no worktree or session left, so only the branch (when asked) and the task go.
+   * task has no worktree or session left, so only the branch (when asked) and the task go. A branch git won't
+   * delete doesn't stop the removal: the result's `warning` says it was kept, and why.
    */
-  removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<AppState>
+  removeTask(themeId: string, repoId: string, taskId: string, deleteBranch: boolean): Promise<RemoveTaskResult>
   /**
    * Kills the task's session and removes its worktree, keeping its branch; the task stays, with `archivedAt` set.
    * Refuses ("Commit or discard the changes first") while the worktree has uncommitted or untracked files, or

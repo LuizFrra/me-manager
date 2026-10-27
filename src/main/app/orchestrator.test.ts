@@ -659,12 +659,22 @@ describe('Orchestrator: removeTask', () => {
     const { orch, git, tmux, pty, themeId, repoId } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
     await orch.openTarget({ themeId, itemId: repoId, taskId: task.id })
-    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    const result = await orch.removeTask(themeId, repoId, task.id, true)
     expect(pty.detached).toBeGreaterThan(0)
     expect(tmux.sessions.size).toBe(0)
     expect(git.calls).toContain('removeWorktree /wt/client-x/my-api/fix')
     expect(git.calls).toContain('deleteBranch claude/client-x/fix')
-    expect(taskOf(s)).toBeUndefined()
+    expect(result).toEqual({ state: await orch.getState() })
+    expect(taskOf(result.state)).toBeUndefined()
+  })
+  it('removes the task but says so when its branch could not be deleted', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
+    git.failDeleteBranch = "git branch -D failed: Cannot delete branch 'claude/client-x/fix' checked out at '/code'"
+    const result = await orch.removeTask(themeId, repoId, task.id, true)
+    expect(taskOf(result.state)).toBeUndefined()
+    expect(result.warning).toBe(`Removed "fix" but kept its branch claude/client-x/fix: ${git.failDeleteBranch}`)
+    expect(taskOf(await orch.getState())).toBeUndefined()
   })
   it('keeps the branch when asked', async () => {
     const { orch, git, themeId, repoId } = await setup()
@@ -677,7 +687,7 @@ describe('Orchestrator: removeTask', () => {
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix'))
     deps.pathExists = (p) => p !== '/code/my-api'
     git.calls = []
-    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    const { state: s } = await orch.removeTask(themeId, repoId, task.id, true)
     expect(taskOf(s)).toBeUndefined()
     expect(git.calls).toEqual(['removeWorktree /wt/client-x/my-api/fix'])
     await expect(orch.removeItem(themeId, repoId)).resolves.toBeDefined()
@@ -920,7 +930,7 @@ describe('Orchestrator: archiving tasks', () => {
     git.unsaved = { uncommittedFiles: [], unpushedCommits: ['abc1234 wip'] }
     await expect(orch.checkTaskRemoval(themeId, repoId, task.id)).resolves.toEqual(git.unsaved)
     git.calls = []
-    const s = await orch.removeTask(themeId, repoId, task.id, true)
+    const { state: s } = await orch.removeTask(themeId, repoId, task.id, true)
     expect(git.calls).toEqual([`deleteBranch ${BRANCH}`])
     expect(tmux.calls).toEqual([])
     expect(taskOf(s)).toBeUndefined()

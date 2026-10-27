@@ -351,7 +351,10 @@ export class GitService implements GitApi {
   }
 
   async deleteBranch(repoPath: string, branch: string): Promise<void> {
-    await this.git(repoPath, ['branch', '-D', branch])
+    if (!(await this.refExists(repoPath, `refs/heads/${branch}`))) return
+    await this.git(repoPath, ['branch', '-D', branch]).catch((err) => {
+      throw commandFailure('git branch -D', err)
+    })
   }
 
   async getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork> {

@@ -1134,11 +1134,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (!work) return
     let dialogId: number | undefined
     const doRemove = async (deleteBranch: boolean): Promise<void> => {
-      const next = await update(() => api.removeTask(themeId, repoId, taskId, deleteBranch))
-      if (!next) return
+      const result = await attempt(() => api.removeTask(themeId, repoId, taskId, deleteBranch))
+      if (!result) return
+      setState(result.state)
       if (dialogId !== undefined) closeDialog(dialogId)
       clearSelectionIf((t) => t.taskId === taskId)
       refresh()
+      if (result.warning) showError(result.warning) // removed, but its branch was kept
     }
     if (hasUnsavedWork(work)) dialogId = openDialog({ kind: 'removeTask', taskName, work, onConfirm: doRemove })
     else await doRemove(true)
@@ -1199,10 +1201,13 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
       baseRef: task.baseRef,
       work,
       onConfirm: async () => {
-        if (!(await update(() => api.removeTask(themeId, repoId, taskId, true)))) return
+        const result = await attempt(() => api.removeTask(themeId, repoId, taskId, true))
+        if (!result) return
+        setState(result.state)
         closeDialog(id)
         clearSelectionIf((t) => t.taskId === taskId)
-        showInfo(`Deleted “${taskName}” and its branch`)
+        if (result.warning) showError(result.warning)
+        else showInfo(`Deleted “${taskName}” and its branch`)
       },
     })
   }
@@ -1627,6 +1632,8 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     try {
       let outcomes: BulkOutcome[]
       let archived: BulkTask[] = []
+      /** Tasks removed whose branch was kept (see RemoveTaskResult). */
+      const warnings: string[] = []
       if (action === 'push') {
         const results = await runLimited(tasks, BULK_GIT_LIMIT, (t) =>
           withGitBusy(t.target, 'push', () => api.pushTask(t.target)),
@@ -1655,16 +1662,18 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           (t) => byId.get(t.task.id) ?? { name: t.task.name, kind: 'skipped', reason: archiveSkipReason(t.work) ?? '' },
         )
       } else {
-        const results = await eachInTurn(tasks, (t) =>
-          api.removeTask(t.target.themeId, t.target.itemId, t.task.id, deleteBranches),
-        )
+        const results = await eachInTurn(tasks, async (t) => {
+          const result = await api.removeTask(t.target.themeId, t.target.itemId, t.task.id, deleteBranches)
+          if (result.warning) warnings.push(result.warning)
+          return result.state
+        })
         const removed = new Set(tasks.filter((_, i) => results[i].ok).map((t) => t.task.id))
         clearSelectionIf((t) => t.taskId !== undefined && removed.has(t.taskId))
         outcomes = outcomesOf(tasks, results)
       }
       if (action === 'archive' || action === 'remove') refresh()
       const { message, ok } = bulkSummary(BULK_DONE[action], outcomes)
-      if (!ok) showError(message)
+      if (!ok || warnings.length > 0) showError([message, ...warnings].join('. '))
       else if (archived.length > 0)
         showInfo(message, { action: { label: 'Restore', run: () => restoreBulk(archived) } })
       else showInfo(message)

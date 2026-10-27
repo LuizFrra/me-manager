@@ -283,11 +283,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         else task.budgetUsd = budget
       }),
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
-    removeTask: (themeId, repoId, taskId) =>
-      edit(themeId, (t) => {
+    removeTask: async (themeId, repoId, taskId) => ({
+      state: await edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind === 'repo') repo.tasks = repo.tasks.filter((k) => k.id !== taskId)
       }),
+    }),
     // The demo's worktrees are always clean (see checkTaskRemoval), so archiving never needs `force` here.
     archiveTask: (themeId, repoId, taskId) =>
       edit(themeId, (t) => {

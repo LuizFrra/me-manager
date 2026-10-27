@@ -64,6 +64,7 @@ export interface GitApi {
    * at `worktreePath`.
    */
   restoreWorktree(repoPath: string, worktreePath: string, branch: string): Promise<void>
+  /** `git branch -D`; resolves when the branch is already gone. */
   deleteBranch(repoPath: string, branch: string): Promise<void>
   getUnsavedWork(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<UnsavedWork>
   /**
