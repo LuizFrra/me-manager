@@ -363,6 +363,47 @@ export function ArchiveTaskDialog(props: {
 }
 
 /**
+ * Asked before Claude, running in one account (`from`), is ended and started again in its tab in the account its
+ * task or folder now has (`to`). Cancel is focused; Esc cancels.
+ */
+export function RestartClaudeDialog(props: {
+  /** The task or folder. */
+  name: string
+  from: string
+  to: string
+  onConfirm: () => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const { busy, run } = useSingleRun(props.onConfirm)
+  return (
+    <div className="overlay">
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Restart Claude in ${props.to}`}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
+      >
+        <h2>Restart Claude in {props.to}?</h2>
+        <p>
+          Claude in {props.name} runs in {props.from}. Restarting ends it, stopping whatever it is doing, and starts it
+          again in {props.to}, continuing that account’s last conversation here if it has one.
+        </p>
+        <div className="dialog-actions">
+          <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Restarting…' : 'Restart Claude'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
  * Confirms deleting an archived task: the task goes and its branch is deleted (`git branch -D`). Warns when the
  * branch has commits that are neither on the task's base nor pushed, as they would be lost (they are listed).
  * Cancel is focused; Esc cancels.

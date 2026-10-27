@@ -280,3 +280,26 @@ describe('TaskHeader Claude account', () => {
     expect(screen.queryByRole('menuitem', { name: 'Claude account…' })).not.toBeInTheDocument()
   })
 })
+
+describe('TaskHeader account badge', () => {
+  it('names the account, and says when the running Claude is in another one, with Restart Claude', async () => {
+    const user = userEvent.setup()
+    const onRestart = vi.fn()
+    const { rerender } = render(<TaskHeader {...base} account={{ name: 'Work', onRestart }} />)
+    expect(screen.getByText('Account: Work')).toBeInTheDocument()
+    expect(screen.queryByText(/applies when Claude restarts/)).not.toBeInTheDocument()
+
+    rerender(<TaskHeader {...base} account={{ name: 'Work', running: 'Default', onRestart }} />)
+    expect(screen.getByText('(applies when Claude restarts)')).toHaveAttribute(
+      'title',
+      'Claude is still running in Default',
+    )
+    await user.click(screen.getByRole('button', { name: 'Restart Claude in Work…' }))
+    expect(onRestart).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows nothing without an account (a single one)', () => {
+    render(<TaskHeader {...base} />)
+    expect(screen.queryByText(/^Account:/)).not.toBeInTheDocument()
+  })
+})

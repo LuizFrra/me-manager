@@ -4713,11 +4713,49 @@ describe('App Claude accounts', () => {
     expect((await taskOf(api)).profileId).toBe('default')
   })
 
+  it("names the task's account in its header, and restarts a Claude still running in another one", async () => {
+    const user = userEvent.setup()
+    // Every task's Claude runs in the account it started in, Default.
+    const getStatus = async (): Promise<LiveStatus> => {
+      const ids = (await api.getState()).themes.flatMap((t) =>
+        t.items.flatMap((i) => (i.kind === 'repo' ? i.tasks.map((k) => k.id) : [])),
+      )
+      return {
+        running: ids,
+        missing: [],
+        activity: {},
+        claudeProfiles: Object.fromEntries(ids.map((id) => [id, 'default'])),
+      }
+    }
+    const { api } = await withWork({ getStatus })
+    const restartClaude = vi.spyOn(api, 'restartClaude')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const header = screen.getByRole('banner')
+    expect(await within(header).findByText('Account: Default')).toBeInTheDocument()
+    expect(within(header).queryByText('(applies when Claude restarts)')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
+    await user.click(screen.getByRole('radio', { name: /^Work/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await within(header).findByText('Account: Work')).toBeInTheDocument()
+    expect(within(header).getByText('(applies when Claude restarts)')).toBeInTheDocument()
+    await user.click(within(header).getByRole('button', { name: 'Restart Claude in Work…' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Restart Claude in Work' })
+    expect(dialog).toHaveTextContent('Claude in my-api › fix login bug runs in Default')
+    await user.click(within(dialog).getByRole('button', { name: 'Restart Claude' }))
+    expect(restartClaude).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }), {
+      replace: true,
+    })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  })
+
   it('offers no choice of account while Default is the only one', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
     await createRepoAndTask(user)
     expect(screen.queryByRole('button', { name: 'Claude account for Client X' })).not.toBeInTheDocument()
     expect(await headerActions(user)).not.toContain('Claude account…')
+    expect(within(screen.getByRole('banner')).queryByText(/^Account:/)).not.toBeInTheDocument()
   })
 })

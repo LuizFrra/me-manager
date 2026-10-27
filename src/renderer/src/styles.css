@@ -3189,6 +3189,20 @@ kbd {
   font-weight: 500;
   vertical-align: middle;
 }
+.account-badge-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.account-pending {
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 500;
+}
+.task-title .account-restart {
+  font-size: 11px;
+  font-weight: 500;
+}
 .session-badge-warn {
   border-color: var(--warn);
   color: var(--warn);

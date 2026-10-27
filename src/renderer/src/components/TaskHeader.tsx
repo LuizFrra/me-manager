@@ -264,6 +264,11 @@ export function TaskHeader(props: {
   onEditBudget?: () => void
   /** Set for tasks while there are accounts to choose from: "Claude account…" in the More actions menu. */
   onChooseProfile?: () => void
+  /**
+   * The Claude account new sessions start in, while there is more than one: a badge. `running` names the account
+   * Claude runs in when that differs (it started before a change), with a way to restart it in this one.
+   */
+  account?: { name: string; running?: string; onRestart: () => void }
   /** Copy buttons (branch, path, attach command). */
   copies: CopyEntry[]
   onCopy: (entry: CopyEntry) => void
@@ -326,6 +331,27 @@ export function TaskHeader(props: {
                 title="New Claude sessions skip permission prompts (--dangerously-skip-permissions): Claude runs commands without asking"
               >
                 ⚠ permissions skipped
+              </span>
+            )}
+            {props.account && (
+              <span className="account-badge-wrap">
+                <span className="session-badge" title="The Claude account new sessions start in">
+                  Account: {props.account.name}
+                </span>
+                {props.account.running !== undefined && (
+                  <>
+                    <span className="account-pending" title={`Claude is still running in ${props.account.running}`}>
+                      (applies when Claude restarts)
+                    </span>
+                    <button
+                      className="link-button account-restart"
+                      aria-label={`Restart Claude in ${props.account.name}…`}
+                      onClick={props.account.onRestart}
+                    >
+                      Restart Claude
+                    </button>
+                  </>
+                )}
               </span>
             )}
           </div>

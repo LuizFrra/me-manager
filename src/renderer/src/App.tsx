@@ -50,6 +50,7 @@ import {
   NewTaskDialog,
   NotesDialog,
   ProfileDialog,
+  RestartClaudeDialog,
   RemoveTaskDialog,
   ReviewCommentDialog,
   RunCommandDialog,
@@ -160,6 +161,8 @@ type DialogBody =
     }
   /** A task's own budget; `initial` is null when it has none. */
   | { kind: 'budget'; target: Target; taskName: string; initial: number | null }
+  /** Restarts the target's running Claude, in account `from`, in its current one, `to`. */
+  | { kind: 'restartClaude'; target: Target; name: string; from: string; to: string }
   /**
    * The Claude account of a theme, or of a task (with `itemId` and `taskId`, and `inherit` naming its theme's);
    * `initial` is the profile id set now, null for none.
@@ -1156,6 +1159,35 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     closeDialog(dialog.id)
     const now = targetProfile(next, profiles, { themeId, itemId, taskId })
     if (now) showInfo(`${dialog.name} uses the Claude account ${now.name}`)
+  }
+
+  /**
+   * The selected target's account, and the one its Claude runs in when that differs, while there is more than one
+   * account. The running Claude's is known only for one this run of the app started (LiveStatus.claudeProfiles).
+   */
+  const targetAccounts = (target: Target): { current: ProfileStatus; running?: string } | undefined => {
+    const current = multipleProfiles ? targetProfile(state, profiles, target) : undefined
+    if (!current) return undefined
+    const runningId = status.claudeProfiles?.[targetKey(target)]
+    if (runningId === undefined || runningId === current.id) return { current }
+    return { current, running: profiles.find((p) => p.id === runningId)?.name ?? 'a removed account' }
+  }
+
+  /** The header's Restart Claude, beside an account that applies when Claude restarts. */
+  const askRestartInAccount = (): void => {
+    const target = selectedRef.current
+    const accounts = target && targetAccounts(target)
+    const name = target && describeTarget(state, target)?.title
+    if (!target || !accounts?.running || !name) return
+    openDialog({ kind: 'restartClaude', target, name, from: accounts.running, to: accounts.current.name })
+  }
+
+  const restartInAccount = async (dialog: Extract<Dialog, { kind: 'restartClaude' }>): Promise<void> => {
+    const tabs = await attempt(() => api.restartClaude(dialog.target, { replace: true }))
+    if (!tabs) return
+    closeDialog(dialog.id)
+    if (sameTarget(selectedRef.current, dialog.target)) setTabs(tabs)
+    refresh()
   }
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
@@ -2179,6 +2211,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const modalOpen = dialog !== null || overlayOpen
 
   const header = selected ? describeTarget(state, selected) : null
+  const accounts = selected ? targetAccounts(selected) : undefined
   const selectedTask = selected ? resolveTarget(state, selected)?.task : undefined
   const item = selected
     ? state.themes.find((t) => t.id === selected.themeId)?.items.find((i) => i.id === selected.itemId)
@@ -2261,6 +2294,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
               onEditBudget={selectedTask ? editTaskBudget : undefined}
               onChooseProfile={selectedTask && multipleProfiles ? () => chooseProfile(selected) : undefined}
+              account={
+                accounts && { name: accounts.current.name, running: accounts.running, onRestart: askRestartInAccount }
+              }
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
@@ -2519,6 +2555,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           initial={dialog.initial}
           defaultBudget={settings.taskBudgetUsd}
           onSave={(budgetUsd) => saveTaskBudget(dialog, budgetUsd)}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'restartClaude' && (
+        <RestartClaudeDialog
+          name={dialog.name}
+          from={dialog.from}
+          to={dialog.to}
+          onConfirm={() => restartInAccount(dialog)}
           onCancel={() => closeDialog(dialog.id)}
         />
       )}

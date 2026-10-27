@@ -16,6 +16,7 @@ import {
   NewTaskDialog,
   NotesDialog,
   ProfileDialog,
+  RestartClaudeDialog,
   RemoveTaskDialog,
   ReviewCommentDialog,
   RunCommandDialog,
@@ -1180,5 +1181,24 @@ describe('ProfileDialog', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Manage accounts in Settings' }))
     expect(onManage).toHaveBeenCalled()
+  })
+})
+
+describe('RestartClaudeDialog', () => {
+  it('says what restarting ends, with Cancel focused, and restarts once', async () => {
+    const user = userEvent.setup()
+    let finish = (): void => {}
+    const onConfirm = vi.fn(() => new Promise<void>((r) => (finish = r)))
+    const onCancel = vi.fn()
+    render(<RestartClaudeDialog name="fix-login" from="Default" to="Work" onConfirm={onConfirm} onCancel={onCancel} />)
+    const dialog = screen.getByRole('alertdialog', { name: 'Restart Claude in Work' })
+    expect(dialog).toHaveTextContent(/runs in Default/)
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    const restart = screen.getByRole('button', { name: 'Restart Claude' })
+    await user.dblClick(restart)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    finish()
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalled()
   })
 })
