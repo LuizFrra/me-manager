@@ -957,6 +957,43 @@ button:disabled {
   padding-top: 14px;
   border-top: 1px solid var(--divider);
 }
+/* Sticks to the dialog's bottom edge (over its padding) while the sections scroll under it. */
+.settings-footer {
+  position: sticky;
+  bottom: -20px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -22px -20px;
+  padding: 10px 22px 16px;
+  background: var(--raised);
+  border-top: 1px solid var(--divider);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+.settings-footer .dialog-actions {
+  margin-top: 0;
+}
+.settings-discard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  font-size: 12px;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+}
+.settings-discard span {
+  flex: 1;
+}
+.settings-discard button {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+}
 .dialog .settings-section h3 {
   margin: 0;
   font-family: var(--font-serif);

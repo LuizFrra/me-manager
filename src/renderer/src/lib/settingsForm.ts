@@ -47,6 +47,13 @@ export type SettingsFormErrors = Partial<Record<Exclude<keyof SettingsForm, 'tas
   taskTemplates?: TemplateErrors[]
 }
 
+/** Whether `form` differs from `start` in anything the user typed or chose (template keys aside). */
+export function formChanged(start: SettingsForm, form: SettingsForm): boolean {
+  const plain = (f: SettingsForm): string =>
+    JSON.stringify({ ...f, taskTemplates: f.taskTemplates.map((t) => [t.name, t.taskName, t.base, t.prompt]) })
+  return plain(start) !== plain(form)
+}
+
 /** How many fields are invalid, each template's counted one by one. */
 export function errorCount(errors: SettingsFormErrors): number {
   const { taskTemplates = [], ...fields } = errors

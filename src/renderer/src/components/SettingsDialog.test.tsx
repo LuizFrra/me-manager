@@ -276,3 +276,48 @@ describe('SettingsDialog: fields to fix', () => {
     expect(within(screen.getByRole('group', { name: 'Template 1' })).getByLabelText('Name')).toHaveFocus()
   })
 })
+
+describe('SettingsDialog: Esc with unsaved changes', () => {
+  const settings = { ...DEFAULT_SETTINGS, skipPermissions: false } // no permissions alert
+
+  it('closes at once when nothing was changed', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<SettingsDialog settings={settings} onSave={vi.fn()} onCancel={onCancel} />)
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks before discarding edits: a second Esc or Discard closes, Keep editing goes back', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<SettingsDialog settings={settings} onSave={vi.fn()} onCancel={onCancel} />)
+    const editor = screen.getByLabelText('Editor command')
+    await user.type(editor, 'subl')
+    await user.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Discard your changes? Esc again discards them.')
+    expect(editor).toHaveFocus() // still where it was
+
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByText(/Discard your changes/)).not.toBeInTheDocument()
+    expect(editor).toHaveValue('subl')
+    expect(editor).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    await user.keyboard('{Escape}')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards from its button, and Cancel needs no confirmation', async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    render(<SettingsDialog settings={settings} onSave={vi.fn()} onCancel={onCancel} />)
+    await user.click(screen.getByRole('checkbox', { name: /Status bar/ }))
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onCancel).toHaveBeenCalledTimes(2)
+  })
+})

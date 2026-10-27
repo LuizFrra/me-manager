@@ -5,6 +5,7 @@ import { MAX_TASK_PROMPT, type Appearance, type Settings, type UpdateStrategy } 
 import { plural } from '../lib/gitStatus'
 import {
   errorCount,
+  formChanged,
   newTemplateKey,
   parseForm,
   POLL_SECONDS,
@@ -251,7 +252,8 @@ const APPEARANCE_CHOICES: { value: Appearance; label: string }[] = [
 
 /**
  * Edits the app settings. Fields are checked as you type; Save is off while one is invalid, and a button beside it
- * counts them and takes you to the first (it may be scrolled out of view). Esc cancels.
+ * counts them and takes you to the first (it may be scrolled out of view). Esc cancels; with changes made, it asks
+ * first (a second Esc discards them), as a stray Esc would lose them all. Cancel discards at once.
  */
 export function SettingsDialog(props: {
   settings: Settings
@@ -260,6 +262,10 @@ export function SettingsDialog(props: {
   onCancel: () => void
 }): React.JSX.Element {
   const [form, setForm] = useState<SettingsForm>(() => toForm(props.settings))
+  const [start] = useState(form)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  // What had focus when Esc asked: "Keep editing" goes back to it.
+  const editing = useRef<HTMLElement | null>(null)
   // A one-line input can't show (or keep) a line break: such arguments are only saved back as they were, unless
   // the field is edited, and a warning points to settings.json.
   const [argsEdited, setArgsEdited] = useState(false)
@@ -327,7 +333,9 @@ export function SettingsDialog(props: {
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return
           e.preventDefault()
-          props.onCancel()
+          if (confirmDiscard || !formChanged(start, form)) return props.onCancel()
+          editing.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+          setConfirmDiscard(true)
         }}
       >
         <h2>Settings</h2>
@@ -591,23 +599,47 @@ export function SettingsDialog(props: {
           onChange={(update) => setForm((f) => ({ ...f, taskTemplates: update(f.taskTemplates) }))}
         />
 
-        <div className="dialog-actions">
-          {toFix > 0 && (
-            <button
-              type="button"
-              id={toFixId}
-              className="link-button dialog-actions-hint settings-to-fix"
-              onClick={() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()}
-            >
-              {plural(toFix, 'field')} to fix
-            </button>
+        {/* Stays at the bottom of the scrolling dialog, so Save and the Esc question are always in view. */}
+        <div className="settings-footer">
+          {confirmDiscard && (
+            <div className="settings-discard" role="alert">
+              <span>Discard your changes? Esc again discards them.</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmDiscard(false)
+                  editing.current?.focus()
+                }}
+              >
+                Keep editing
+              </button>
+              <button type="button" className="danger" onClick={props.onCancel}>
+                Discard
+              </button>
+            </div>
           )}
-          <button type="button" onClick={props.onCancel} disabled={busy}>
-            Cancel
-          </button>
-          <button type="submit" disabled={busy || !parsed.settings} aria-describedby={toFix > 0 ? toFixId : undefined}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
+          <div className="dialog-actions">
+            {toFix > 0 && (
+              <button
+                type="button"
+                id={toFixId}
+                className="link-button dialog-actions-hint settings-to-fix"
+                onClick={() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()}
+              >
+                {plural(toFix, 'field')} to fix
+              </button>
+            )}
+            <button type="button" onClick={props.onCancel} disabled={busy}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy || !parsed.settings}
+              aria-describedby={toFix > 0 ? toFixId : undefined}
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+          </div>
         </div>
       </form>
     </div>
