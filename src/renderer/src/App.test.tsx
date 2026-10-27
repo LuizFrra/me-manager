@@ -4803,6 +4803,31 @@ describe('App Claude accounts', () => {
     expect(screen.queryByRole('button', { name: /^Today's cost/ })).not.toBeInTheDocument()
   })
 
+  it('says when a task opens in an account no longer there, once, and in its header', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/home/me/code/my-api')).themes[0].items[0].id
+    await api.createTask(themeId, repoId, 'fix')
+    // The theme was restored after its account was removed (state from before this fix, or a hand edit).
+    const getState = api.getState
+    api.getState = async () => {
+      const s = await getState()
+      return { ...s, themes: s.themes.map((t) => ({ ...t, profileId: 'gone' })) }
+    }
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: /^(\S )?fix$/ }))
+    const toast = (await screen.findByText('The Claude account of fix no longer exists: it runs in Default')).closest(
+      '.toast',
+    ) as HTMLElement
+    expect(within(screen.getByRole('banner')).getByText('Account: unknown → Default')).toBeInTheDocument()
+    // Choosing goes to the theme, whose account it is: Default shows as chosen, and saving clears the unknown one.
+    await user.click(within(toast).getByRole('button', { name: 'Choose…' }))
+    expect(screen.getByRole('dialog', { name: 'Claude account for Client X' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /^Default/ })).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
   it('offers no choice of account while Default is the only one', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)

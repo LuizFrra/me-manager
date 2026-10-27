@@ -18,18 +18,27 @@ export const BILLING_LABEL: Record<ProfileBilling, string> = {
 
 /**
  * The profile a theme's or task's sessions start in (see effectiveProfileId): the task's, else the theme's, else
- * Default; undefined while the profiles aren't known (or the theme or task isn't there).
+ * Default, skipping one no longer there (`fellBack`); undefined while the profiles aren't known (or the theme or
+ * task isn't there).
  */
-export function targetProfile(
+export function targetAccount(
   state: AppState,
   profiles: readonly ProfileStatus[],
   target: { themeId: string; itemId?: string; taskId?: string },
-): ProfileStatus | undefined {
+): { profile: ProfileStatus; fellBack: boolean } | undefined {
   const theme = state.themes.find((t) => t.id === target.themeId)
   if (!theme || profiles.length === 0) return undefined
   const item = theme.items.find((i) => i.id === target.itemId)
   const task = item?.kind === 'repo' && target.taskId ? item.tasks.find((t) => t.id === target.taskId) : undefined
   if (target.taskId && !task) return undefined
-  const { id } = effectiveProfileId(profiles, theme, task)
-  return profiles.find((p) => p.id === id)
+  const { id, fellBack } = effectiveProfileId(profiles, theme, task)
+  const profile = profiles.find((p) => p.id === id)
+  return profile && { profile, fellBack }
 }
+
+/** targetAccount's profile. */
+export const targetProfile = (
+  state: AppState,
+  profiles: readonly ProfileStatus[],
+  target: { themeId: string; itemId?: string; taskId?: string },
+): ProfileStatus | undefined => targetAccount(state, profiles, target)?.profile

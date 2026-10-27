@@ -67,7 +67,7 @@ import { withStableCallbacks } from './lib/stableCallbacks'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { cleanError, useToasts } from './lib/toasts'
-import { targetProfile } from './lib/profiles'
+import { targetAccount, targetProfile } from './lib/profiles'
 import { formatCost } from './lib/usageFormat'
 import { GIT_ACTION_BUSY, type GitActionKind } from './lib/gitActions'
 import { archiveSkipReason, bulkSummary, runLimited, type BulkAction, type BulkOutcome, type Settled } from './lib/bulk'
@@ -876,29 +876,49 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
     setTabs(result ?? [])
     refresh()
-    if (result) void warnIfSignedOut(target, known)
+    if (result) void warnAboutAccount(target, known)
   }
 
-  // Targets already warned that their account isn't signed in, by targetKey and profile id: once per run each.
-  const signedOutWarned = useRef(new Set<string>())
+  // Targets already warned about their account, by what was said, targetKey and profile id: once per run each.
+  const accountWarned = useRef(new Set<string>())
   /**
-   * After a task or folder opened (its Claude started, or was already running): a toast with "Log in" when its
-   * account is one the user added that has no login in its folder. Default is left alone, as before accounts
-   * existed (its login may come from elsewhere, an API key in the environment say), without reading the profiles;
-   * otherwise they are read again, for their login state. `known`: the state the target was opened from (a task
-   * just created may not be in stateRef yet).
+   * After a task or folder opened (its Claude started, or was already running), a toast about its account: when
+   * the one chosen for it is no longer there ("Choose…" opens the choice where that id is), or when it is one the
+   * user added that has no login in its folder ("Log in"). Default is left alone, as before accounts existed (its
+   * login may come from elsewhere, an API key in the environment say), without reading the profiles; otherwise they
+   * are read again, for their login state. `known`: the state the target was opened from (a task just created may
+   * not be in stateRef yet).
    */
-  const warnIfSignedOut = async (target: Target, known: AppState): Promise<void> => {
+  const warnAboutAccount = async (target: Target, known: AppState): Promise<void> => {
     const found = resolveTarget(known, target)
     if (!found || (found.task?.profileId ?? found.theme.profileId ?? DEFAULT_PROFILE_ID) === DEFAULT_PROFILE_ID) return
     const list = await api.listProfiles().catch(() => undefined)
     if (!list) return
     setProfiles(list)
-    const profile = targetProfile(known, list, target)
-    if (!profile || profile.isDefault || profile.login !== 'notSignedIn') return
-    const key = `${targetKey(target)} ${profile.id}`
-    if (signedOutWarned.current.has(key)) return
-    signedOutWarned.current.add(key)
+    const account = targetAccount(known, list, target)
+    if (!account) return
+    const { profile, fellBack } = account
+    const once = (what: string): boolean => {
+      const key = `${what} ${targetKey(target)} ${profile.id}`
+      if (accountWarned.current.has(key)) return false
+      accountWarned.current.add(key)
+      return true
+    }
+    if (fellBack) {
+      if (!once('unknown')) return
+      const name = found.task?.name ?? found.item.name
+      // The task's own choice when that is the unknown one, else its theme's.
+      const taskUnknown = found.task?.profileId !== undefined && !list.some((p) => p.id === found.task?.profileId)
+      showInfo(`The Claude account of ${name} no longer exists: it runs in ${profile.name}`, {
+        warning: true,
+        action: {
+          label: 'Choose…',
+          run: () => chooseProfile(taskUnknown ? target : { themeId: target.themeId }),
+        },
+      })
+      return
+    }
+    if (profile.isDefault || profile.login !== 'notSignedIn' || !once('signedOut')) return
     showInfo(`Claude account “${profile.name}” isn’t signed in`, {
       warning: true,
       action: { label: 'Log in', run: () => loginIn(target, profile.id) },
@@ -1200,12 +1220,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
    * The selected target's account, and the one its Claude runs in when that differs, while there is more than one
    * account. The running Claude's is known only for one this run of the app started (LiveStatus.claudeProfiles).
    */
-  const targetAccounts = (target: Target): { current: ProfileStatus; running?: string } | undefined => {
-    const current = multipleProfiles ? targetProfile(state, profiles, target) : undefined
-    if (!current) return undefined
+  const targetAccounts = (
+    target: Target,
+  ): { current: ProfileStatus; unknown: boolean; running?: string } | undefined => {
+    const account = targetAccount(state, profiles, target)
+    // Shown with several accounts, or when the one chosen is no longer there, even if Default is all that is left.
+    if (!account || !(multipleProfiles || account.fellBack)) return undefined
+    const { profile: current, fellBack: unknown } = account
     const runningId = status.claudeProfiles?.[targetKey(target)]
-    if (runningId === undefined || runningId === current.id) return { current }
-    return { current, running: profiles.find((p) => p.id === runningId)?.name ?? 'a removed account' }
+    if (runningId === undefined || runningId === current.id) return { current, unknown }
+    return { current, unknown, running: profiles.find((p) => p.id === runningId)?.name ?? 'a removed account' }
   }
 
   /** The header's Restart Claude, beside an account that applies when Claude restarts. */
@@ -2335,7 +2359,12 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               onEditBudget={selectedTask ? editTaskBudget : undefined}
               onChooseProfile={selectedTask && multipleProfiles ? () => chooseProfile(selected) : undefined}
               account={
-                accounts && { name: accounts.current.name, running: accounts.running, onRestart: askRestartInAccount }
+                accounts && {
+                  name: accounts.current.name,
+                  unknown: accounts.unknown,
+                  running: accounts.running,
+                  onRestart: askRestartInAccount,
+                }
               }
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}

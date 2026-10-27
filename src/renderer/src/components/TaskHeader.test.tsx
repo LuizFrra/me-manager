@@ -307,6 +307,14 @@ describe('TaskHeader account badge', () => {
     expect(onRestart).toHaveBeenCalledTimes(1)
   })
 
+  it('says when the account chosen is no longer there, naming the one used instead', () => {
+    render(<TaskHeader {...base} account={{ name: 'Default', unknown: true, onRestart: vi.fn() }} />)
+    expect(screen.getByText('Account: unknown → Default')).toHaveAttribute(
+      'title',
+      'The Claude account chosen for it no longer exists: new sessions start in Default',
+    )
+  })
+
   it('shows nothing without an account (a single one)', () => {
     render(<TaskHeader {...base} />)
     expect(screen.queryByText(/^Account:/)).not.toBeInTheDocument()

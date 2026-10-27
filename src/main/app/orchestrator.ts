@@ -762,9 +762,21 @@ export class Orchestrator implements AppService {
     })
   }
 
-  /** The theme comes from the renderer: restoreTheme checks it. */
+  /**
+   * The theme comes from the renderer: restoreTheme checks it. Its Claude profile is dropped when no profile has it
+   * any more (removed while the theme was gone), rather than kept to fall back to Default unseen.
+   */
   async restoreTheme(theme: Theme, index?: number): Promise<AppState> {
-    return this.exclusive(async () => this.commit(m.restoreTheme(this.state, theme, index)))
+    return this.exclusive(async () => {
+      const next = m.restoreTheme(this.state, theme, index)
+      const restored = next.themes.find((t) => t.id === theme.id)
+      const known = (id: string): boolean => this.profiles().some((p) => p.id === id)
+      return this.commit(
+        restored?.profileId !== undefined && !known(restored.profileId)
+          ? m.setThemeProfile(next, restored.id, null)
+          : next,
+      )
+    })
   }
 
   async moveTheme(themeId: string, toIndex: number): Promise<AppState> {

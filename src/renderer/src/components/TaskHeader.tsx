@@ -266,9 +266,10 @@ export function TaskHeader(props: {
   onChooseProfile?: () => void
   /**
    * The Claude account new sessions start in, while there is more than one: a badge. `running` names the account
-   * Claude runs in when that differs (it started before a change), with a way to restart it in this one.
+   * Claude runs in when that differs (it started before a change), with a way to restart it in this one. `unknown`:
+   * the account chosen for it is no longer there, and `name` is the one used instead.
    */
-  account?: { name: string; running?: string; onRestart: () => void }
+  account?: { name: string; unknown?: boolean; running?: string; onRestart: () => void }
   /** Copy buttons (branch, path, attach command). */
   copies: CopyEntry[]
   onCopy: (entry: CopyEntry) => void
@@ -337,9 +338,18 @@ export function TaskHeader(props: {
             )}
             {props.account && (
               <span className="account-badge-wrap">
-                <span className="session-badge" title="The Claude account new sessions start in">
-                  Account: {props.account.name}
-                </span>
+                {props.account.unknown ? (
+                  <span
+                    className="session-badge session-badge-warn"
+                    title={`The Claude account chosen for it no longer exists: new sessions start in ${props.account.name}`}
+                  >
+                    Account: unknown → {props.account.name}
+                  </span>
+                ) : (
+                  <span className="session-badge" title="The Claude account new sessions start in">
+                    Account: {props.account.name}
+                  </span>
+                )}
                 {props.account.running !== undefined && (
                   <>
                     <span className="account-pending" title={`Claude is still running in ${props.account.running}`}>

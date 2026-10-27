@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppState, ProfileStatus } from '../../../shared/types'
-import { targetProfile } from './profiles'
+import { targetAccount, targetProfile } from './profiles'
 
 const profile = (id: string, name: string): ProfileStatus => ({
   id,
@@ -59,5 +59,14 @@ describe('targetProfile', () => {
     expect(targetProfile(state('gone'), profiles, { themeId: 't' })?.name).toBe('Default')
     expect(targetProfile(state(), [], { themeId: 't' })).toBeUndefined()
     expect(targetProfile(state(), profiles, { themeId: 't', itemId: 'r', taskId: 'nope' })).toBeUndefined()
+  })
+})
+
+describe('targetAccount', () => {
+  it('says when an account chosen is no longer there, and which one applies instead', () => {
+    const task = { themeId: 't', itemId: 'r', taskId: 'k' }
+    expect(targetAccount(state('p-work', 'gone'), profiles, task)).toEqual({ profile: profiles[1], fellBack: true })
+    expect(targetAccount(state('gone'), profiles, task)).toEqual({ profile: profiles[0], fellBack: true })
+    expect(targetAccount(state('p-work'), profiles, task)).toEqual({ profile: profiles[1], fellBack: false })
   })
 })

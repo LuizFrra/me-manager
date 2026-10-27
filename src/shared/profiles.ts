@@ -53,15 +53,21 @@ export function allProfiles(
 
 /**
  * The profile a session starts in: the task's, else the theme's, else Default. An id no profile has (a removed
- * profile, a hand edit) falls back to Default, with `fellBack` set so the caller can say so.
+ * profile, a hand edit, a theme restored after its profile was removed) is skipped at each level, so a task's
+ * unknown profile gives its theme's, with `fellBack` set so the caller can say so.
  */
 export function effectiveProfileId(
   profiles: readonly ClaudeProfile[],
   theme: { profileId?: string },
   task?: { profileId?: string },
 ): { id: string; fellBack: boolean } {
-  const id = task?.profileId ?? theme.profileId ?? DEFAULT_PROFILE_ID
-  return profiles.some((p) => p.id === id) ? { id, fellBack: false } : { id: DEFAULT_PROFILE_ID, fellBack: true }
+  let fellBack = false
+  for (const id of [task?.profileId, theme.profileId]) {
+    if (id === undefined) continue
+    if (profiles.some((p) => p.id === id)) return { id, fellBack }
+    fellBack = true
+  }
+  return { id: DEFAULT_PROFILE_ID, fellBack }
 }
 
 /**

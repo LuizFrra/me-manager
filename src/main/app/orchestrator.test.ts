@@ -1289,6 +1289,29 @@ describe('Orchestrator: Claude profiles', () => {
     expect(envOf(chosen, SESSION)).toBeUndefined()
   })
 
+  it("starts a task whose own profile is no longer there in its theme's", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', taskProfile: 'gone' })
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+  })
+
+  it('restores a removed theme without a profile removed meanwhile, and with one still there', async () => {
+    const ctx = await withProfiles()
+    const theme = (await ctx.orch.createTheme('Side')).themes[1]
+    await ctx.orch.setThemeProfile(theme.id, 'p-home')
+    const saved = (await ctx.orch.getState()).themes[1]
+    await ctx.orch.removeTheme(theme.id)
+    let s = await ctx.orch.restoreTheme(saved, 1)
+    expect(s.themes[1].profileId).toBe('p-home')
+
+    await ctx.orch.removeTheme(theme.id)
+    await ctx.orch.removeProfile('p-home') // nothing uses it now
+    s = await ctx.orch.restoreTheme(saved, 1)
+    expect(s.themes[1]).toMatchObject({ id: theme.id, name: 'Side' })
+    expect(s.themes[1]).not.toHaveProperty('profileId')
+    expect((await ctx.store.load()).themes[1]).not.toHaveProperty('profileId')
+  })
+
   it('starts a profile no longer there (a hand edit) in Default', async () => {
     const ctx = await withProfiles({ themeProfile: 'gone' })
     await ctx.orch.openTarget(ctx.target)

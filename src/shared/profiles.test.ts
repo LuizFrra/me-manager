@@ -43,11 +43,23 @@ describe('effectiveProfileId', () => {
     })
   })
 
-  it('falls back to Default for an id no profile has', () => {
+  it('skips an id no profile has at each level, saying it fell back', () => {
     expect(effectiveProfileId(profiles, { profileId: 'gone' })).toEqual({ id: DEFAULT_PROFILE_ID, fellBack: true })
+    expect(effectiveProfileId(profiles, { profileId: 'gone' }, {})).toEqual({ id: DEFAULT_PROFILE_ID, fellBack: true })
+    // A task's unknown profile gives its theme's, not Default.
     expect(effectiveProfileId(profiles, { profileId: 'p-work' }, { profileId: 'gone' })).toEqual({
+      id: 'p-work',
+      fellBack: true,
+    })
+    expect(effectiveProfileId(profiles, {}, { profileId: 'gone' })).toEqual({ id: DEFAULT_PROFILE_ID, fellBack: true })
+    expect(effectiveProfileId(profiles, { profileId: 'gone' }, { profileId: 'gone too' })).toEqual({
       id: DEFAULT_PROFILE_ID,
       fellBack: true,
+    })
+    // A task's own known profile wins over its theme's unknown one: nothing fell back.
+    expect(effectiveProfileId(profiles, { profileId: 'gone' }, { profileId: 'p-home' })).toEqual({
+      id: 'p-home',
+      fellBack: false,
     })
   })
 })
