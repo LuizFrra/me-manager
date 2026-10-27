@@ -23,6 +23,8 @@ export interface FileViewerProps {
   diff?: string
   /** Changes tab: the selected change. */
   change?: ChangedFile
+  /** Why the file or diff couldn't be read (instead of `content` or `diff`). */
+  error?: string
   mdMode: PanelState['mdMode']
   /** Changes tab: how the diff is laid out; unified by default. */
   diffLayout?: DiffLayout
@@ -96,7 +98,13 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
   const image = isImagePath(path)
 
   let body: React.ReactNode
-  if (p.tab === 'changes') {
+  if (p.error !== undefined) {
+    body = (
+      <p className="viewer-message" role="alert">
+        Can&apos;t show this {p.tab === 'changes' ? 'diff' : 'file'}: {p.error}
+      </p>
+    )
+  } else if (p.tab === 'changes') {
     const diff =
       p.diff === undefined ? (
         <p className="panel-hint">Loading…</p>

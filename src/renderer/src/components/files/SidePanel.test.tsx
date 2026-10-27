@@ -371,6 +371,44 @@ describe('SidePanel', () => {
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(new Error('boom')))
   })
 
+  it('shows why a file or diff could not be read in the viewer, until a poll reads it', async () => {
+    vi.useFakeTimers()
+    let fail = true
+    const api = createMockApi({
+      readFile: async () => {
+        if (fail) throw new Error("Error invoking remote method 'readFile': Error: EACCES: permission denied")
+        return { kind: 'text', content: 'readable', size: 8, truncated: false }
+      },
+      fileDiff: async () => Promise.reject(new Error('Path is a directory')),
+    })
+    const onError = vi.fn()
+    render(<Harness api={api} initial={{ selected: 'src/app.ts' }} onError={onError} />)
+    const flush = (ms = 0): Promise<void> =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    await flush()
+    const viewer = screen.getByRole('region', { name: 'File viewer' })
+    expect(within(viewer).getByRole('alert')).toHaveTextContent("Can't show this file: EACCES: permission denied")
+    expect(within(viewer).queryByText('Loading…')).not.toBeInTheDocument()
+    // Shown where it happened, not as a toast too.
+    expect(onError).not.toHaveBeenCalled()
+
+    fail = false
+    await flush(PANEL_POLL_MS)
+    expect(codeText()).toBe('readable')
+    expect(within(viewer).queryByRole('alert')).not.toBeInTheDocument()
+
+    act(() => screen.getByRole('tab', { name: /Changes/ }).click())
+    act(() =>
+      within(document.querySelector('.changes-list') as HTMLElement)
+        .getByRole('button', { name: /src\/app\.ts/ })
+        .click(),
+    )
+    await flush()
+    expect(within(viewer).getByRole('alert')).toHaveTextContent("Can't show this diff: Path is a directory")
+  })
+
   it('polls changes and the selected file every 3 s, silently marking failures, until unmounted', async () => {
     vi.useFakeTimers()
     let fail = false

@@ -20,6 +20,7 @@ import { FileViewer } from './FileViewer'
 import { ReviewTray } from './ReviewTray'
 import { SearchView } from './SearchView'
 import type { ReviewComment, ReviewDraft } from '../../lib/review'
+import { cleanError } from '../../lib/toasts'
 import { startVisibleInterval } from '../../lib/visibleInterval'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 
@@ -60,10 +61,8 @@ export const PANEL_POLL_MS = 3000
 const FILES_EVERY_N_POLLS = 5
 
 type Alive = () => boolean
-interface Loaded {
-  key: string
-  value: FileContent | string
-}
+/** What the viewer shows for `key`: the file's content or diff, or why it couldn't be read. */
+type Loaded = { key: string; value: FileContent | string; error?: undefined } | { key: string; error: string }
 
 /** Stores the JSON of `value` under `slot`; true if it differs from what was stored before. */
 function changed(cache: Map<string, string>, slot: string, value: unknown): boolean {
@@ -172,17 +171,20 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
     }
   }, [missing, fetchFiles, fetchChanges, onError, reload])
 
-  // The selected file or diff, whenever the selection changes, and again on ⟳.
+  // The selected file or diff, whenever the selection changes, and again on ⟳. A failure shows in the viewer (a
+  // poll that reads it later replaces it).
   useEffect(() => {
     if (missing || !viewKey) return
     let alive = true
     fetchView(() => alive).catch((err) => {
-      if (alive) onError(err)
+      if (!alive) return
+      lastJson.current.delete('view')
+      setView({ key: viewKey, error: cleanError(err) })
     })
     return () => {
       alive = false
     }
-  }, [missing, viewKey, fetchView, onError, reload])
+  }, [missing, viewKey, fetchView, reload])
 
   // Polling while the panel is mounted (= open). Errors are silent and only mark ⟳ stale.
   useEffect(() => {
@@ -295,7 +297,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const setMdMode = useLatestCallback((mdMode: PanelState['mdMode']): void => onState({ ...state, mdMode }))
   const openFile = useLatestCallback((path: string): void => select('files', path))
 
-  const loaded = view && view.key === viewKey ? view.value : undefined
+  const shown = view && view.key === viewKey ? view : undefined
+  const loaded = shown?.error === undefined ? shown?.value : undefined
   const change = tab === 'changes' ? changes?.files.find((f) => f.path === shownPath) : undefined
 
   return (
@@ -437,6 +440,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             content={tab === 'files' && typeof loaded === 'object' ? loaded : undefined}
             diff={tab === 'changes' && typeof loaded === 'string' ? loaded : undefined}
             change={change}
+            error={shown?.error}
             mdMode={state.mdMode}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}
