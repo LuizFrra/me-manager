@@ -573,7 +573,7 @@ describe('Claude profiles', () => {
 
   it('rejects a profile that is not text, and unknown themes and tasks', () => {
     const { s, themeId, repoId } = withTask()
-    for (const bad of [7, {}, undefined, true]) {
+    for (const bad of [7, {}, undefined, true, '', '  ', 'a\0b']) {
       expect(() => m.setThemeProfile(s, themeId, bad as string)).toThrow('Profile must be text')
       expect(() => m.setTaskProfile(s, themeId, repoId, 'task-fix', bad as string)).toThrow('Profile must be text')
     }
@@ -587,5 +587,6 @@ describe('Claude profiles', () => {
     const removed = m.removeTheme(s, themeId)
     expect(m.restoreTheme(removed, theme).themes[0]).toEqual(theme)
     expect(m.restoreTheme(removed, { ...theme, profileId: 3 }).themes[0]).not.toHaveProperty('profileId')
+    expect(m.restoreTheme(removed, { ...theme, profileId: '' }).themes[0]).not.toHaveProperty('profileId')
   })
 })

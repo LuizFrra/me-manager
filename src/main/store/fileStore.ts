@@ -7,9 +7,10 @@ import { emptyState } from './mutations'
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** Drops a theme's or task's `profileId` that isn't text (see checkItems). */
+/** Drops a theme's or task's `profileId` that isn't one setThemeProfile or setTaskProfile saves (see checkItems). */
 const dropBadProfile = (v: Record<string, unknown>): void => {
-  if ('profileId' in v && typeof v.profileId !== 'string') delete v.profileId
+  const id = v.profileId
+  if ('profileId' in v && (typeof id !== 'string' || id.trim() === '' || id.includes('\0'))) delete v.profileId
 }
 
 /**
@@ -17,7 +18,7 @@ const dropBadProfile = (v: Record<string, unknown>): void => {
  * than as one whose archived state nothing can rely on, and a `runCommand` that isn't one line of shell as
  * setRunCommand saves it, so "Run" never starts what the app wouldn't have saved, and a task's `budgetUsd` that
  * isn't one setTaskBudget would save (the default budget then applies), and a theme's or task's `profileId` that
- * isn't text (the theme's profile, or Default, then applies). Files from before archiving, run commands, budgets or
+ * isn't non-empty text (the theme's profile, or Default, then applies). Files from before archiving, run commands, budgets or
  * profiles have none of them and load unchanged.
  */
 function checkItems(state: AppState): void {

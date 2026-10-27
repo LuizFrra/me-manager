@@ -196,14 +196,28 @@ describe('FileStore', () => {
     const [t] = state.themes
     const edited = {
       ...state,
-      themes: [{ ...t, profileId: 7, items: [{ ...t.items[0], tasks: [{ ...task, profileId: null }] }] }],
+      themes: [
+        {
+          ...t,
+          profileId: 7,
+          items: [
+            {
+              ...t.items[0],
+              tasks: [
+                { ...task, profileId: null },
+                { ...task, id: 'k2', profileId: '' },
+              ],
+            },
+          ],
+        },
+      ],
     }
     await writeFile(file, JSON.stringify(edited), 'utf8')
     const loaded = (await new FileStore(file).load()).themes[0]
     expect(loaded).not.toHaveProperty('profileId')
-    const repo = loaded.items[0]
-    expect(repo.kind === 'repo' && repo.tasks[0]).toEqual({ ...task, profileId: undefined })
-    expect(repo.kind === 'repo' && 'profileId' in repo.tasks[0]).toBe(false)
+    const tasks = loaded.items[0].kind === 'repo' ? loaded.items[0].tasks : []
+    expect(tasks.map((k) => k.id)).toEqual(['k1', 'k2'])
+    expect(tasks.map((k) => 'profileId' in k)).toEqual([false, false])
   })
   it('falls back to .bak when the main file is JSON but not a state the app saves (a hand edit)', async () => {
     const store = new FileStore(file)

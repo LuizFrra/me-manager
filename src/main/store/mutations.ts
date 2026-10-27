@@ -257,7 +257,7 @@ export function restoreTheme(state: AppState, raw: unknown, index?: number): App
   const theme: Theme = { id, name, slug, items }
   if (isThemeColor(raw.color)) theme.color = raw.color
   if (typeof raw.icon === 'string' && raw.icon.trim() && themeIconError(raw.icon) === null) theme.icon = raw.icon.trim()
-  if (typeof raw.profileId === 'string') theme.profileId = raw.profileId
+  if (isText(raw.profileId)) theme.profileId = raw.profileId
   const next = clone(state)
   insertAt(next.themes, theme, index)
   return next
@@ -422,9 +422,12 @@ export function setTaskBudget(
   return next
 }
 
-/** A profile id from the renderer: any text, or null for none. Whether a profile has it is checked when it is used. */
+/**
+ * A profile id from the renderer: non-empty text, or null for none. Whether a profile has it is checked when it is
+ * used.
+ */
 function checkProfile(profileId: unknown): asserts profileId is string | null {
-  if (profileId !== null && typeof profileId !== 'string') throw new Error('Profile must be text')
+  if (profileId !== null && !isText(profileId)) throw new Error('Profile must be text')
 }
 
 /** Sets the Claude profile a theme's sessions start in (see shared/profiles.ts); null removes it (Default). */
