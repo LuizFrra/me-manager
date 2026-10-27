@@ -13,6 +13,7 @@ import type { TextLink } from '../lib/terminalLinks'
 import { editingKeySequence, NEWLINE_SEQUENCE, PASTE_IMAGE_SEQUENCE, terminalKeyAction } from '../lib/terminalKeys'
 import { SYSTEM_UNICODE } from '../lib/unicodeWidths'
 import { copyModePosition } from '../lib/copyMode'
+import { cellAt, dragRange } from '../lib/dragSelection'
 import { PopupMenu, type MenuItem } from './PopupMenu'
 import { joinShellWords } from '../../../shared/shell'
 
@@ -53,6 +54,8 @@ const MOD = isMac ? 'Cmd' : 'Ctrl'
 /** Room kept for the "Ctrl+click to open link" hint at the window's right edge. */
 const HINT_WIDTH = 180
 const COPY_KEY = isMac ? '⌘C' : 'Ctrl+C'
+/** How soon after a drag's release tmux's copy of it must arrive to be highlighted as that drag. */
+const DRAG_COPY_MS = 1000
 
 /** Following a link takes Ctrl+click (Cmd+click on macOS), so a plain click still focuses or selects. */
 const followsLink = (e: MouseEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
@@ -103,6 +106,10 @@ export function TerminalView({
   // Whether that selection was made since the last input, so Ctrl+C copies it rather than interrupting.
   const [heldFresh, setHeldFresh] = useState(false)
   const heldFreshRef = useRef(false)
+  // tmux leaves copy mode once a drag on the live screen is copied (copy mode would freeze the screen), which takes its
+  // highlight away: the terminal highlights the dragged cells itself (`drawn`) until the selection is no longer fresh.
+  const dragRef = useRef<{ range: ReturnType<typeof dragRange>; at: number } | null>(null)
+  const drawnRef = useRef(false)
   const fitRef = useRef<FitAddon | null>(null)
   // The size and palette to create the terminal with; later changes are applied by the effects below, without
   // recreating it.
@@ -118,6 +125,10 @@ export function TerminalView({
   const linkFilesCache = useRef<{ load: unknown; at: number; files: Promise<LinkFiles | null> } | null>(null)
 
   const setFresh = useCallback((fresh: boolean): void => {
+    if (!fresh && drawnRef.current) {
+      drawnRef.current = false
+      termRef.current?.clearSelection()
+    }
     if (heldFreshRef.current === fresh) return
     heldFreshRef.current = fresh
     setHeldFresh(fresh)
@@ -180,6 +191,13 @@ export function TerminalView({
         heldRef.current = text
         setFresh(text !== '')
         if (text !== '') selectedRef.current = true
+        const drag = dragRef.current
+        dragRef.current = null
+        if (text !== '' && drag && Date.now() - drag.at < DRAG_COPY_MS) {
+          const { column, row, length } = drag.range
+          term.select(column, term.buffer.active.viewportY + row, length)
+          drawnRef.current = true
+        }
       },
     })
     term.loadAddon(new ClipboardAddon(undefined, clipboard))
@@ -204,8 +222,10 @@ export function TerminalView({
       }),
     )
 
-    // What an explicit copy takes: xterm's own selection (Shift/Option+drag), else the last tmux mouse selection.
-    const copyText = (): string => (term.hasSelection() ? term.getSelection() : heldRef.current)
+    // What an explicit copy takes: a fresh tmux mouse selection (highlighted by xterm too, but tmux's text is what was
+    // selected), else xterm's own selection (Shift/Option+drag), else the last tmux mouse selection.
+    const copyText = (): string =>
+      heldFreshRef.current ? heldRef.current : term.hasSelection() ? term.getSelection() : heldRef.current
     const copy = (text: string): void => {
       void navigator.clipboard.writeText(text).then(
         () => showNotice('Copied'),
@@ -216,7 +236,7 @@ export function TerminalView({
     }
     // macOS: the Edit menu's Copy (Cmd+C) fires a copy event; xterm handles it only for its own selection.
     const onCopy = (e: ClipboardEvent): void => {
-      if (term.hasSelection()) {
+      if (!heldFreshRef.current && term.hasSelection()) {
         showNotice('Copied')
         return
       }
@@ -326,11 +346,34 @@ export function TerminalView({
       if (e.deltaY < 0) wheelRef.current = true
     }
     host.addEventListener('wheel', onWheel, { capture: true, passive: true })
-    // A new click or drag replaces the selection; tmux reports a drag's text once the button is released.
+    // A new click or drag replaces the selection; tmux reports a drag's text once the button is released. A drag that
+    // starts on the live screen (not scrolled back in copy mode, where tmux keeps its own highlight) is remembered for
+    // the copy that follows it.
+    const cellOf = (e: MouseEvent): ReturnType<typeof cellAt> =>
+      cellAt(
+        (term.element?.querySelector('.xterm-screen') ?? host).getBoundingClientRect(),
+        term.cols,
+        term.rows,
+        e.clientX,
+        e.clientY,
+      )
+    let dragStart: ReturnType<typeof cellAt> = null
     const onMouseDown = (e: MouseEvent): void => {
-      if (e.button === 0) setFresh(false)
+      if (e.button !== 0) return
+      setFresh(false)
+      dragRef.current = null
+      dragStart = inCopyModeRef.current ? null : cellOf(e)
+    }
+    const onMouseUp = (e: MouseEvent): void => {
+      const start = dragStart
+      dragStart = null
+      if (e.button !== 0 || !start) return
+      const end = cellOf(e)
+      if (end && (end.col !== start.col || end.row !== start.row))
+        dragRef.current = { range: dragRange(start, end, term.cols), at: Date.now() }
     }
     host.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('mouseup', onMouseUp)
 
     term.attachCustomKeyEventHandler((e) => {
       if (modalOpenRef.current) return false
@@ -369,6 +412,11 @@ export function TerminalView({
       viewScrolledRef.current = (position?.scrolledBack ?? 0) > 0
       // Out of copy mode (e.g. the wheel scrolled back to the bottom, which leaves it): keys go straight on again.
       if (!position) wheelRef.current = selectedRef.current = false
+      // Still in it (the drag scrolled back): tmux highlights the selection itself.
+      else if (drawnRef.current) {
+        drawnRef.current = false
+        term.clearSelection()
+      }
       setScrolledBack(viewScrolledRef.current)
     }
     const parsed = term.onWriteParsed(() => {
@@ -392,6 +440,7 @@ export function TerminalView({
       host.removeEventListener('copy', onCopy)
       host.removeEventListener('contextmenu', onContextMenu)
       host.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('mouseup', onMouseUp)
       host.removeEventListener('wheel', onWheel, { capture: true })
       host.removeEventListener('dragover', onDragOver)
       host.removeEventListener('drop', onDrop)
@@ -413,6 +462,7 @@ export function TerminalView({
     term.reset() // the new tmux client redraws the whole screen on attach
     heldRef.current = ''
     setFresh(false)
+    dragRef.current = null
     linkFilesCache.current = null
     wheelRef.current = selectedRef.current = false
     pendingRef.current = null

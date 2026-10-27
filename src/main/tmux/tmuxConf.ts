@@ -8,8 +8,9 @@
  * - `hyperlinks` lets OSC 8 links (printed by programs in the pane) through to the app's terminal, which opens them.
  * - The right button's pane menu (Kill, Respawn, Swap…) is replaced: a right click selects the pane and goes to the
  *   program when it asked for the mouse; the app shows its own Copy/Paste menu.
- * - A mouse selection stays highlighted after the button is released (tmux's default clears it at once), so it shows
- *   what Ctrl+C will copy; tmux stays in copy mode meanwhile, which the app's terminal leaves on the next key.
+ * - A mouse selection is copied when the button is released (the app holds it for Ctrl+C and highlights it itself).
+ *   Made on the live screen, it leaves copy mode at once: copy mode shows a still copy of the pane, so staying in it
+ *   froze the screen until the next key. Made while scrolled back, it stays highlighted there, in copy mode.
  * - COLORTERM tells programs (Claude Code among them) that 24-bit colour reaches the screen, which the RGB override
  *   and the app's terminal make true; without it they fall back to the nearest of 256 colours.
  */
@@ -27,8 +28,8 @@ set -s terminal-features[90] "xterm-256color:clipboard:hyperlinks"
 set -g allow-rename off
 set -g automatic-rename off
 set -g base-index 0
-bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-no-clear
-bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-no-clear
+bind -T copy-mode MouseDragEnd1Pane if -F "#{scroll_position}" { send -X copy-pipe-no-clear } { send -X copy-pipe-and-cancel }
+bind -T copy-mode-vi MouseDragEnd1Pane if -F "#{scroll_position}" { send -X copy-pipe-no-clear } { send -X copy-pipe-and-cancel }
 bind -n MouseDown3Pane if -F -t = "#{mouse_any_flag}" { select-pane -t = ; send -M } { select-pane -t = }
 bind -n M-MouseDown3Pane if -F -t = "#{mouse_any_flag}" { select-pane -t = ; send -M } { select-pane -t = }
 `

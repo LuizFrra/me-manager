@@ -15,6 +15,9 @@ interface FakeTerm {
   pasted: string[]
   linkProviders: ILinkProvider[]
   input?: (data: string) => void
+  selected: [number, number, number][]
+  buffer: unknown
+  parsed?: () => void
 }
 const terms = vi.hoisted(() => [] as FakeTerm[])
 const fits = vi.hoisted(() => ({ count: 0 }))
@@ -59,6 +62,11 @@ vi.mock('@xterm/xterm', () => ({
     }
     clearSelection(): void {
       xtermSelection.text = ''
+    }
+    selected: [number, number, number][] = []
+    select(column: number, row: number, length: number): void {
+      this.selected.push([column, row, length])
+      xtermSelection.text = 'cells' // what xterm reads from the highlighted cells
     }
     write = noop
     reset = noop
@@ -550,6 +558,84 @@ describe('TerminalView after a scroll back', () => {
     })
     expect(onLeaveCopyMode).not.toHaveBeenCalled()
     expect(screen.getByRole('status')).toHaveTextContent('to copy')
+  })
+})
+
+describe('TerminalView mouse selection highlight', () => {
+  const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+  const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})
+  beforeEach(() => {
+    writeText.mockClear()
+    xtermSelection.text = ''
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText, readText: async () => '' },
+    })
+  })
+  // An 80 x 24 screen of 10 x 20 px cells, scrolled to buffer line 100 (tmux's screen sits below xterm's scrollback).
+  const setup = (props: Partial<Parameters<typeof TerminalView>[0]> = {}): { host: Element; term: FakeTerm } => {
+    const { container } = render(<TerminalView api={api} sessionKey="s" fontSize={13} {...props} />)
+    const host = container.querySelector('.terminal-host') as Element
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 480 }) as DOMRect
+    const term = terms.at(-1) as FakeTerm
+    term.buffer = { active: { viewportY: 100, getLine: () => undefined } }
+    return { host, term }
+  }
+  const drag = (host: Element, from: [number, number], to: [number, number]): void => {
+    fireEvent.mouseDown(host, { button: 0, clientX: from[0], clientY: from[1] })
+    fireEvent.mouseUp(window, { button: 0, clientX: to[0], clientY: to[1] })
+  }
+  const tmuxCopies = (text: string): Promise<void> =>
+    act(async () => {
+      await providers.at(-1)?.writeText('' as never, text)
+    })
+  const ctrlC = (): boolean | undefined =>
+    handlers.at(-1)?.(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', ctrlKey: true, cancelable: true }))
+
+  it('highlights a drag tmux copied (tmux leaves copy mode at once, so the screen keeps moving)', async () => {
+    const { host, term } = setup()
+    drag(host, [75, 90], [15, 50]) // cell (7, 4) back up to (1, 2)
+    await tmuxCopies('picked')
+    expect(term.selected).toEqual([[1, 102, 167]])
+    expect(ctrlC()).toBe(false)
+    expect(writeText).toHaveBeenCalledWith('picked') // tmux's text, not the cells read again
+  })
+
+  it('takes the highlight away on the next key, so Ctrl+C interrupts again', async () => {
+    const { host, term } = setup()
+    drag(host, [5, 5], [95, 5])
+    await tmuxCopies('picked')
+    act(() => term.input?.('x'))
+    expect(xtermSelection.text).toBe('')
+    expect(ctrlC()).toBe(true)
+  })
+
+  it('draws nothing for a click, or a drag tmux copied nothing from (the program took the mouse)', async () => {
+    const { host, term } = setup()
+    drag(host, [5, 5], [95, 5])
+    fireEvent.mouseDown(host, { button: 0, clientX: 5, clientY: 5 })
+    await tmuxCopies('double-clicked word')
+    expect(term.selected).toEqual([])
+  })
+
+  it('leaves the highlight to tmux when the drag ends scrolled back, in copy mode', async () => {
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => (cb(0), 1))
+    const { host, term } = setup()
+    drag(host, [5, 5], [95, 5])
+    await tmuxCopies('picked')
+    const chars = [...'out [3/90]'.padStart(20)]
+    term.buffer = {
+      active: {
+        viewportY: 100,
+        getLine: () => ({
+          length: 20,
+          getCell: (x: number) => ({ getChars: () => chars[x].trim(), isBgDefault: () => x < 14 }),
+        }),
+      },
+    }
+    act(() => term.parsed?.())
+    expect(xtermSelection.text).toBe('')
+    vi.restoreAllMocks()
   })
 })
 

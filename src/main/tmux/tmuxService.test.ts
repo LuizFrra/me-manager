@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -53,9 +54,6 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     expect(lines).toEqual(['terminal-features[90] xterm-256color:clipboard:hyperlinks'])
     const keys = await run('tmux', ['-L', socket, 'list-keys', '-T', 'root', 'MouseDown3Pane'])
     expect(keys).not.toContain('display-menu') // no pane menu with Kill on a right click
-    // A mouse selection stays highlighted once copied.
-    const drag = await run('tmux', ['-L', socket, 'list-keys', '-T', 'copy-mode', 'MouseDragEnd1Pane'])
-    expect(drag).toContain('copy-pipe-no-clear')
     // Programs in new windows are told 24-bit colour works.
     expect(await run('tmux', ['-L', socket, 'show-environment', '-g', 'COLORTERM'])).toBe('COLORTERM=truecolor\n')
     await svc.killSession('mmt_conf')
@@ -73,6 +71,44 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     expect(await inMode()).toBe('0')
     await svc.killSession('mmt_mode')
   })
+
+  // A real client (util-linux `script` gives it a terminal) sends the mouse as the app's terminal does.
+  it.skipIf(process.platform !== 'linux')(
+    'copies a drag on the live screen and leaves copy mode, so new output keeps showing; stays in it scrolled back',
+    async () => {
+      await svc.newSession('mmt_drag', cwd, 'claude', 'i=0; while :; do i=$((i+1)); echo "tick $i"; sleep 0.05; done')
+      const client = spawn('script', ['-qfec', `tmux -L ${socket} attach -t =mmt_drag`, '/dev/null'], {
+        stdio: ['pipe', 'ignore', 'ignore'],
+      })
+      const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+      const send = async (seq: string): Promise<void> => {
+        client.stdin.write(seq)
+        await pause(30)
+      }
+      const drag = async (): Promise<void> => {
+        await send('\x1b[<0;2;3M')
+        for (let x = 3; x <= 8; x++) await send(`\x1b[<32;${x};3M`)
+        await send('\x1b[<0;8;3m')
+        await pause(300)
+      }
+      const mode = async (): Promise<string> =>
+        (await run('tmux', ['-L', socket, 'display-message', '-p', '-t', '=mmt_drag:', '#{pane_in_mode}'])).trim()
+      try {
+        await pause(2000) // a screenful and some history
+        await drag()
+        expect(await mode()).toBe('0')
+        expect(await run('tmux', ['-L', socket, 'show-buffer'])).toMatch(/\S/)
+        for (let i = 0; i < 3; i++) await send('\x1b[<64;10;10M') // the wheel scrolls back
+        await pause(200)
+        await drag()
+        expect(await mode()).toBe('1')
+      } finally {
+        client.kill()
+        await svc.killSession('mmt_drag')
+      }
+    },
+    15_000,
+  )
 
   it('keeps going when a running tmux refuses a config line (an option an older tmux lacks)', async () => {
     await svc.newSession('mmt_badconf', cwd, 'claude', 'sh')
