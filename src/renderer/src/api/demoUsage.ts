@@ -34,6 +34,7 @@ function modelTotals(model: string, tokens: TokenCounts, messages: number): Usag
     priced: cost !== null,
     cost: cost ?? 0,
     unpricedTokens: cost === null ? totalTokens(tokens) : 0,
+    companyTokens: 0,
     messages,
     sessions: Math.max(1, Math.round(messages / 40)),
     firstSeen: '2026-09-02T09:15:00.000Z',
@@ -49,6 +50,7 @@ function addBuckets(buckets: UsageBucket[]): UsageBucket {
     for (const k of ['input', 'output', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h'] as const) out[k] += b[k]
     out.cost += b.cost
     out.unpricedTokens += b.unpricedTokens
+    out.companyTokens += b.companyTokens
     out.messages += b.messages
     out.sessions += b.sessions
     if (b.firstSeen && (!out.firstSeen || b.firstSeen < out.firstSeen)) out.firstSeen = b.firstSeen
@@ -62,6 +64,7 @@ function addBuckets(buckets: UsageBucket[]): UsageBucket {
       for (const k of ['input', 'output', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h'] as const) prev[k] += m[k]
       prev.cost += m.cost
       prev.unpricedTokens += m.unpricedTokens
+      prev.companyTokens += m.companyTokens
       prev.messages += m.messages
       prev.sessions += m.sessions
     }
@@ -110,7 +113,7 @@ export function demoUsage(seed: string): UsageSummary {
   return Object.fromEntries(USAGE_PERIODS.map((p) => [p, bucket(SHARE[p])])) as Record<UsagePeriod, UsageBucket>
 }
 
-/** The report the mock API returns: demoUsage for every task and folder, summed per theme and overall. */
+/** The report the mock API returns: demoUsage for every task and folder, summed per theme and overall, as Default's. */
 export function demoUsageReport(state: AppState): UsageReport {
   const themes = state.themes.map((theme) => {
     const targets: UsageTargetReport[] = []
@@ -133,10 +136,13 @@ export function demoUsageReport(state: AppState): UsageReport {
     }
     return { themeId: theme.id, name: theme.name, usage: addSummaries(targets.map((t) => t.usage)), targets }
   })
+  const total = addSummaries(themes.map((t) => t.usage))
+  // All of it Default's, billed to the user.
   return {
     generatedAt: new Date().toISOString(),
-    total: addSummaries(themes.map((t) => t.usage)),
+    total,
     themes,
+    profiles: [{ id: 'default', name: 'Default', billing: 'own', report: { total, themes } }],
   }
 }
 

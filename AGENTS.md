@@ -15,7 +15,7 @@ does.
 | Node.js                    | **22.12 or newer** (Electron 44 and Vite need it) | build, tests                                            |
 | npm                        | comes with Node (10+)                             | install                                                 |
 | git                        | recent (2.40+)                                    | the app and its tests run real git                      |
-| tmux                       | 3.x                                               | the app's sessions; some tests start a real tmux server |
+| tmux                       | **3.2 or newer** (`new-session -e`)               | the app's sessions; some tests start a real tmux server |
 | C/C++ toolchain + Python 3 | Linux only, see below                             | `node-pty` is compiled from source on Linux             |
 | `claude` (Claude Code CLI) | any                                               | only to _use_ the app; **not** needed to build or test  |
 
@@ -144,7 +144,12 @@ Before interacting, check what each session runs:
 `tmux -L mm-agent-$$ list-panes -a -F '#{session_name} #{pane_pid}'` then `ps -o args= --ppid <pid>`; it must be
 the fake (`cat`), never `claude`.
 
-- `CLAUDE_CONFIG_DIR` keeps the usage/budget views from reading your real `~/.claude`.
+- `CLAUDE_CONFIG_DIR` keeps the usage/budget views from reading your real `~/.claude`. In such a launch it is also
+  the Default Claude account's folder: Default's sessions inherit it from the app (and the tmux server) and are
+  started without setting it.
+- Sessions of any other Claude account (Settings → Claude accounts) start with `CLAUDE_CONFIG_DIR` set to that
+  account's folder (`tmux new-session -e`). To check an isolated launch, make the accounts' folders under
+  `$SCRATCH` and have the fake `claude` print `$CLAUDE_CONFIG_DIR`.
 - Budget alerts still raise real desktop notifications.
 - Drive and screenshot the UI through the Chrome DevTools Protocol on the debugging port
   (`Runtime.evaluate`, `Input.dispatchMouseEvent`, `Input.insertText`, `Page.captureScreenshot`).
@@ -153,7 +158,8 @@ the fake (`cat`), never `claude`.
   `pkill -f` pattern matches your own shell command and kills it.
 
 Other environment variables: `ME_MANAGER_HOME` (default `~/.me-manager`), `ME_MANAGER_TMUX_SOCKET` (default
-`me-manager`), `CLAUDE_CONFIG_DIR` (default `~/.claude`, read-only).
+`me-manager`), `CLAUDE_CONFIG_DIR` (default `~/.claude`, read-only; the Default account's folder, while every other
+account's sessions get their own).
 
 ## 5. Package
 

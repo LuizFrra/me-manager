@@ -1,10 +1,12 @@
 import type {
   AppState,
   ChangeList,
+  ClaudeProfile,
   CommitResult,
   PullRequestResult,
   FileContent,
   FileList,
+  ProfileLogin,
   SearchOptions,
   SearchResult,
   TabInfo,
@@ -22,17 +24,20 @@ import type {
   LauncherApi,
   NewWindowOptions,
   OrchestratorDeps,
+  ProfileFoldersApi,
   PromptFilesApi,
   PtyApi,
   SendTextOptions,
   StoreApi,
   TmuxApi,
-  UsageApi,
+  ProfileUsageApi,
+  ProfileUsageSummaries,
   UsageSummaries,
   WindowActivity,
 } from '../contracts'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { emptyUsageSummary } from '../../shared/usage'
+import { allProfiles } from '../../shared/profiles'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
 import type { UiStateStoreApi } from '../store/uiState'
@@ -217,19 +222,32 @@ export class FakeGh implements GhApi {
 }
 
 /**
- * A FakeTmux window. `remainOnExit` and `dead` are only there when set, so tests can compare windows as
+ * A FakeTmux window. `remainOnExit`, `env` and `dead` are only there when set, so tests can compare windows as
  * `{ name, command }`.
  */
 export interface FakeWindow {
   name: string
   command?: string
   remainOnExit?: true
+  /** The environment its process got from the session and its own (see NewWindowOptions), when it got any. */
+  env?: Record<string, string>
   /** Its command exited and remain-on-exit kept it: listWindows reports it `dead`. */
   dead?: true
 }
 
+/** `{ env }`, or {} for an empty environment: FakeWindow.env and the session's are only there when set. */
+const withEnv = (env: Record<string, string>): { env?: Record<string, string> } =>
+  Object.keys(env).length > 0 ? { env } : {}
+
+/** ` env A=1 -B` (B removed) for a non-empty environment, '' otherwise: how FakeTmux.calls show one. */
+function envNote(env: Record<string, string | null> = {}, label = 'env'): string {
+  const vars = Object.entries(env).map(([k, v]) => (v === null ? `-${k}` : `${k}=${v}`))
+  return vars.length > 0 ? ` ${label} ${vars.join(' ')}` : ''
+}
+
 export class FakeTmux implements TmuxApi {
-  sessions = new Map<string, { cwd: string; windows: FakeWindow[]; active: number }>()
+  /** `env` is the session's environment (newSession's), only there when it has one. */
+  sessions = new Map<string, { cwd: string; windows: FakeWindow[]; active: number; env?: Record<string, string> }>()
   calls: string[] = []
   failNewSession = false
   async hasSession(name: string): Promise<boolean> {
@@ -238,11 +256,23 @@ export class FakeTmux implements TmuxApi {
   async listSessions(): Promise<string[]> {
     return [...this.sessions.keys()]
   }
-  async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
-    this.calls.push(`newSession ${name} ${command}`)
+  async newSession(
+    name: string,
+    cwd: string,
+    windowName: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void> {
+    this.calls.push(`newSession ${name} ${command}${envNote(env)}`)
     if (this.failNewSession) throw new Error('tmux failed')
     if (this.sessions.has(name)) throw new Error(`duplicate session: ${name}`) // as tmux refuses it
-    this.sessions.set(name, { cwd, windows: [{ name: windowName, command }], active: 0 })
+    const own = withEnv({ ...env })
+    this.sessions.set(name, {
+      cwd,
+      windows: [{ name: windowName, command, ...withEnv({ ...env }) }],
+      active: 0,
+      ...own,
+    })
   }
   async killSession(name: string): Promise<void> {
     this.calls.push(`killSession ${name}`)
@@ -269,10 +299,16 @@ export class FakeTmux implements TmuxApi {
     options: NewWindowOptions = {},
   ): Promise<void> {
     const s = this.sessions.get(session)!
-    if (options.remainOnExit) {
-      this.calls.push(`newWindow ${session} ${windowName} [remain-on-exit] in ${cwd}: ${command}`)
-      s.windows.push({ name: windowName, command, remainOnExit: true })
-    } else s.windows.push({ name: windowName, command })
+    const remain = options.remainOnExit ? ' [remain-on-exit]' : ''
+    const notes = `${envNote(options.env)}${envNote(options.windowEnv, 'window env')}`
+    this.calls.push(`newWindow ${session} ${windowName}${remain} in ${cwd}: ${command}${notes}`)
+    this.setSessionEnv(session, options.env)
+    s.windows.push({
+      name: windowName,
+      command,
+      ...(options.remainOnExit ? { remainOnExit: true as const } : {}),
+      ...withEnv({ ...s.env, ...options.windowEnv }),
+    })
     s.active = s.windows.length - 1
   }
   /** The window named `windowName` exactly, like a `=session:=name` target; throws like tmux when there is none. */
@@ -281,11 +317,31 @@ export class FakeTmux implements TmuxApi {
     if (!w) throw new Error(`can't find window: ${windowName}`)
     return w
   }
-  async respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void> {
+  async respawnWindow(
+    session: string,
+    windowName: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string | null>,
+  ): Promise<void> {
     const w = this.window(session, windowName)
-    this.calls.push(`respawnWindow ${session} ${windowName} in ${cwd}: ${command}`)
+    this.calls.push(`respawnWindow ${session} ${windowName} in ${cwd}: ${command}${envNote(env)}`)
+    this.setSessionEnv(session, env)
     w.command = command
+    delete w.env
+    Object.assign(w, withEnv({ ...this.sessions.get(session)!.env }))
     delete w.dead
+  }
+  /** set-environment, as newWindow and respawnWindow run it first: null removes a variable. */
+  private setSessionEnv(session: string, changes: Record<string, string | null> = {}): void {
+    const s = this.sessions.get(session)!
+    const env = { ...s.env }
+    for (const [name, value] of Object.entries(changes)) {
+      if (value === null) delete env[name]
+      else env[name] = value
+    }
+    delete s.env
+    Object.assign(s, withEnv(env))
   }
   /** Sessions whose active pane is in copy mode (the user scrolled back). */
   inCopyMode = new Set<string>()
@@ -493,23 +549,60 @@ export class FakePromptFiles implements PromptFilesApi {
   }
 }
 
-/** Returns `byRoot[root]` for each root and `byGroup[name]` for each group (empty usage otherwise). */
-export class FakeUsage implements UsageApi {
-  projectsDir = '/home/me/.claude/projects'
+/**
+ * `login[dir]` for each folder (`notSignedIn` otherwise); `created` lists the folders made, in order. With
+ * `realpaths` set, a folder it lacks isn't there (realpath gives null); without, each folder is its own.
+ */
+export class FakeProfileFolders implements ProfileFoldersApi {
+  login: Record<string, ProfileLogin> = {}
+  created: string[] = []
+  realpaths: Record<string, string> | null = null
+  async realpath(dir: string): Promise<string | null> {
+    return this.realpaths ? (this.realpaths[dir] ?? null) : dir
+  }
+  async loginState(dir: string): Promise<ProfileLogin> {
+    return this.login[dir] ?? 'notSignedIn'
+  }
+  async create(dir: string): Promise<void> {
+    this.created.push(dir)
+  }
+}
+
+/**
+ * All the current profiles' usage (`profiles`, which makeDeps points at the settings) as `byRoot[root]` for each root
+ * and `byGroup[name]` for each group, and each profile's as that of `byProfile[id]`; empty usage otherwise. With a
+ * single profile, its usage is the total itself (as UsageService gives it).
+ */
+export class FakeUsage implements ProfileUsageApi {
   calls: { roots: string[]; groups: Record<string, string[]> }[] = []
   byRoot: Record<string, UsageSummary> = {}
   byGroup: Record<string, UsageSummary> = {}
+  byProfile: Record<string, { byRoot?: Record<string, UsageSummary>; byGroup?: Record<string, UsageSummary> }> = {}
+  profiles: () => readonly ClaudeProfile[] = () => []
   async summarize(
     roots: readonly string[],
     groups: Readonly<Record<string, readonly string[]>> = {},
-  ): Promise<UsageSummaries> {
+  ): Promise<{ usage: UsageSummaries; profiles: ProfileUsageSummaries[] }> {
     this.calls.push({
       roots: [...roots],
       groups: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, [...v]])),
     })
+    const summaries = (data: {
+      byRoot?: Record<string, UsageSummary>
+      byGroup?: Record<string, UsageSummary>
+    }): UsageSummaries => ({
+      roots: Object.fromEntries(roots.map((r) => [r, data.byRoot?.[r] ?? emptyUsageSummary()])),
+      groups: Object.fromEntries(Object.keys(groups).map((g) => [g, data.byGroup?.[g] ?? emptyUsageSummary()])),
+    })
+    const usage = summaries(this)
+    const profiles = this.profiles()
     return {
-      roots: Object.fromEntries(roots.map((r) => [r, this.byRoot[r] ?? emptyUsageSummary()])),
-      groups: Object.fromEntries(Object.keys(groups).map((g) => [g, this.byGroup[g] ?? emptyUsageSummary()])),
+      usage,
+      profiles: profiles.map((profile) => ({
+        profile,
+        folder: profile.configDir,
+        usage: profiles.length === 1 ? usage : summaries(this.byProfile[profile.id] ?? {}),
+      })),
     }
   }
 }
@@ -527,6 +620,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   launcher: FakeLauncher
   usage: FakeUsage
   promptFiles: FakePromptFiles
+  profileFolders: FakeProfileFolders
 } {
   const store = new MemoryStore()
   const git = new FakeGit()
@@ -539,6 +633,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
   const usage = new FakeUsage()
   const ui = new MemoryUiStore()
   const promptFiles = new FakePromptFiles()
+  const profileFolders = new FakeProfileFolders()
   const deps: OrchestratorDeps = {
     store,
     git,
@@ -553,7 +648,10 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     promptFiles,
     worktreesRoot: '/wt',
     pathExists: () => true,
+    defaultClaudeDir: '/home/me/.claude',
+    profileFolders,
     ...overrides,
   }
-  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles }
+  usage.profiles = () => allProfiles(settings.get(), deps.defaultClaudeDir)
+  return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles, profileFolders }
 }

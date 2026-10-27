@@ -1196,6 +1196,110 @@ button:disabled {
   align-items: center;
   gap: 10px;
 }
+/* Settings' Claude accounts: one card per account, name and login state over its folder, billing and buttons. */
+/* Over `.dialog ul` (a capped, scrolling monospace list): it grows with the dialog, which scrolls. */
+.dialog ul.account-list {
+  margin: 0;
+  padding: 0;
+  max-height: none;
+  overflow-y: visible;
+  font-family: inherit;
+}
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.account-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.account-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.account-name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.account-rename {
+  flex: 1;
+}
+.account-login {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.account-login.login-signedIn,
+.account-login.login-keyOrGateway {
+  color: var(--ok);
+}
+.account-login.login-notSignedIn {
+  color: var(--warn);
+}
+.account-login.login-folderMissing {
+  color: var(--error-text);
+}
+.account-folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.account-actions select,
+.account-add select {
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.account-add select {
+  flex: 1;
+  padding: 6px 8px;
+}
+.account-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 8px;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+.account-confirm p {
+  flex: 1 1 240px;
+  color: var(--text);
+}
+.account-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.account-buttons button {
+  border-color: var(--border);
+  font-size: 12px;
+}
 .settings-suffix {
   color: var(--muted);
   font-size: 12px;
@@ -3107,6 +3211,20 @@ kbd {
   font-weight: 500;
   vertical-align: middle;
 }
+.account-badge-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.account-pending {
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 500;
+}
+.task-title .account-restart {
+  font-size: 11px;
+  font-weight: 500;
+}
 .session-badge-warn {
   border-color: var(--warn);
   color: var(--warn);
@@ -3319,6 +3437,10 @@ kbd {
   color: var(--text-strong);
   background: var(--raised);
   box-shadow: 0 1px 2px var(--shadow-color);
+}
+.usage-filter {
+  display: flex;
+  margin-bottom: 12px;
 }
 .usage-body {
   flex: 1;
@@ -4056,6 +4178,12 @@ button.status-seg:focus-visible {
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 999px;
+}
+.composer-account {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .composer-repo:hover {
   background: var(--hover);

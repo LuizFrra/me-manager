@@ -167,6 +167,58 @@ describe('FileStore', () => {
     expect(items.map((i) => i.runCommand)).toEqual(['npm run dev', 'hugo server', undefined, undefined, undefined])
     expect(items.map((i) => 'runCommand' in i)).toEqual([true, true, false, false, false])
   })
+  it('round-trips the Claude profiles of themes and tasks, and drops one that is not text', async () => {
+    const task = {
+      id: 'k1',
+      name: 'fix',
+      slug: 'fix',
+      branch: 'b/fix',
+      worktreePath: '/wt/fix',
+      baseRef: 'origin/main',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      profileId: 'p-home',
+    }
+    const state = {
+      version: 1 as const,
+      themes: [
+        {
+          id: 't1',
+          name: 'X',
+          slug: 'x',
+          profileId: 'p-work',
+          items: [{ id: 'r1', kind: 'repo' as const, name: 'a', slug: 'a', path: '/a', tasks: [task] }],
+        },
+      ],
+    }
+    await new FileStore(file).save(state)
+    await expect(new FileStore(file).load()).resolves.toEqual(state)
+    // A hand edit: the theme and task load without it, in Default and in their theme's profile.
+    const [t] = state.themes
+    const edited = {
+      ...state,
+      themes: [
+        {
+          ...t,
+          profileId: 7,
+          items: [
+            {
+              ...t.items[0],
+              tasks: [
+                { ...task, profileId: null },
+                { ...task, id: 'k2', profileId: '' },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    await writeFile(file, JSON.stringify(edited), 'utf8')
+    const loaded = (await new FileStore(file).load()).themes[0]
+    expect(loaded).not.toHaveProperty('profileId')
+    const tasks = loaded.items[0].kind === 'repo' ? loaded.items[0].tasks : []
+    expect(tasks.map((k) => k.id)).toEqual(['k1', 'k2'])
+    expect(tasks.map((k) => 'profileId' in k)).toEqual([false, false])
+  })
   it('falls back to .bak when the main file is JSON but not a state the app saves (a hand edit)', async () => {
     const store = new FileStore(file)
     const first = addTheme(emptyState(), 'One')

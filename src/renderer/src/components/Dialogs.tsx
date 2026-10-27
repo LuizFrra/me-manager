@@ -7,6 +7,7 @@ import {
   type BranchList,
   type ChangeList,
   type NewTaskOptions,
+  type ProfileStatus,
   type TaskTemplate,
   type UnsavedWork,
   type UpdateStrategy,
@@ -16,6 +17,7 @@ import { cloneNameError, cloneNameFromUrl, cloneUrlError } from '../../../shared
 import { branchName, slugify } from '../../../shared/naming'
 import { MAX_RUN_COMMAND, runCommandError } from '../../../shared/runCommand'
 import { expandTaskName, templateBase } from '../../../shared/templates'
+import { DEFAULT_PROFILE_ID } from '../../../shared/profiles'
 import { archiveSkipReason, type BulkAction } from '../lib/bulk'
 import { STATUS_NAMES } from '../lib/files'
 import { plural } from '../lib/gitStatus'
@@ -25,6 +27,7 @@ import { isModEnter, MOD_ENTER_LABEL } from '../lib/shortcuts'
 import { useConfirmDiscard } from '../lib/useConfirmDiscard'
 import { useRestoreFocus } from '../lib/useRestoreFocus'
 import { MAX_REVIEW_NOTE } from '../lib/review'
+import { LOGIN_TEXT } from '../lib/profiles'
 import { newTaskNameError, type ExistingTask } from '../lib/names'
 
 /**
@@ -352,6 +355,49 @@ export function ArchiveTaskDialog(props: {
           </button>
           <button type="button" className="danger" onClick={() => void run()} disabled={busy}>
             {busy ? 'Archiving…' : 'Archive anyway (discards changes)'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Asked before Claude, running in one account (`from`), is ended and started again in its tab in the account its
+ * task or folder now has (`to`), continuing that account's last conversation here if it has one (each account keeps
+ * its own history). Cancel is focused; Esc cancels.
+ */
+export function RestartClaudeDialog(props: {
+  /** The task or folder. */
+  name: string
+  from: string
+  to: string
+  onConfirm: () => Promise<void>
+  onCancel: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  const { busy, run } = useSingleRun(props.onConfirm)
+  return (
+    <div className="overlay">
+      <div
+        className="dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Restart Claude in ${props.to}`}
+        onKeyDown={cancelOnEscape(props.onCancel, busy)}
+      >
+        <h2>Restart Claude in {props.to}?</h2>
+        <p>
+          Claude in {props.name} runs in {props.from}. Restarting ends it, stopping whatever it is doing, and starts
+          Claude in {props.to}: a new conversation, or {props.to}’s last one here if it has one. This conversation’s
+          history stays in {props.from}’s folder.
+        </p>
+        <div className="dialog-actions">
+          <button type="button" autoFocus onClick={props.onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Restarting…' : 'Restart Claude'}
           </button>
         </div>
       </div>
@@ -1567,6 +1613,105 @@ export function ChooseThemeDialog(props: {
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Chooses the Claude account (profile) of a theme or a task. For a task, `inherit` names the first choice, its
+ * theme's account (saved as null); for a theme, Default is saved as null. Enter saves, Esc cancels.
+ */
+export function ProfileDialog(props: {
+  title: string
+  /** Every profile, Default first (see listProfiles). */
+  profiles: readonly ProfileStatus[]
+  /** A task's first choice, "Use the theme's (Work)"; absent for a theme. */
+  inherit?: string
+  /** The profile id set now; null for none. */
+  initial: string | null
+  onSave: (profileId: string | null) => Promise<void>
+  onCancel: () => void
+  /** Closes the dialog for Settings, where accounts are added. */
+  onManage?: () => void
+}): React.JSX.Element {
+  useRestoreFocus()
+  // A theme's Default is no profile at all: the same, saved as none. An id no profile has (a hand edit) is
+  // shown as none too, which is what applies (the theme's, or Default), and saving that clears it. (Not while the
+  // profiles aren't known.)
+  const asChoice = (id: string | null): string | null =>
+    (props.inherit === undefined && id === DEFAULT_PROFILE_ID) ||
+    (props.profiles.length > 0 && !props.profiles.some((p) => p.id === id))
+      ? null
+      : id
+  const [choice, setChoice] = useState<string | null>(() => asChoice(props.initial))
+  const unchanged =
+    choice === props.initial || (choice === null && props.initial === DEFAULT_PROFILE_ID && props.inherit === undefined)
+  const save = useSingleRun(() => props.onSave(choice))
+  const noteId = useId()
+  const options: { value: string | null; label: string; hint?: string }[] = [
+    ...(props.inherit === undefined ? [] : [{ value: null, label: props.inherit }]),
+    ...props.profiles.map((p) => ({
+      value: asChoice(p.id),
+      label: p.name,
+      hint: `${p.configDir} · ${LOGIN_TEXT[p.login]}`,
+    })),
+  ]
+  const checkedIndex = Math.max(
+    0,
+    options.findIndex((o) => o.value === choice),
+  )
+  return (
+    <div className="overlay">
+      <form
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
+        aria-describedby={noteId}
+        onKeyDown={cancelOnEscape(props.onCancel, save.busy)}
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!unchanged) void save.run()
+        }}
+      >
+        <h2>{props.title}</h2>
+        <fieldset className="settings-choice profile-choices" aria-label="Claude account">
+          {options.map((o, i) => (
+            <label key={o.value ?? ''} className="settings-choice-option">
+              <input
+                type="radio"
+                name="profile"
+                autoFocus={i === checkedIndex}
+                checked={o.value === choice}
+                onChange={() => setChoice(o.value)}
+              />
+              <span>
+                {o.label}
+                {o.hint && <span className="settings-choice-hint"> {o.hint}</span>}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        <p id={noteId} className="dialog-note">
+          New Claude sessions start in this account; one already running keeps its account until Claude restarts.
+          {props.onManage && (
+            <>
+              {' '}
+              <button type="button" className="link-button" onClick={props.onManage}>
+                Manage accounts in Settings
+              </button>
+            </>
+          )}
+        </p>
+        <div className="dialog-actions">
+          <button type="button" onClick={props.onCancel} disabled={save.busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={save.busy || unchanged}>
+            {save.busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }

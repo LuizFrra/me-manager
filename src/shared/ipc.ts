@@ -30,6 +30,13 @@ export const INVOKE_METHODS = [
   'renameTask',
   'setTaskNotes',
   'setTaskBudget',
+  'setThemeProfile',
+  'setTaskProfile',
+  'listProfiles',
+  'addProfile',
+  'updateProfile',
+  'removeProfile',
+  'loginProfile',
   'checkTaskRemoval',
   'removeTask',
   'archiveTask',
@@ -69,7 +76,7 @@ export const INVOKE_METHODS = [
   'getUsage',
   'getUsageReport',
   'getBudgets',
-  'getUsageFolder',
+  'getUsageFolders',
 ] as const satisfies readonly (keyof MeManagerApi)[]
 
 export type InvokeMethod = (typeof INVOKE_METHODS)[number]

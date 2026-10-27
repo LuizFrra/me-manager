@@ -1,4 +1,4 @@
-import type { AppState } from '../../../shared/types'
+import type { AppState, Task } from '../../../shared/types'
 import { describe, expect, it } from 'vitest'
 import { createMockApi } from './mockApi'
 
@@ -215,6 +215,91 @@ describe('createMockApi', () => {
     const budgets = await api.getBudgets()
     expect(budgets.tasks[taskId]).toMatchObject({ level: 'over', limit: 0.01 })
     expect(budgets.daily).toMatchObject({ level: 'ok', limit: 100_000 })
+  })
+
+  it("sets and clears a theme's and a task's Claude profile like main", async () => {
+    const api = createMockApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const repo = (await api.createTask(themeId, repoId, 'fix')).themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    const taskOf = (s: AppState): Task | undefined => {
+      const r = s.themes[0].items[0]
+      return r.kind === 'repo' ? r.tasks[0] : undefined
+    }
+    await expect(api.setThemeProfile(themeId, 'nope')).rejects.toThrow('Claude account not found')
+    expect((await api.setThemeProfile(themeId, 'default')).themes[0].profileId).toBe('default')
+    expect((await api.setThemeProfile(themeId, null)).themes[0]).not.toHaveProperty('profileId')
+    await expect(api.setTaskProfile(themeId, repoId, taskId, 'nope')).rejects.toThrow('Claude account not found')
+    expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, 'default'))?.profileId).toBe('default')
+    expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, null))).not.toHaveProperty('profileId')
+  })
+
+  it('reports the account each Claude it started runs in, until Restart Claude replaces it', async () => {
+    const api = createMockApi()
+    const [, work] = await api.addProfile({ name: 'Work', configDir: '/w', billing: 'own' })
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/code/my-api')).themes[0].items[0].id
+    const repo = (await api.createTask(themeId, repoId, 'fix')).themes[0].items[0]
+    const taskId = repo.kind === 'repo' ? repo.tasks[0].id : ''
+    const target = { themeId, itemId: repoId, taskId }
+    expect((await api.getStatus()).claudeProfiles).toEqual({ [taskId]: 'default' })
+    await api.setThemeProfile(themeId, work.id)
+    await api.openTarget(target) // already running: it keeps its account
+    await api.restartClaude(target)
+    expect((await api.getStatus()).claudeProfiles).toEqual({ [taskId]: 'default' })
+    await api.restartClaude(target, { replace: true })
+    expect((await api.getStatus()).claudeProfiles).toEqual({ [taskId]: work.id })
+  })
+
+  it('adds, edits, removes and logs in to Claude profiles like main', async () => {
+    const api = createMockApi()
+    expect(await api.listProfiles()).toEqual([
+      {
+        id: 'default',
+        name: 'Default',
+        configDir: '/home/demo/.claude',
+        billing: 'own',
+        isDefault: true,
+        login: 'signedIn',
+      },
+    ])
+    let list = await api.addProfile({ name: ' Work ', configDir: '~/.claude-work', billing: 'company' })
+    expect(list[1]).toMatchObject({
+      name: 'Work',
+      configDir: '/home/demo/.claude-work',
+      billing: 'company',
+      isDefault: false,
+      login: 'notSignedIn',
+    })
+    const workId = list[1].id
+    await expect(api.addProfile({ name: 'work', configDir: '/x', billing: 'own' })).rejects.toThrow('named “Work”')
+    await expect(api.addProfile({ name: 'X', configDir: '/home/demo/.claude', billing: 'own' })).rejects.toThrow(
+      '“Default” already uses this folder',
+    )
+    list = await api.updateProfile(workId, { name: 'Company', billing: 'own' })
+    expect(list[1]).toMatchObject({ name: 'Company', billing: 'own', configDir: '/home/demo/.claude-work' })
+    expect((await api.updateProfile('default', { billing: 'company' }))[0].billing).toBe('company')
+    // Not through updateSettings, like main.
+    await api.updateSettings({ profiles: [], defaultProfileBilling: 'own' })
+    expect((await api.listProfiles()).map((p) => [p.name, p.billing])).toEqual([
+      ['Default', 'company'],
+      ['Company', 'own'],
+    ])
+    await expect(api.updateProfile('default', { name: 'Mine' })).rejects.toThrow("Default can't be renamed")
+
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    await api.setThemeProfile(themeId, workId)
+    await expect(api.removeProfile(workId)).rejects.toThrow('Used by Client X')
+    await expect(api.removeProfile('default')).rejects.toThrow("Default can't be removed")
+    const target = { themeId, itemId: (await api.addFolder(themeId, '/docs')).themes[0].items[0].id }
+    expect((await api.loginProfile(workId, target)).map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['login', true],
+    ])
+    await api.setThemeProfile(themeId, null)
+    expect((await api.removeProfile(workId)).map((p) => p.id)).toEqual(['default'])
+    await expect(api.loginProfile(workId, target)).rejects.toThrow('Claude account not found')
   })
 
   it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {

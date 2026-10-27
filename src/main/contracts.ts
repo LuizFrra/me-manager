@@ -2,10 +2,13 @@ import type { UiStateStoreApi } from './store/uiState'
 import type {
   AppState,
   ChangeList,
+  ClaudeProfile,
   CommitResult,
   FileContent,
   FileList,
   MeManagerApi,
+  ProfileBilling,
+  ProfileLogin,
   PullRequestResult,
   SearchOptions,
   SearchResult,
@@ -104,8 +107,18 @@ export interface TmuxApi {
   hasSession(name: string): Promise<boolean>
   /** Session names on our socket; [] when the tmux server is not running. */
   listSessions(): Promise<string[]>
-  /** Detached session whose first window runs `command` (a shell string). */
-  newSession(name: string, cwd: string, windowName: string, command: string): Promise<void>
+  /**
+   * Detached session whose first window runs `command` (a shell string). `env` is the session's environment (tmux
+   * `-e`): its windows' processes get it. Names must be shell variable names (A-Z, 0-9, _); values are passed as
+   * they are, but can't end in `;`.
+   */
+  newSession(
+    name: string,
+    cwd: string,
+    windowName: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void>
   /** No-op if the session does not exist. */
   killSession(name: string): Promise<void>
   /** The session's windows; `dead` is set for one whose active pane has exited (see NewWindowOptions). */
@@ -121,9 +134,15 @@ export interface TmuxApi {
   /**
    * Restarts the window named `windowName` (exactly) with `command` in `cwd` (`respawn-window -k`): a command
    * still running is killed and the screen cleared (what scrolled off it stays in the scrollback), and the window's
-   * options (remain-on-exit) are kept.
+   * options (remain-on-exit) are kept. `env` as NewWindowOptions.env.
    */
-  respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void>
+  respawnWindow(
+    session: string,
+    windowName: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string | null>,
+  ): Promise<void>
   /** Presses Ctrl-C in the window named `windowName` (exactly), after leaving copy mode if it is in it. */
   sendInterrupt(session: string, windowName: string): Promise<void>
   /** Leaves copy mode (or another mode) in the session's active pane, if it is in one. */
@@ -174,6 +193,17 @@ export interface NewWindowOptions {
    * TabInfo is then `dead` until respawnWindow runs a command in it again.
    */
   remainOnExit?: boolean
+  /**
+   * Variables to set on the session's environment (null: remove, so the server's own value applies) in the same tmux
+   * call, just before the window starts: it and every window started after it get them, while processes already
+   * running keep theirs. Same rules as TmuxApi.newSession's `env`.
+   */
+  env?: Record<string, string | null>
+  /**
+   * Variables for this window's process only (tmux `new-window -e`), over the session's, which stay as they are.
+   * They can only be set, not removed. Same rules as TmuxApi.newSession's `env`.
+   */
+  windowEnv?: Record<string, string>
 }
 
 /** A window as listWindowActivity reports it: a tab, with what getDevUrls needs too. */
@@ -237,6 +267,16 @@ export interface FilesApi {
   fileDiff(worktree: string, baseRef: string, relPath: string, oldPath?: string): Promise<string>
 }
 
+/** Claude profile folders (see shared/profiles.ts): only what is there is looked at, never a file's contents. */
+export interface ProfileFoldersApi {
+  /** See ProfileLogin. Never rejects: what can't be read counts as not there. */
+  loginState(dir: string): Promise<ProfileLogin>
+  /** The folder with every link resolved (realpath), or null when it isn't there. */
+  realpath(dir: string): Promise<string | null>
+  /** `mkdir -p`, private to the user; nothing is put in it. Resolves when it is there already. */
+  create(dir: string): Promise<void>
+}
+
 export interface SettingsApi {
   /** The current settings (loaded at startup). */
   get(): Settings
@@ -258,9 +298,24 @@ export interface UsageSummaries {
   groups: Record<string, UsageSummary>
 }
 
-/** Claude Code usage from its transcripts. Read-only: never writes to the Claude config folder. */
+/** A Claude config folder to read usage from, and who pays for what is used through it. */
+export interface UsageFolderSpec {
+  /** Transcripts are read from its `projects`. */
+  dir: string
+  billing: ProfileBilling
+}
+
+/** Usage of several Claude folders (see UsageApi.summarizeFolders). */
+export interface FolderUsageSummaries {
+  /** Every folder's together: tokens of all, cost of own-billed ones only (see UsageTotals.companyTokens). */
+  all: UsageSummaries
+  /** Each folder's alone, by UsageFolderSpec.dir: the messages whose counting copy is in it. */
+  folders: Record<string, UsageSummaries>
+}
+
+/** Claude Code usage from its transcripts. Read-only: never writes to a Claude config folder. */
 export interface UsageApi {
-  /** The folder the transcripts are read from (`<Claude config folder>/projects`). */
+  /** The folder summarize reads the transcripts from (`<Claude config folder>/projects`). */
   readonly projectsDir: string
   /**
    * Usage per root (a task worktree or folder path) and per named group of roots. A message counts for the most
@@ -268,6 +323,34 @@ export interface UsageApi {
    * known root so a task inside a folder isn't also counted for the folder.
    */
   summarize(roots: readonly string[], groups?: Readonly<Record<string, readonly string[]>>): Promise<UsageSummaries>
+  /**
+   * summarize over several Claude folders, each message once whichever folders have a copy of it (a folder copied
+   * from another has them all): the earliest copy counts, an own-billed folder's before a company-billed one's when
+   * they are equally early.
+   */
+  summarizeFolders(
+    folders: readonly UsageFolderSpec[],
+    roots: readonly string[],
+    groups?: Readonly<Record<string, readonly string[]>>,
+  ): Promise<FolderUsageSummaries>
+}
+
+/** One Claude profile's usage (see ProfileUsageApi). */
+export interface ProfileUsageSummaries {
+  profile: ClaudeProfile
+  /** The folder read for it (UsageFolderSpec.dir): profiles on one folder (a link) share it, and these summaries. */
+  folder: string
+  /** FolderUsageSummaries.folders' entry: billed as its folder is. */
+  usage: UsageSummaries
+}
+
+/** Claude Code usage of every Claude profile. Read-only, as UsageApi. */
+export interface ProfileUsageApi {
+  /** UsageApi.summarizeFolders over the current profiles' folders: all of them together, and each profile's. */
+  summarize(
+    roots: readonly string[],
+    groups?: Readonly<Record<string, readonly string[]>>,
+  ): Promise<{ usage: UsageSummaries; profiles: ProfileUsageSummaries[] }>
 }
 
 /** A tab's transcript and the file name saveTranscript suggests for it. */
@@ -310,8 +393,16 @@ export interface OrchestratorDeps {
   /** ui-state.json (see MeManagerApi.getUiState). */
   ui: UiStateStoreApi
   launcher: LauncherApi
-  usage: UsageApi
+  usage: ProfileUsageApi
   promptFiles: PromptFilesApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
+  /** The Default Claude profile's folder: $CLAUDE_CONFIG_DIR or ~/.claude (see shared/profiles.ts). */
+  defaultClaudeDir: string
+  /**
+   * $CLAUDE_CONFIG_DIR as the app was started with it, absent when it had none: the tmux server got it too, so
+   * it is what Default's sessions run with (see Orchestrator.loginProfile).
+   */
+  inheritedClaudeDir?: string
+  profileFolders: ProfileFoldersApi
 }

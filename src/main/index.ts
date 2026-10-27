@@ -11,6 +11,7 @@ import { GhService } from './git/gh'
 import { GitService } from './git/gitService'
 import { BUDGET_ALERT } from '../shared/ipc'
 import { APPEARANCE_BACKGROUND } from '../shared/appearance'
+import { allProfiles } from '../shared/profiles'
 import { registerIpc } from './ipc'
 import { createLauncher, systemLaunchDeps } from './launch'
 import { createDesktopNotifier } from './notify/desktop'
@@ -28,6 +29,7 @@ import {
   usageCacheFile,
   worktreesRoot,
 } from './paths'
+import { ProfileFolders } from './profileFolders'
 import { PromptFiles } from './promptFiles'
 import { PtyService } from './pty/ptyService'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
@@ -36,7 +38,8 @@ import { BudgetAlertStore } from './store/budgetAlerts'
 import { SettingsService, SettingsStore } from './store/settings'
 import { UiStateStore } from './store/uiState'
 import { TmuxService } from './tmux/tmuxService'
-import { UsageService } from './usage/usageService'
+import { ProfileUsage } from './usage/profileUsage'
+import { claudeConfigDir, UsageService } from './usage/usageService'
 import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
@@ -136,7 +139,7 @@ async function bootstrap(): Promise<void> {
   const promptFiles = new PromptFiles(promptsDir())
   await promptFiles.sweep()
   ptyService = new PtyService(nodePty.spawn)
-  const settings = new SettingsService(new SettingsStore(settingsFile()))
+  const settings = new SettingsService(new SettingsStore(settingsFile(), claudeConfigDir()))
   await settings.init()
   // Before the window exists, so its first frame and the page's prefers-color-scheme already match the setting.
   windowBackground = followAppearance({ theme: nativeTheme, settings, getWindow: () => mainWindow })
@@ -150,10 +153,17 @@ async function bootstrap(): Promise<void> {
     settings,
     ui: new UiStateStore(uiStateFile()),
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
-    usage: (usageService = new UsageService({ cacheFile: usageCacheFile() })), // reads $CLAUDE_CONFIG_DIR or ~/.claude, never writes there
+    // Reads each Claude profile's folder ($CLAUDE_CONFIG_DIR or ~/.claude for Default), never writes there.
+    usage: new ProfileUsage({
+      profiles: () => allProfiles(settings.get(), claudeConfigDir()),
+      usage: (usageService = new UsageService({ cacheFile: usageCacheFile() })),
+    }),
     promptFiles,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
+    defaultClaudeDir: claudeConfigDir(),
+    inheritedClaudeDir: process.env.CLAUDE_CONFIG_DIR || undefined,
+    profileFolders: new ProfileFolders(),
   })
   await orchestrator.init()
   started = orchestrator

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { checkCloneName, checkCloneUrl } from '../../shared/clone'
 import {
   isArchived,
@@ -7,6 +7,7 @@ import {
   MAX_COMMIT_MESSAGE,
   MAX_TASK_PROMPT,
   MAX_TRANSCRIPT_BYTES,
+  PROFILE_BILLINGS,
 } from '../../shared/types'
 import type {
   AppState,
@@ -17,13 +18,19 @@ import type {
   ChangeList,
   ChangeScope,
   ClaudeActivity,
+  ClaudeProfile,
   CommitResult,
   GitTools,
   FileContent,
   Item,
   FileList,
   LiveStatus,
+  NewProfile,
   NewTaskOptions,
+  ProfileBilling,
+  ProfilePatch,
+  ProfileStatus,
+  RestartClaudeOptions,
   PullRequestResult,
   PushResult,
   RemoveTaskResult,
@@ -43,11 +50,20 @@ import type {
   UpdateResult,
   UiState,
   UpdateStrategy,
+  UsageFolder,
   UsageReport,
   UsageSummary,
   UsageTargetReport,
 } from '../../shared/types'
 import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
+import {
+  allProfiles,
+  DEFAULT_PROFILE_ID,
+  effectiveProfileId,
+  MAX_PROFILES,
+  normalizeConfigDir,
+  profileError,
+} from '../../shared/profiles'
 import { builtInClaudeFlags, effectiveClaudeFlags } from '../../shared/settings'
 import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
@@ -58,7 +74,7 @@ import { findDevUrls, MAX_DEV_URLS } from '../../shared/devUrls'
 import { mapLimit } from '../concurrency'
 import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries, WindowActivity } from '../contracts'
 import { baseBranchName } from '../git/gh'
-import { taskWorktreePath } from '../paths'
+import { expandHome, taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
 import * as m from '../store/mutations'
 import { isRecentlyActive, looksWaiting } from '../tmux/activity'
@@ -91,9 +107,18 @@ export const claudePromptCommand = (args: readonly string[], promptFile: string 
 export const claudeContinueCommand = (args: readonly string[] = [], promptFile?: string): string =>
   `${claudePromptCommand([...args, '--continue'], promptFile)} || ${claudePromptCommand(args, promptFile)}`
 
+/**
+ * The command of a login tab (see loginProfile): `claude` without any argument, the user's or built-in. With
+ * `unsetConfigDir`, `env -u CLAUDE_CONFIG_DIR` runs it, so that it gets no CLAUDE_CONFIG_DIR at all, not even the
+ * session's: a window's own environment can set a variable, not remove one.
+ */
+export const claudeLoginCommand = (unsetConfigDir: boolean): string =>
+  unsetConfigDir ? ['env', '-u', 'CLAUDE_CONFIG_DIR', 'claude'].map(shellQuote).join(' ') : claudeCommand()
+
 export const CLAUDE_CMD = claudeCommand()
 export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
 const CLAUDE_WINDOW = 'claude'
+const LOGIN_WINDOW = 'login'
 /** How long createTask waits for `git fetch` before branching from the last fetched refs. */
 export const FETCH_TIMEOUT_MS = 20_000
 
@@ -232,6 +257,22 @@ function assertNotArchived(task: Task): void {
   if (isArchived(task)) throw new Error(`"${task.name}" is archived: restore it first`)
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * A new profile's folder as typed: trimmed, `~/` expanded, and when that is absolute, `.` and `..` resolved (so
+ * that profileError compares it as it is); anything else as it is, for profileError to refuse.
+ */
+function resolveFolder(dir: string): string {
+  const expanded = expandHome(dir.trim())
+  return isAbsolute(expanded) ? resolvePath(expanded) : expanded
+}
+
+/** A ProfileBilling from the renderer, or a refusal. */
+function checkBilling(billing: unknown): asserts billing is ProfileBilling {
+  if (!PROFILE_BILLINGS.includes(billing as ProfileBilling)) throw new Error('Choose who pays for this account')
+}
+
 const STATE_QUEUE = 'state'
 const taskQueue = (taskId: string): string => `task:${taskId}`
 /** Run, Restart and Stop on one session go one at a time, so two clicks never open two run tabs. */
@@ -295,6 +336,14 @@ export class Orchestrator implements AppService {
    * queues, and quitting cancels them rather than wait (see cancelClones). Keyed by a tail that always resolves.
    */
   private readonly clones = new Map<Promise<void>, AbortController>()
+  /**
+   * The Claude profile (id) each session's `claude` window was last started in by this run, by session name, with
+   * the claudeStarts count when it was recorded: set wherever a Claude window starts (see recordClaude), and
+   * reported by getStatus (LiveStatus.claudeProfiles) while that window runs.
+   */
+  private readonly claudeProfiles = new Map<string, { profileId: string; seq: number }>()
+  /** Counts the Claude windows recorded in claudeProfiles, so getStatus can tell those started after it read tmux. */
+  private claudeStarts = 0
 
   constructor(
     private readonly deps: OrchestratorDeps,
@@ -437,6 +486,59 @@ export class Orchestrator implements AppService {
   }
 
   /**
+   * The Claude profile the target's sessions start in: the task's, else its theme's, else Default (see
+   * effectiveProfileId; an id no profile has gives Default). Read at each start, like claudeArgs. For a repo
+   * without `taskId` (a task about to be created), its theme's.
+   */
+  private profileFor(target: Target): ClaudeProfile {
+    const theme = m.getTheme(this.state, target.themeId)
+    const task = target.taskId ? m.getTask(this.state, target.themeId, target.itemId, target.taskId) : undefined
+    const profiles = this.profiles()
+    const { id } = effectiveProfileId(profiles, theme, task)
+    return profiles.find((p) => p.id === id)!
+  }
+
+  /**
+   * The environment for a new session or window of the target (see profileFor): CLAUDE_CONFIG_DIR for a profile
+   * the user added, nothing for Default. Default's folder is never set, not even as it is: without the variable,
+   * Claude Code keeps its login in ~/.claude.json and the default macOS Keychain item, and with it set, even to
+   * ~/.claude, it looks elsewhere and the user would appear logged out. Throws when the profile's folder is gone,
+   * rather than starting Claude in another account.
+   */
+  private sessionEnv(target: Target, profile = this.profileFor(target)): Record<string, string> {
+    return profile.id === DEFAULT_PROFILE_ID ? {} : { CLAUDE_CONFIG_DIR: this.profileFolder(profile) }
+  }
+
+  /** The folder of a profile the user added, refusing one that is gone. */
+  private profileFolder(profile: ClaudeProfile): string {
+    if (!this.deps.pathExists(profile.configDir)) {
+      throw new Error(`Claude account “${profile.name}”: folder not found (${profile.configDir})`)
+    }
+    return profile.configDir
+  }
+
+  /**
+   * sessionEnv for a window opened or respawned in the target's running session (NewWindowOptions.env): set on the
+   * session, or removed from it for Default, in the same tmux call. Every window gets the session's environment,
+   * which tmux set when the session started, and a window's own -e can't remove a variable: without this, a
+   * session started in a profile would keep it in new tabs after a switch to Default.
+   */
+  private windowEnv(target: Target, profile = this.profileFor(target)): Record<string, string | null> {
+    return { CLAUDE_CONFIG_DIR: this.sessionEnv(target, profile).CLAUDE_CONFIG_DIR ?? null }
+  }
+
+  /**
+   * windowEnv for a shell or run tab, which doesn't start Claude: with the profile's folder gone, the tab opens
+   * without CLAUDE_CONFIG_DIR (removed from the session) instead of being refused. Claude's windows and the login
+   * tab still refuse, never starting in another account.
+   */
+  private shellWindowEnv(target: Target): Record<string, string | null> {
+    const profile = this.profileFor(target)
+    const gone = profile.id !== DEFAULT_PROFILE_ID && !this.deps.pathExists(profile.configDir)
+    return gone ? { CLAUDE_CONFIG_DIR: null } : this.windowEnv(target, profile)
+  }
+
+  /**
    * Runs `start` (a tmux call starting `claude`) with `prompt` in a private file (see claudePromptCommand), or
    * without a file when there is no prompt. The file is removed once the command had time to read it, or right
    * away when `start` fails.
@@ -490,10 +592,15 @@ export class Orchestrator implements AppService {
 
   /**
    * Settings have their own file and queue, so this doesn't wait for state mutations. A patch's `effective` (the
-   * renderer may send back what it got) is dropped by normalizeSettings like any unknown key.
+   * renderer may send back what it got) is dropped by normalizeSettings like any unknown key. So are `profiles` and
+   * `defaultProfileBilling`, which change only through addProfile, updateProfile and removeProfile (checked there,
+   * in the state queue): a patch sent back with what getSettings had would otherwise undo a change made since.
    */
   async updateSettings(patch: Partial<Settings>): Promise<SettingsView> {
-    return withEffective(await this.deps.settings.update(patch))
+    const rest: Record<string, unknown> = isRecord(patch) ? { ...patch } : {}
+    delete rest.profiles
+    delete rest.defaultProfileBilling
+    return withEffective(await this.deps.settings.update(rest))
   }
 
   /** What getStatus last returned, to whoever asked, and when (ms): the notification watcher reuses a recent one. */
@@ -505,9 +612,20 @@ export class Orchestrator implements AppService {
    * their worktree is gone on purpose, and they have no session.
    */
   async getStatus(): Promise<LiveStatus> {
-    const { sessions: sessionList, activity: activityBySession } = await this.deps.tmux
-      .sessionActivity(CLAUDE_WINDOW)
-      .catch(async () => ({ sessions: await this.deps.tmux.listSessions().catch(() => []), activity: {} }))
+    // Claude windows recorded from here on started after tmux was read: its answer can't tell whether they run.
+    const startsBefore = this.claudeStarts
+    const {
+      sessions: sessionList,
+      activity: activityBySession,
+      answered,
+    } = await this.deps.tmux.sessionActivity(CLAUDE_WINDOW).then(
+      (read) => ({ ...read, answered: true }),
+      async () => {
+        const list = await this.deps.tmux.listSessions().catch(() => null)
+        return { sessions: list ?? [], activity: {}, answered: list !== null }
+      },
+    )
+    if (answered) this.forgetClaudes(new Set(sessionList), startsBefore)
     const sessions = new Set(sessionList)
     const running: string[] = []
     const missing: string[] = []
@@ -531,9 +649,45 @@ export class Orchestrator implements AppService {
         }
       }
     }
-    const status = { running, missing, activity: await this.claudeActivity(live, activityBySession) }
+    const status: LiveStatus = {
+      running,
+      missing,
+      activity: await this.claudeActivity(live, activityBySession),
+      claudeProfiles: this.runningClaudeProfiles(live, activityBySession),
+    }
     this.lastStatus = { at: this.now(), status }
     return status
+  }
+
+  /** Records that the session's `claude` window was just started in the profile (see claudeProfiles). */
+  private recordClaude(session: string, profileId: string): void {
+    this.claudeProfiles.set(session, { profileId, seq: ++this.claudeStarts })
+  }
+
+  /**
+   * Forgets the Claude windows of sessions gone: those not in `sessions`, as tmux listed them, recorded before it
+   * was read (`startsBefore`). One recorded since may have started after the list was made.
+   */
+  private forgetClaudes(sessions: ReadonlySet<string>, startsBefore: number): void {
+    for (const [session, { seq }] of this.claudeProfiles) {
+      if (seq <= startsBefore && !sessions.has(session)) this.claudeProfiles.delete(session)
+    }
+  }
+
+  /**
+   * LiveStatus.claudeProfiles: the profile of each running session's `claude` window this run started, while the
+   * window is there (it has an activity time).
+   */
+  private runningClaudeProfiles(
+    live: { id: string; session: string }[],
+    activityBySession: Record<string, number>,
+  ): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const { id, session } of live) {
+      const recorded = this.claudeProfiles.get(session)
+      if (recorded && activityBySession[session] !== undefined) out[id] = recorded.profileId
+    }
+    return out
   }
 
   /** Busy from recent output; otherwise waiting or idle from the screen (see tmux/activity.ts). */
@@ -619,9 +773,21 @@ export class Orchestrator implements AppService {
     })
   }
 
-  /** The theme comes from the renderer: restoreTheme checks it. */
+  /**
+   * The theme comes from the renderer: restoreTheme checks it. Its Claude profile is dropped when no profile has it
+   * any more (removed while the theme was gone), rather than kept to fall back to Default unseen.
+   */
   async restoreTheme(theme: Theme, index?: number): Promise<AppState> {
-    return this.exclusive(async () => this.commit(m.restoreTheme(this.state, theme, index)))
+    return this.exclusive(async () => {
+      const next = m.restoreTheme(this.state, theme, index)
+      const restored = next.themes.find((t) => t.id === theme.id)
+      const known = (id: string): boolean => this.profiles().some((p) => p.id === id)
+      return this.commit(
+        restored?.profileId !== undefined && !known(restored.profileId)
+          ? m.setThemeProfile(next, restored.id, null)
+          : next,
+      )
+    })
   }
 
   async moveTheme(themeId: string, toIndex: number): Promise<AppState> {
@@ -785,6 +951,8 @@ export class Orchestrator implements AppService {
       const branch = branchName(theme.slug, slug)
       const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
       const session = sessionName(theme.slug, repo.slug, slug)
+      const profile = this.profileFor({ themeId, itemId: repoId })
+      const env = this.sessionEnv({ themeId, itemId: repoId }, profile) // before any git work it would have to undo
 
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
@@ -794,8 +962,9 @@ export class Orchestrator implements AppService {
         if (await tmux.hasSession(session)) await tmux.killSession(session)
         const args = this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)
         await this.withPromptFile(prompt, (file) =>
-          tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file)),
+          tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file), env),
         )
+        this.recordClaude(session, profile.id)
         const task: Task = {
           id: randomUUID(),
           name: name.trim(),
@@ -831,6 +1000,142 @@ export class Orchestrator implements AppService {
 
   async setTaskBudget(themeId: string, repoId: string, taskId: string, budgetUsd: number | null): Promise<AppState> {
     return this.exclusive(async () => this.commit(m.setTaskBudget(this.state, themeId, repoId, taskId, budgetUsd)))
+  }
+
+  /** In the state queue, as removeProfile is: a profile can't be removed between the check and the save. */
+  async setThemeProfile(themeId: string, profileId: string | null): Promise<AppState> {
+    return this.exclusive(async () => {
+      const next = m.setThemeProfile(this.state, themeId, profileId)
+      this.assertProfile(profileId)
+      return this.commit(next)
+    })
+  }
+
+  async setTaskProfile(themeId: string, repoId: string, taskId: string, profileId: string | null): Promise<AppState> {
+    return this.exclusive(async () => {
+      const next = m.setTaskProfile(this.state, themeId, repoId, taskId, profileId)
+      this.assertProfile(profileId)
+      return this.commit(next)
+    })
+  }
+
+  /** Refuses an id no profile has (null, for none, is fine). */
+  private assertProfile(profileId: string | null): void {
+    if (profileId !== null) this.getProfile(profileId)
+  }
+
+  private profiles(): ClaudeProfile[] {
+    return allProfiles(this.deps.settings.get(), this.deps.defaultClaudeDir)
+  }
+
+  private getProfile(id: string): ClaudeProfile {
+    const profile = this.profiles().find((p) => p.id === id)
+    if (!profile) throw new Error('Claude account not found')
+    return profile
+  }
+
+  async listProfiles(): Promise<ProfileStatus[]> {
+    return Promise.all(
+      this.profiles().map(async (p) => ({
+        ...p,
+        isDefault: p.id === DEFAULT_PROFILE_ID,
+        login: await this.deps.profileFolders.loginState(p.configDir),
+      })),
+    )
+  }
+
+  /**
+   * Profiles change in the state queue, so that removeProfile's check that nothing uses one and setThemeProfile's
+   * and setTaskProfile's that it exists see each other's changes.
+   */
+  async addProfile(input: NewProfile): Promise<ProfileStatus[]> {
+    await this.exclusive(async () => {
+      const raw: Partial<Record<keyof NewProfile, unknown>> = isRecord(input) ? input : {}
+      const name = typeof raw.name === 'string' ? raw.name : ''
+      const configDir = typeof raw.configDir === 'string' ? resolveFolder(raw.configDir) : ''
+      const error = profileError({ name, configDir }, this.profiles()) ?? (await this.sameFolderError(configDir))
+      if (error) throw new Error(error)
+      checkBilling(raw.billing)
+      const { profiles } = this.deps.settings.get()
+      if (profiles.length >= MAX_PROFILES) throw new Error(`At most ${MAX_PROFILES} Claude accounts`)
+      const profile: ClaudeProfile = {
+        id: randomUUID(),
+        name: name.trim(),
+        configDir: normalizeConfigDir(configDir),
+        billing: raw.billing,
+      }
+      await this.deps.profileFolders.create(profile.configDir)
+      // A failed save leaves the folder just made behind, empty: harmless, and adding the profile again reuses it.
+      await this.deps.settings.update({ profiles: [...profiles, profile] })
+    })
+    return this.listProfiles()
+  }
+
+  /**
+   * Why `dir`, when it is there, is refused as another profile's folder reached another way (a link): profileError
+   * compares the paths only.
+   */
+  private async sameFolderError(dir: string): Promise<string | null> {
+    const { profileFolders } = this.deps
+    const real = await profileFolders.realpath(dir)
+    if (real === null) return null
+    for (const other of this.profiles()) {
+      if ((await profileFolders.realpath(other.configDir)) === real) return `“${other.name}” already uses this folder`
+    }
+    return null
+  }
+
+  async updateProfile(id: string, patch: ProfilePatch): Promise<ProfileStatus[]> {
+    await this.exclusive(async () => {
+      const raw: Partial<Record<keyof ProfilePatch, unknown>> = isRecord(patch) ? patch : {}
+      const { billing } = raw
+      if (billing !== undefined) checkBilling(billing)
+      const profile = this.getProfile(id)
+      if (id === DEFAULT_PROFILE_ID) {
+        if (raw.name !== undefined) throw new Error("Default can't be renamed")
+        if (billing !== undefined) await this.deps.settings.update({ defaultProfileBilling: billing })
+        return
+      }
+      const name = raw.name === undefined ? profile.name : typeof raw.name === 'string' ? raw.name.trim() : ''
+      // Checked only when it changes, so a billing change goes through whatever a hand edit did to the names.
+      if (raw.name !== undefined) {
+        const error = profileError(
+          { name, configDir: profile.configDir },
+          this.profiles().filter((p) => p.id !== id),
+        )
+        if (error) throw new Error(error)
+      }
+      const next = { ...profile, name, billing: billing ?? profile.billing }
+      const profiles = this.deps.settings.get().profiles.map((p) => (p.id === id ? next : p))
+      await this.deps.settings.update({ profiles })
+    })
+    return this.listProfiles()
+  }
+
+  async removeProfile(id: string): Promise<ProfileStatus[]> {
+    await this.exclusive(async () => {
+      this.getProfile(id)
+      if (id === DEFAULT_PROFILE_ID) throw new Error("Default can't be removed")
+      const users = this.profileUsers(id)
+      if (users.length > 0) throw new Error(`Used by ${users.slice(0, 3).join(', ')}${users.length > 3 ? ', …' : ''}`)
+      const profiles = this.deps.settings.get().profiles.filter((p) => p.id !== id)
+      await this.deps.settings.update({ profiles })
+    })
+    return this.listProfiles()
+  }
+
+  /** The themes (`Theme`) and tasks, archived ones too (`Theme › Repo › Task`), set to the profile `id`. */
+  private profileUsers(id: string): string[] {
+    const users: string[] = []
+    for (const theme of this.state.themes) {
+      if (theme.profileId === id) users.push(theme.name)
+      for (const item of theme.items) {
+        if (item.kind !== 'repo') continue
+        for (const task of item.tasks)
+          if (task.profileId === id) users.push(`${theme.name} › ${item.name} › ${task.name}`)
+      }
+    }
+    return users
   }
 
   async checkTaskRemoval(themeId: string, repoId: string, taskId: string): Promise<UnsavedWork> {
@@ -949,8 +1254,12 @@ export class Orchestrator implements AppService {
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     let started = false
     if (!(await this.deps.tmux.hasSession(session))) {
+      const profile = this.profileFor(target)
+      const env = this.sessionEnv(target, profile)
       try {
-        await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+        const command = claudeContinueCommand(this.claudeArgs(label))
+        await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, command, env)
+        this.recordClaude(session, profile.id)
         started = true
       } catch (err) {
         // Another open of the same target (a double click) started it meanwhile, and tmux refused this one.
@@ -1003,7 +1312,28 @@ export class Orchestrator implements AppService {
     const names = new Set((await this.deps.tmux.listWindows(session)).map((t) => t.name))
     let name = 'shell'
     for (let n = 2; names.has(name); n++) name = `shell ${n}`
-    await this.deps.tmux.newWindow(session, cwd, name)
+    await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: this.shellWindowEnv(target) })
+    return this.deps.tmux.listWindows(session)
+  }
+
+  /**
+   * The login tab's command and its own environment, which leaves the session's alone (it is the target's
+   * profile's): CLAUDE_CONFIG_DIR for a profile the user added; for Default, what Default's sessions get, which is
+   * the variable as the app was started with it (the tmux server has it too), else none (see sessionEnv).
+   */
+  private loginWindow(profile: ClaudeProfile): { command: string; windowEnv: Record<string, string> } {
+    const dir = profile.id === DEFAULT_PROFILE_ID ? this.deps.inheritedClaudeDir : this.profileFolder(profile)
+    if (dir === undefined) return { command: claudeLoginCommand(true), windowEnv: {} }
+    return { command: claudeLoginCommand(false), windowEnv: { CLAUDE_CONFIG_DIR: dir } }
+  }
+
+  async loginProfile(profileId: string, target: Target): Promise<TabInfo[]> {
+    const { session, cwd } = this.resolveOpenable(target)
+    if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
+    const { command, windowEnv } = this.loginWindow(this.getProfile(profileId))
+    if (!(await this.deps.tmux.hasSession(session))) await this.openTarget(target)
+    this.resolveOpenable(target) // archived or removed meanwhile, or on its way
+    await this.deps.tmux.newWindow(session, cwd, LOGIN_WINDOW, command, { windowEnv })
     return this.deps.tmux.listWindows(session)
   }
 
@@ -1020,12 +1350,26 @@ export class Orchestrator implements AppService {
     return this.deps.tmux.listWindows(session).catch(() => [])
   }
 
-  async restartClaude(target: Target): Promise<TabInfo[]> {
+  /**
+   * With `replace`, a running Claude is ended and started again in its window (`respawn-window -k`), so that it
+   * runs in the target's current profile: the user asked for it, after changing the profile.
+   */
+  async restartClaude(target: Target, options?: RestartClaudeOptions): Promise<TabInfo[]> {
+    const replace = isRecord(options) && options.replace === true // from the renderer: anything else is no
     const { session, cwd, label } = this.resolveOpenable(target)
     if (!(await this.deps.tmux.hasSession(session))) return this.openTarget(target)
     const existing = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
-    if (existing) await this.deps.tmux.selectWindow(session, existing.index)
-    else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+    if (existing && !replace) await this.deps.tmux.selectWindow(session, existing.index)
+    else {
+      const profile = this.profileFor(target)
+      const command = claudeContinueCommand(this.claudeArgs(label))
+      const env = this.windowEnv(target, profile)
+      if (existing) {
+        await this.deps.tmux.respawnWindow(session, CLAUDE_WINDOW, cwd, command, env)
+        await this.deps.tmux.selectWindow(session, existing.index)
+      } else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, command, { env })
+      this.recordClaude(session, profile.id)
+    }
     return this.deps.tmux.listWindows(session)
   }
 
@@ -1063,8 +1407,13 @@ export class Orchestrator implements AppService {
     )
   }
 
-  private newRunWindow(session: string, cwd: string, command: string): Promise<void> {
-    return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true })
+  private newRunWindow(
+    session: string,
+    cwd: string,
+    command: string,
+    env: Record<string, string | null>,
+  ): Promise<void> {
+    return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true, env })
   }
 
   /** Shows the run tab when there is one, running or stopped (Restart runs it again); otherwise opens one. */
@@ -1072,7 +1421,7 @@ export class Orchestrator implements AppService {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run) await this.deps.tmux.selectWindow(session, run.index)
-      else await this.newRunWindow(session, cwd, command)
+      else await this.newRunWindow(session, cwd, command, this.shellWindowEnv(target))
     })
   }
 
@@ -1084,6 +1433,7 @@ export class Orchestrator implements AppService {
   async restartRun(target: Target): Promise<TabInfo[]> {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const { tmux } = this.deps
+      const env = this.shellWindowEnv(target)
       let run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run && !run.dead) {
         await tmux.sendInterrupt(session, RUN_WINDOW)
@@ -1091,8 +1441,8 @@ export class Orchestrator implements AppService {
         // A run tab without remain-on-exit (made outside the app) closes when its command exits.
         run = (await tmux.listWindows(session)).find((t) => t.name === RUN_WINDOW)
       }
-      if (!run) return this.newRunWindow(session, cwd, command)
-      await tmux.respawnWindow(session, RUN_WINDOW, cwd, runWindowCommand(command))
+      if (!run) return this.newRunWindow(session, cwd, command, env)
+      await tmux.respawnWindow(session, RUN_WINDOW, cwd, runWindowCommand(command), env)
       await tmux.selectWindow(session, run.index)
     })
   }
@@ -1250,9 +1600,12 @@ export class Orchestrator implements AppService {
     } else {
       // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
       const args = this.claudeArgs(label)
+      const profile = this.profileFor(target)
+      const env = this.windowEnv(target, profile)
       await this.withPromptFile(text, (file) =>
-        this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file)),
+        this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file), { env }),
       )
+      this.recordClaude(session, profile.id)
     }
     return this.deps.tmux.listWindows(session)
   }
@@ -1420,16 +1773,21 @@ export class Orchestrator implements AppService {
   }
 
   /**
-   * Usage of every target and theme, and the total. getUsage asks for exactly this too, so the usage service's
-   * cached aggregation serves both instead of each evicting the other's. Every known root is passed along, so a
-   * message is counted for the most specific one only.
+   * Usage of every target and theme, and the total, of every profile together (see UsageApi.summarizeFolders) and of
+   * each alone. getUsage asks for exactly this too, so the usage services' cached aggregations serve both instead of each
+   * evicting the other's. Every known root is passed along, so a message is counted for the most specific one only.
    */
-  private async allUsage(): Promise<{ targets: Omit<UsageTargetReport, 'usage'>[]; usage: UsageSummaries }> {
+  private async allUsage(): Promise<{
+    targets: Omit<UsageTargetReport, 'usage'>[]
+    usage: UsageSummaries
+    profiles: { profile: ClaudeProfile; usage: UsageSummaries }[]
+  }> {
     const targets = this.usageTargets()
     const groups: Record<string, string[]> = { total: targets.map((t) => t.path) }
     for (const theme of this.state.themes) groups[themeGroup(theme.id)] = []
     for (const t of targets) groups[themeGroup(t.target.themeId)].push(t.path)
-    return { targets, usage: await this.deps.usage.summarize(groups.total, groups) }
+    const { usage, profiles } = await this.deps.usage.summarize(groups.total, groups)
+    return { targets, usage, profiles }
   }
 
   async getUsage(target: Target): Promise<UsageSummary> {
@@ -1458,22 +1816,33 @@ export class Orchestrator implements AppService {
     return { daily: budgetStatus(usage.groups.total?.today.cost ?? 0, settings.dailyBudgetUsd), tasks }
   }
 
-  async getUsageFolder(): Promise<string> {
-    return this.deps.usage.projectsDir
+  async getUsageFolders(): Promise<UsageFolder[]> {
+    return this.profiles().map((p) => ({ profileId: p.id, name: p.name, folder: join(p.configDir, 'projects') }))
   }
 
   async getUsageReport(): Promise<UsageReport> {
-    const { targets, usage } = await this.allUsage()
-    return {
-      generatedAt: new Date().toISOString(),
-      total: usage.groups.total ?? emptyUsageSummary(),
+    const { targets, usage, profiles } = await this.allUsage()
+    const reportOf = (u: UsageSummaries): Omit<UsageReport, 'profiles' | 'generatedAt'> => ({
+      total: u.groups.total ?? emptyUsageSummary(),
       themes: this.state.themes.map((theme) => ({
         themeId: theme.id,
         name: theme.name,
-        usage: usage.groups[themeGroup(theme.id)] ?? emptyUsageSummary(),
+        usage: u.groups[themeGroup(theme.id)] ?? emptyUsageSummary(),
         targets: targets
           .filter((t) => t.target.themeId === theme.id)
-          .map((t) => ({ ...t, usage: usage.roots[t.path] ?? emptyUsageSummary() })),
+          .map((t) => ({ ...t, usage: u.roots[t.path] ?? emptyUsageSummary() })),
+      })),
+    })
+    const total = reportOf(usage)
+    return {
+      generatedAt: new Date().toISOString(),
+      ...total,
+      profiles: profiles.map(({ profile, usage: u }) => ({
+        id: profile.id,
+        name: profile.name,
+        billing: profile.billing,
+        // A single folder's usage is the total itself: its report too (sent once over IPC).
+        report: u === usage ? total : reportOf(u),
       })),
     }
   }

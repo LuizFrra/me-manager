@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -13,6 +13,7 @@ import {
   claudeCommand,
   claudeContinueCommand,
   claudePromptCommand,
+  claudeLoginCommand,
   claudeMessage,
   MAX_RESOLVE_FILES,
   normalizeTaskOptions,
@@ -31,12 +32,15 @@ import {
   MAX_TASK_PROMPT,
   MAX_TRANSCRIPT_BYTES,
   type AppState,
+  type LiveStatus,
   type Target,
   type Task,
   type TaskGitStatus,
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
-import { makeDeps } from './fakes'
+import { MAX_PROFILES } from '../../shared/profiles'
+import { makeDeps, MemoryStore } from './fakes'
+import * as m from '../store/mutations'
 
 type Ctx = ReturnType<typeof makeDeps> & { orch: Orchestrator; themeId: string; repoId: string }
 
@@ -888,6 +892,7 @@ describe('Orchestrator: archiving tasks', () => {
       await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(refusal)
       await expect(orch.startRun(target)).rejects.toThrow(refusal)
       await expect(orch.restartRun(target)).rejects.toThrow(refusal)
+      await expect(orch.loginProfile('default', target)).rejects.toThrow(refusal)
       expect(tmux.sessions.get(SESSION)!.windows.map((w) => w.name)).toEqual(['shell'])
       release()
       await closing
@@ -998,7 +1003,7 @@ describe('Orchestrator: archiving tasks', () => {
     // Even a session left over under the task's name (started by hand) is not reported.
     await tmux.newSession(SESSION, WT, 'claude', 'claude')
     tmux.activity.set(SESSION, 1_700_000_000)
-    expect(await orch.getStatus()).toEqual({ running: [], missing: [], activity: {} })
+    expect(await orch.getStatus()).toEqual({ running: [], missing: [], activity: {}, claudeProfiles: {} })
     expect(tmux.captureCalls).toEqual([])
     git.statuses.set(WT, { ahead: 0, behind: 0, uncommitted: 0, branch: BRANCH })
     expect(await orch.getGitStatus([target])).toEqual({})
@@ -1190,11 +1195,583 @@ describe('Orchestrator: sessions and tabs', () => {
   it('reports running sessions and missing paths', async () => {
     const ctx = await withTask()
     let status = await ctx.orch.getStatus()
-    expect(status).toEqual({ running: [ctx.task.id], missing: [], activity: {} })
+    expect(status).toEqual({ running: [ctx.task.id], missing: [], activity: {}, claudeProfiles: {} })
     ctx.tmux.sessions.clear()
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
-    expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {} })
+    expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {}, claudeProfiles: {} })
+  })
+})
+
+describe('Orchestrator: Claude profiles', () => {
+  const SESSION = 'mmt_client-x_my-api_fix'
+  const work = { id: 'p-work', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' as const }
+  const home = { id: 'p-home', name: 'Home', configDir: '/home/me/.claude-home', billing: 'own' as const }
+  const fixTask: Task = {
+    id: 'task-fix',
+    name: 'fix',
+    slug: 'fix',
+    branch: 'claude/client-x/fix',
+    worktreePath: '/wt/client-x/my-api/fix',
+    baseRef: 'origin/main',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }
+
+  /**
+   * A theme with the profile `themeProfile` (none when omitted), holding a repo with the task `fix` (its own
+   * profile `taskProfile`, if given) and a folder; Work and Home in the settings. Folders in `missing` don't exist.
+   */
+  async function withProfiles(
+    options: { themeProfile?: string; taskProfile?: string; missing?: string[] } = {},
+  ): Promise<Ctx & { folderId: string; target: Target }> {
+    let s = m.addTheme(m.emptyState(), 'Client X')
+    const themeId = s.themes[0].id
+    s = m.addFolder(m.addRepo(s, themeId, '/code/my-api'), themeId, '/docs/site')
+    const [repoId, folderId] = s.themes[0].items.map((i) => i.id)
+    s = m.addTask(s, themeId, repoId, fixTask)
+    if (options.themeProfile) s = m.setThemeProfile(s, themeId, options.themeProfile)
+    if (options.taskProfile) s = m.setTaskProfile(s, themeId, repoId, fixTask.id, options.taskProfile)
+    const missing = options.missing ?? []
+    const store = new MemoryStore(s)
+    const ctx = makeDeps({
+      store,
+      defaultClaudeDir: '/home/me/.claude',
+      pathExists: (path) => !missing.includes(path),
+    })
+    await ctx.settings.update({ profiles: [work, home] })
+    const orch = new Orchestrator(ctx.deps, { runGraceMs: 0 })
+    await orch.init()
+    const target = { themeId, itemId: repoId, taskId: fixTask.id }
+    return { ...ctx, store, orch, themeId, repoId, folderId, target }
+  }
+  /** The theme's profile changed to `profileId` (null: Default) while its sessions run, as an app restart sees it. */
+  async function switchTheme(ctx: Ctx, profileId: string | null): Promise<Orchestrator> {
+    await ctx.store.save(m.setThemeProfile(await ctx.store.load(), ctx.themeId, profileId))
+    const orch = new Orchestrator(ctx.deps, { runGraceMs: 0 })
+    await orch.init()
+    return orch
+  }
+  const envOf = (ctx: Ctx, session: string, window?: string): Record<string, string> | undefined => {
+    const s = ctx.tmux.sessions.get(session)
+    return window === undefined ? s?.env : s?.windows.find((w) => w.name === window)?.env
+  }
+
+  it("starts a new task's session in its theme's profile", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')
+    expect(envOf(ctx, 'mmt_client-x_my-api_new-one')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    expect(ctx.tmux.calls.at(-1)).toMatch(
+      /^newSession mmt_client-x_my-api_new-one .* env CLAUDE_CONFIG_DIR=\/home\/me\/\.claude-work$/,
+    )
+  })
+
+  it("opens a task in its own profile over its theme's, and a folder in its theme's", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', taskProfile: 'p-home' })
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    await ctx.orch.openTarget({ themeId: ctx.themeId, itemId: ctx.folderId })
+    expect(envOf(ctx, 'mmf_client-x_site')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+  })
+
+  it('starts sessions without CLAUDE_CONFIG_DIR at all in the Default profile, chosen or by default', async () => {
+    // Set, even to Default's own folder, it would make Claude look for its login elsewhere (~/.claude.json).
+    const ctx = await withProfiles()
+    await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')
+    await ctx.orch.openTarget(ctx.target)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newSession'))).toEqual([
+      expect.not.stringContaining('env'),
+      expect.not.stringContaining('env'),
+    ])
+    expect([...ctx.tmux.sessions.values()].map((s) => s.env)).toEqual([undefined, undefined])
+
+    const chosen = await withProfiles({ themeProfile: 'p-work', taskProfile: 'default' })
+    await chosen.orch.openTarget(chosen.target)
+    expect(envOf(chosen, SESSION)).toBeUndefined()
+  })
+
+  it("starts a task whose own profile is no longer there in its theme's", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', taskProfile: 'gone' })
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+  })
+
+  it('restores a removed theme without a profile removed meanwhile, and with one still there', async () => {
+    const ctx = await withProfiles()
+    const theme = (await ctx.orch.createTheme('Side')).themes[1]
+    await ctx.orch.setThemeProfile(theme.id, 'p-home')
+    const saved = (await ctx.orch.getState()).themes[1]
+    await ctx.orch.removeTheme(theme.id)
+    let s = await ctx.orch.restoreTheme(saved, 1)
+    expect(s.themes[1].profileId).toBe('p-home')
+
+    await ctx.orch.removeTheme(theme.id)
+    await ctx.orch.removeProfile('p-home') // nothing uses it now
+    s = await ctx.orch.restoreTheme(saved, 1)
+    expect(s.themes[1]).toMatchObject({ id: theme.id, name: 'Side' })
+    expect(s.themes[1]).not.toHaveProperty('profileId')
+    expect((await ctx.store.load()).themes[1]).not.toHaveProperty('profileId')
+  })
+
+  it('starts a profile no longer there (a hand edit) in Default', async () => {
+    const ctx = await withProfiles({ themeProfile: 'gone' })
+    await ctx.orch.openTarget(ctx.target)
+    expect(ctx.tmux.sessions.has(SESSION)).toBe(true)
+    expect(envOf(ctx, SESSION)).toBeUndefined()
+  })
+
+  it("gives Claude started again, a shell tab, the run tab and Claude asked to resolve the task's profile", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const env = { CLAUDE_CONFIG_DIR: '/home/me/.claude-work' }
+    await ctx.orch.openTarget(ctx.target)
+    await ctx.orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION, 'shell')).toEqual(env)
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    await ctx.orch.restartClaude(ctx.target)
+    expect(envOf(ctx, SESSION, 'claude')).toEqual(env)
+    await ctx.orch.closeTab(ctx.target, 1) // Claude's again
+    await ctx.orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
+    expect(envOf(ctx, SESSION, 'claude')).toEqual(env)
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    await ctx.orch.startRun(ctx.target)
+    expect(envOf(ctx, SESSION, 'run')).toEqual(env)
+  })
+
+  it('opens tabs and starts Claude and the run tab again in the current profile, Default included', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.openTarget(ctx.target)
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    await ctx.orch.startRun(ctx.target)
+    expect(envOf(ctx, SESSION, 'run')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+
+    // Default: the session's CLAUDE_CONFIG_DIR is removed, so nothing started from now on inherits Work's.
+    let orch = await switchTheme(ctx, null)
+    await orch.newTab(ctx.target)
+    // Removed in the same tmux call that opens the window (see FakeTmux.newWindow).
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} shell in ${fixTask.worktreePath}: undefined env -CLAUDE_CONFIG_DIR`,
+    )
+    expect(envOf(ctx, SESSION)).toBeUndefined()
+    expect(envOf(ctx, SESSION, 'shell')).toBeUndefined()
+    await orch.closeTab(ctx.target, 0) // Claude's
+    await orch.restartClaude(ctx.target)
+    expect(envOf(ctx, SESSION, 'claude')).toBeUndefined()
+    await orch.restartRun(ctx.target)
+    expect(envOf(ctx, SESSION, 'run')).toBeUndefined()
+
+    orch = await switchTheme(ctx, 'p-home')
+    await orch.restartRun(ctx.target)
+    const home = { CLAUDE_CONFIG_DIR: '/home/me/.claude-home' }
+    expect(envOf(ctx, SESSION)).toEqual(home)
+    expect(envOf(ctx, SESSION, 'run')).toEqual(home)
+    expect(ctx.tmux.calls.at(-1)).toMatch(/^respawnWindow .* env CLAUDE_CONFIG_DIR=\/home\/me\/\.claude-home$/)
+    // Claude asked to resolve, its tab closed, starts in it too.
+    await orch.closeTab(
+      ctx.target,
+      (await orch.listTabs(ctx.target)).findIndex((t) => t.name === 'claude'),
+    )
+    await orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
+    expect(envOf(ctx, SESSION, 'claude')).toEqual(home)
+  })
+
+  it('says which profile each Claude it started runs in, until it is restarted in the current one', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const claudeProfiles = async (): Promise<LiveStatus['claudeProfiles']> =>
+      (await ctx.orch.getStatus()).claudeProfiles
+    await ctx.orch.openTarget(ctx.target)
+    ctx.tmux.activity.set(SESSION, 1)
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+
+    // A change of profile restarts nothing, and neither does Restart Claude while Claude runs: it shows it.
+    await ctx.orch.setThemeProfile(ctx.themeId, 'p-home')
+    await ctx.orch.restartClaude(ctx.target)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('respawnWindow'))).toEqual([])
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+
+    // Unless asked to replace it: Claude starts again in its window, in the current profile, continuing.
+    await ctx.orch.restartClaude(ctx.target, { replace: true })
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('respawnWindow'))).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          `^respawnWindow ${SESSION} claude in \\S+: claude .*--continue.* env CLAUDE_CONFIG_DIR=/home/me/\\.claude-home$`,
+        ),
+      ),
+    ])
+    expect(envOf(ctx, SESSION, 'claude')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-home' })
+
+    // A new task, and Claude started again for a request, are known too; Default by its id.
+    await ctx.orch.setThemeProfile(ctx.themeId, null)
+    await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')
+    ctx.tmux.activity.set('mmt_client-x_my-api_new-one', 1)
+    await ctx.orch.newTab(ctx.target)
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    await ctx.orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
+    const newTask = (await ctx.orch.getState()).themes[0].items[0]
+    const newId = newTask.kind === 'repo' ? newTask.tasks.find((t) => t.slug === 'new-one')!.id : ''
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'default', [newId]: 'default' })
+  })
+
+  it('knows nothing of a Claude an earlier run started, nor of one whose tab was closed', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.openTarget(ctx.target)
+    ctx.tmux.activity.set(SESSION, 1)
+    const orch = await switchTheme(ctx, 'p-home') // the app restarted: the session runs on
+    await orch.openTarget(ctx.target)
+    expect((await orch.getStatus()).claudeProfiles).toEqual({})
+
+    await ctx.orch.newTab(ctx.target)
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    expect((await ctx.orch.getStatus()).claudeProfiles).toEqual({})
+  })
+
+  it('keeps the account of a Claude started while the status is read, and all of them when tmux fails', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    ctx.tmux.activity.set(SESSION, 1)
+    const claudeProfiles = async (): Promise<LiveStatus['claudeProfiles']> =>
+      (await ctx.orch.getStatus()).claudeProfiles
+    const read = ctx.tmux.sessionActivity.bind(ctx.tmux)
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const slow = vi.spyOn(ctx.tmux, 'sessionActivity').mockImplementation(async (w) => {
+      const answer = await read(w) // the sessions as they are now: none
+      await gate
+      return answer
+    })
+    const reading = ctx.orch.getStatus()
+    await ctx.orch.openTarget(ctx.target) // meanwhile
+    release()
+    expect((await reading).claudeProfiles).toEqual({}) // not running when tmux answered
+    slow.mockRestore()
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+
+    // tmux doesn't answer: nothing is known this time, and nothing is forgotten.
+    const activity = vi.spyOn(ctx.tmux, 'sessionActivity').mockRejectedValue(new Error('no server'))
+    const sessions = vi.spyOn(ctx.tmux, 'listSessions').mockRejectedValue(new Error('no server'))
+    expect(await claudeProfiles()).toEqual({})
+    activity.mockRestore()
+    sessions.mockRestore()
+    expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
+  })
+
+  it("opens shell and run tabs without CLAUDE_CONFIG_DIR when the profile's folder is gone, but no Claude", async () => {
+    const missing: string[] = []
+    const ctx = await withProfiles({ themeProfile: 'p-work', missing })
+    await ctx.orch.openTarget(ctx.target)
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    await ctx.orch.startRun(ctx.target)
+    missing.push('/home/me/.claude-work')
+    ctx.tmux.calls = []
+    const refusal = 'Claude account “Work”: folder not found (/home/me/.claude-work)'
+
+    await ctx.orch.restartRun(ctx.target)
+    expect(ctx.tmux.calls.find((c) => c.startsWith('respawnWindow'))).toMatch(/ env -CLAUDE_CONFIG_DIR$/)
+    expect(envOf(ctx, SESSION, 'run')).toBeUndefined()
+    await ctx.orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION, 'shell')).toBeUndefined()
+
+    // Claude, and a login tab, still refuse rather than start in another account.
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    ctx.tmux.calls = []
+    await expect(ctx.orch.restartClaude(ctx.target)).rejects.toThrow(refusal)
+    await expect(ctx.orch.loginProfile('p-work', ctx.target)).rejects.toThrow(refusal)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newWindow'))).toEqual([])
+  })
+
+  it("refuses to start anything when the profile's folder is gone, never falling back to another account", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', missing: ['/home/me/.claude-work'] })
+    const refusal = 'Claude account “Work”: folder not found (/home/me/.claude-work)'
+    await expect(ctx.orch.openTarget(ctx.target)).rejects.toThrow(refusal)
+    await expect(ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')).rejects.toThrow(refusal)
+    expect(ctx.tmux.sessions.size).toBe(0)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newSession'))).toEqual([])
+    expect(ctx.pty.attached).toBeNull()
+    expect(ctx.git.calls.filter((c) => c.startsWith('addWorktree'))).toEqual([])
+    expect((await ctx.orch.getState()).themes[0].items[0]).toMatchObject({ tasks: [fixTask] }) // no new task
+  })
+
+  it('assigns a profile to a theme and a task, saved, and takes it away again', async () => {
+    const ctx = await withProfiles()
+    const { themeId, repoId } = ctx
+    let s = await ctx.orch.setThemeProfile(themeId, 'p-work')
+    expect(s.themes[0].profileId).toBe('p-work')
+    s = await ctx.orch.setTaskProfile(themeId, repoId, fixTask.id, 'default')
+    expect(taskOf(s).profileId).toBe('default')
+    expect(await ctx.store.load()).toEqual(s)
+    // The task's Default wins over its theme's Work; the folder gets the theme's.
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toBeUndefined()
+    await ctx.orch.openTarget({ themeId, itemId: ctx.folderId })
+    expect(envOf(ctx, 'mmf_client-x_site')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+
+    s = await ctx.orch.setTaskProfile(themeId, repoId, fixTask.id, null)
+    expect(taskOf(s)).not.toHaveProperty('profileId')
+    s = await ctx.orch.setThemeProfile(themeId, null)
+    expect(s.themes[0]).not.toHaveProperty('profileId')
+    expect(await ctx.store.load()).toEqual(s)
+  })
+
+  it('refuses a profile no account has, and a task or theme that is not there', async () => {
+    const ctx = await withProfiles()
+    const { themeId, repoId } = ctx
+    await expect(ctx.orch.setThemeProfile(themeId, 'p-gone')).rejects.toThrow('Claude account not found')
+    await expect(ctx.orch.setTaskProfile(themeId, repoId, fixTask.id, 'p-gone')).rejects.toThrow(
+      'Claude account not found',
+    )
+    await expect(ctx.orch.setThemeProfile('nope', 'p-work')).rejects.toThrow()
+    await expect(ctx.orch.setTaskProfile(themeId, repoId, 'nope', 'p-work')).rejects.toThrow()
+    expect(ctx.store.saved).toEqual([])
+  })
+
+  it('lists every profile, Default first, with its billing and login state', async () => {
+    const ctx = await withProfiles()
+    ctx.profileFolders.login = { '/home/me/.claude': 'signedIn', '/home/me/.claude-work': 'keyOrGateway' }
+    await ctx.settings.update({ defaultProfileBilling: 'company' })
+    await expect(ctx.orch.listProfiles()).resolves.toEqual([
+      {
+        id: 'default',
+        name: 'Default',
+        configDir: '/home/me/.claude',
+        billing: 'company',
+        isDefault: true,
+        login: 'signedIn',
+      },
+      { ...work, isDefault: false, login: 'keyOrGateway' },
+      { ...home, isDefault: false, login: 'notSignedIn' },
+    ])
+  })
+
+  it('adds a profile, creating its folder, with ~/ for the home folder', async () => {
+    const ctx = await withProfiles()
+    const list = await ctx.orch.addProfile({ name: '  Client ', configDir: '~/.claude-client/', billing: 'company' })
+    const configDir = join(homedir(), '.claude-client')
+    expect(ctx.profileFolders.created).toEqual([configDir])
+    const added = ctx.settings.get().profiles[2]
+    expect(added).toEqual({
+      id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      name: 'Client',
+      configDir,
+      billing: 'company',
+    })
+    expect(list.map((p) => p.name)).toEqual(['Default', 'Work', 'Home', 'Client'])
+    expect(list[3]).toEqual({ ...added, isDefault: false, login: 'notSignedIn' })
+
+    await ctx.orch.addProfile({ name: 'Other', configDir: '/srv//claude/other/', billing: 'own' })
+    expect(ctx.profileFolders.created.at(-1)).toBe('/srv/claude/other')
+    expect(ctx.settings.get().profiles[3]).toMatchObject({ configDir: '/srv/claude/other' })
+  })
+
+  it('refuses a new profile named like another or in a folder another has, creating nothing', async () => {
+    const ctx = await withProfiles()
+    const add = (name: string, configDir: string, billing: unknown = 'own'): Promise<unknown> =>
+      ctx.orch.addProfile({ name, configDir, billing } as never)
+    await expect(add('work', '/home/me/.claude-x')).rejects.toThrow('Another account is named “Work”')
+    await expect(add(' default ', '/home/me/.claude-x')).rejects.toThrow('Another account is named “Default”')
+    await expect(add('X', '/home/me/.claude-work/')).rejects.toThrow('“Work” already uses this folder')
+    await expect(add('X', '/home/me/.claude')).rejects.toThrow('“Default” already uses this folder')
+    await expect(add('X', 'claude-x')).rejects.toThrow('Choose an absolute folder')
+    await expect(add(' ', '/home/me/.claude-x')).rejects.toThrow('Enter a name')
+    await expect(add('X', '/home/me/.claude-x', 'mine')).rejects.toThrow('Choose who pays for this account')
+    await expect(ctx.orch.addProfile(null as never)).rejects.toThrow('Enter a name')
+    expect(ctx.profileFolders.created).toEqual([])
+    expect(ctx.settings.get().profiles).toEqual([work, home])
+  })
+
+  it('resolves . and .. in a new folder before checking it, and saves it so', async () => {
+    const ctx = await withProfiles()
+    await expect(
+      ctx.orch.addProfile({ name: 'X', configDir: '/home/me/x/../.claude', billing: 'own' }),
+    ).rejects.toThrow('“Default” already uses this folder')
+    await expect(
+      ctx.orch.addProfile({ name: 'X', configDir: '/home/me/./.claude-work/', billing: 'own' }),
+    ).rejects.toThrow('“Work” already uses this folder')
+    await ctx.orch.addProfile({ name: 'X', configDir: '~/a/../.claude-x/.', billing: 'own' })
+    expect(ctx.settings.get().profiles[2].configDir).toBe(join(homedir(), '.claude-x'))
+    expect(ctx.profileFolders.created).toEqual([join(homedir(), '.claude-x')])
+  })
+
+  it('refuses a folder that is another profile’s through a link', async () => {
+    const ctx = await withProfiles()
+    ctx.profileFolders.realpaths = {
+      '/home/me/.claude-work': '/home/me/.claude-work',
+      '/data/work-link': '/home/me/.claude-work',
+      '/data/home': '/data/home',
+    }
+    await expect(ctx.orch.addProfile({ name: 'X', configDir: '/data/work-link', billing: 'own' })).rejects.toThrow(
+      '“Work” already uses this folder',
+    )
+    ctx.profileFolders.realpaths['/home/me/.claude'] = '/data/home' // Default's is the link this time
+    await expect(ctx.orch.addProfile({ name: 'X', configDir: '/data/home', billing: 'own' })).rejects.toThrow(
+      '“Default” already uses this folder',
+    )
+    expect(ctx.profileFolders.created).toEqual([])
+    await ctx.orch.addProfile({ name: 'X', configDir: '/data/new', billing: 'own' }) // not there yet
+    expect(ctx.profileFolders.created).toEqual(['/data/new'])
+  })
+
+  it('refuses a profile past the most there can be', async () => {
+    const ctx = await withProfiles()
+    for (let i = ctx.settings.get().profiles.length; i < MAX_PROFILES; i++) {
+      await ctx.orch.addProfile({ name: `P${i}`, configDir: `/p/${i}`, billing: 'own' })
+    }
+    await expect(ctx.orch.addProfile({ name: 'One more', configDir: '/p/more', billing: 'own' })).rejects.toThrow(
+      `At most ${MAX_PROFILES} Claude accounts`,
+    )
+    expect(ctx.profileFolders.created).not.toContain('/p/more')
+  })
+
+  it("renames a profile and changes its billing, never its folder, and Default's billing only", async () => {
+    const ctx = await withProfiles()
+    let list = await ctx.orch.updateProfile('p-work', { name: ' Company ' })
+    expect(list[1]).toMatchObject({ ...work, name: 'Company' })
+    list = await ctx.orch.updateProfile('p-work', { billing: 'own', configDir: '/elsewhere' } as never)
+    expect(list[1]).toMatchObject({ ...work, name: 'Company', billing: 'own' })
+    // Its own name, in other case, is no clash.
+    expect((await ctx.orch.updateProfile('p-home', { name: 'HOME' }))[2].name).toBe('HOME')
+    list = await ctx.orch.updateProfile('default', { billing: 'company' })
+    expect(list[0]).toMatchObject({ id: 'default', name: 'Default', billing: 'company' })
+    expect(ctx.settings.get()).toMatchObject({
+      defaultProfileBilling: 'company',
+      profiles: [
+        { ...work, name: 'Company', billing: 'own' },
+        { ...home, name: 'HOME' },
+      ],
+    })
+
+    await expect(ctx.orch.updateProfile('default', { name: 'Mine' })).rejects.toThrow("Default can't be renamed")
+    await expect(ctx.orch.updateProfile('p-work', { name: 'home' })).rejects.toThrow('Another account is named “HOME”')
+    await expect(ctx.orch.updateProfile('p-work', { name: 'default' })).rejects.toThrow('named “Default”')
+    await expect(ctx.orch.updateProfile('p-work', { name: '' })).rejects.toThrow('Enter a name')
+    await expect(ctx.orch.updateProfile('p-work', { billing: 'x' } as never)).rejects.toThrow('Choose who pays')
+    await expect(ctx.orch.updateProfile('p-gone', { name: 'X' })).rejects.toThrow('Claude account not found')
+    expect(ctx.settings.get().profiles[0]).toEqual({ ...work, name: 'Company', billing: 'own' })
+  })
+
+  it('removes a profile no theme or task uses, leaving its folder alone', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const list = await ctx.orch.removeProfile('p-home')
+    expect(list.map((p) => p.id)).toEqual(['default', 'p-work'])
+    expect(ctx.settings.get().profiles).toEqual([work])
+    await expect(ctx.orch.removeProfile('default')).rejects.toThrow("Default can't be removed")
+    await expect(ctx.orch.removeProfile('p-home')).rejects.toThrow('Claude account not found')
+  })
+
+  it('refuses to remove a profile a theme or a task uses, archived ones too, naming up to three', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', taskProfile: 'p-work' })
+    const { themeId, repoId } = ctx
+    await expect(ctx.orch.removeProfile('p-work')).rejects.toThrow('Used by Client X, Client X › my-api › fix')
+    const archived = { ...fixTask, id: 'task-old', name: 'old', slug: 'old', archivedAt: '2026-02-01T00:00:00.000Z' }
+    const other = { ...fixTask, id: 'task-new', name: 'new', slug: 'new' }
+    let s = m.addTask(m.addTask(await ctx.orch.getState(), themeId, repoId, archived), themeId, repoId, other)
+    s = m.addTheme(s, 'Personal')
+    const personalId = s.themes[1].id
+    s = m.setThemeProfile(m.setThemeProfile(s, themeId, null), personalId, 'p-home')
+    for (const id of [fixTask.id, 'task-old', 'task-new']) s = m.setTaskProfile(s, themeId, repoId, id, 'p-home')
+    await ctx.store.save(s)
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    await expect(orch.removeProfile('p-home')).rejects.toThrow(
+      'Used by Client X › my-api › fix, Client X › my-api › old, Client X › my-api › new, …',
+    )
+    expect(ctx.settings.get().profiles).toEqual([work, home])
+    // Used by nothing once they are all back to Default.
+    s = m.setThemeProfile(s, personalId, null)
+    for (const id of [fixTask.id, 'task-old', 'task-new']) s = m.setTaskProfile(s, themeId, repoId, id, null)
+    await ctx.store.save(s)
+    const after = new Orchestrator(ctx.deps)
+    await after.init()
+    await expect(after.removeProfile('p-home')).resolves.toHaveLength(2)
+  })
+
+  it("opens a login tab running claude in the profile's folder, for that tab only", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.openTarget(ctx.target)
+    const tabs = await ctx.orch.loginProfile('p-home', ctx.target)
+    expect(tabs.map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['login', true],
+    ])
+    // No extra flags, not even the built-in ones.
+    await ctx.settings.update({ remoteControl: true, skipPermissions: true, claudeArgs: ['--model', 'x'] })
+    await ctx.orch.loginProfile('p-home', ctx.target)
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} login in ${fixTask.worktreePath}: claude window env CLAUDE_CONFIG_DIR=/home/me/.claude-home`,
+    )
+    expect(envOf(ctx, SESSION, 'login')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    // The session keeps the target's profile, and so do the tabs opened next.
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    await ctx.orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION, 'shell')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+  })
+
+  it("starts the target's session first, in its own profile, when it isn't running", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const tabs = await ctx.orch.loginProfile('p-home', ctx.target)
+    expect(tabs.map((t) => t.name)).toEqual(['claude', 'login'])
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    expect(envOf(ctx, SESSION, 'login')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    expect(ctx.orch.currentTarget()).toEqual(ctx.target)
+  })
+
+  it("logs in to Default without the session's CLAUDE_CONFIG_DIR, or with the one the app was started with", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.loginProfile('default', ctx.target)
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} login in ${fixTask.worktreePath}: ${claudeLoginCommand(true)}`,
+    )
+
+    const inherited = await withProfiles({ themeProfile: 'p-work' })
+    inherited.deps.inheritedClaudeDir = '/srv/claude'
+    await inherited.orch.loginProfile('default', inherited.target)
+    expect(inherited.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} login in ${fixTask.worktreePath}: claude window env CLAUDE_CONFIG_DIR=/srv/claude`,
+    )
+  })
+
+  it('runs claude without CLAUDE_CONFIG_DIR in a Default login tab, whatever the shell has', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mm-login-'))
+    try {
+      writeFileSync(join(dir, 'claude'), '#!/bin/sh\nprintf "[%s]" "${CLAUDE_CONFIG_DIR-unset}"\n', { mode: 0o755 })
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, CLAUDE_CONFIG_DIR: '/home/me/.claude-work' }
+      const out = (command: string): string => execFileSync('sh', ['-c', command], { encoding: 'utf8', env })
+      expect(out(claudeLoginCommand(true))).toBe('[unset]')
+      expect(out(claudeLoginCommand(false))).toBe('[/home/me/.claude-work]')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a login tab in a profile whose folder is gone, one that is not there, and an archived task', async () => {
+    const ctx = await withProfiles({ missing: ['/home/me/.claude-home'] })
+    await expect(ctx.orch.loginProfile('p-home', ctx.target)).rejects.toThrow(
+      'Claude account “Home”: folder not found (/home/me/.claude-home)',
+    )
+    await expect(ctx.orch.loginProfile('p-gone', ctx.target)).rejects.toThrow('Claude account not found')
+    expect(ctx.tmux.calls).toEqual([])
+    const when = '2026-02-01T00:00:00.000Z'
+    await ctx.store.save(m.archiveTask(await ctx.store.load(), ctx.themeId, ctx.repoId, fixTask.id, when))
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    await expect(orch.loginProfile('p-work', ctx.target)).rejects.toThrow(/archived/)
+    expect(ctx.tmux.calls).toEqual([])
+  })
+
+  it("refuses a login tab in a running session whose task's folder is gone, like openTarget", async () => {
+    const missing: string[] = []
+    const ctx = await withProfiles({ missing })
+    await ctx.orch.openTarget(ctx.target)
+    missing.push(fixTask.worktreePath)
+    ctx.tmux.calls = []
+    await expect(ctx.orch.loginProfile('p-home', ctx.target)).rejects.toThrow(
+      `Folder not found: ${fixTask.worktreePath}`,
+    )
+    expect(ctx.tmux.calls).toEqual([])
+  })
+
+  it('starts and lists profiles with a theme or task on a profile that is gone', async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-gone', taskProfile: 'p-gone-too' })
+    await expect(ctx.orch.listProfiles()).resolves.toHaveLength(3)
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toBeUndefined() // Default
   })
 })
 
@@ -1280,6 +1857,21 @@ describe('Orchestrator: settings and claude arguments', () => {
     expect(settings.get()).toEqual(saved)
     expect(effective).toEqual({ remoteControl: false, skipPermissions: false })
     expect(await orch.getSettings()).toEqual(next)
+  })
+
+  it('leaves the Claude profiles out of a settings update: they have their own calls', async () => {
+    const { orch, settings } = await setup()
+    await orch.addProfile({ name: 'Work', configDir: '/home/me/.claude-work', billing: 'own' })
+    const before = settings.get()
+    const next = await orch.updateSettings({
+      pollIntervalMs: 2000,
+      profiles: [{ id: 'p-x', name: 'X', configDir: '/x', billing: 'own' }],
+      defaultProfileBilling: 'company',
+    })
+    expect(next).toMatchObject({ pollIntervalMs: 2000, profiles: before.profiles, defaultProfileBilling: 'own' })
+    expect(settings.get()).toMatchObject({ profiles: before.profiles, defaultProfileBilling: 'own' })
+    // Sent back as getSettings had them, they change nothing either.
+    await expect(orch.updateSettings({ ...next, profiles: [] })).resolves.toMatchObject({ profiles: before.profiles })
   })
 
   it('says which built-in Claude flags apply, after the user arguments', async () => {
@@ -1823,10 +2415,14 @@ describe('Orchestrator: usage', () => {
     expect(usage.calls[2]).toEqual(usage.calls[0])
   })
 
-  it('names the folder the usage is read from', async () => {
-    const { orch, usage } = await setup()
-    usage.projectsDir = '/custom/claude/projects'
-    expect(await orch.getUsageFolder()).toBe('/custom/claude/projects')
+  it('names the folder each profile’s usage is read from, Default first', async () => {
+    const { orch } = await setup()
+    await orch.addProfile({ name: 'Work', configDir: '/srv/claude-work', billing: 'company' })
+    const work = (await orch.listProfiles())[1].id
+    expect(await orch.getUsageFolders()).toEqual([
+      { profileId: 'default', name: 'Default', folder: '/home/me/.claude/projects' },
+      { profileId: work, name: 'Work', folder: '/srv/claude-work/projects' },
+    ])
   })
 
   it('works for a target whose folder is gone, but not for a repo without a task', async () => {
@@ -1857,6 +2453,37 @@ describe('Orchestrator: usage', () => {
       ['folder', 'notes', '/docs/notes'],
     ])
     expect(report.themes[1].targets[0].usage.all.cost).toBe(3)
+    expect(report.profiles).toEqual([
+      { id: 'default', name: 'Default', billing: 'own', report: { total: report.total, themes: report.themes } },
+    ])
+  })
+
+  /** Usage of `tokens` input tokens costing `cost`, in every period. */
+  const spent = (tokens: number, cost: number): ReturnType<typeof emptyUsageSummary> => {
+    const s = emptyUsageSummary()
+    for (const b of Object.values(s)) Object.assign(b, { input: tokens, cost, messages: 1, sessions: 1 })
+    return s
+  }
+
+  it('reports the usage of every profile together, and of each profile alone', async () => {
+    const { orch, usage, themeId, taskTarget } = await withTargets()
+    await orch.addProfile({ name: 'Work', configDir: '/srv/claude-work', billing: 'company' })
+    const work = (await orch.listProfiles())[1].id
+    const task = '/wt/client-x/my-api/fix'
+    usage.byRoot[task] = spent(140, 2)
+    usage.byGroup.total = spent(140, 2)
+    usage.byProfile.default = { byRoot: { [task]: spent(100, 2) }, byGroup: { total: spent(100, 2) } }
+    usage.byProfile[work] = { byRoot: { [task]: spent(40, 0) }, byGroup: { total: spent(40, 0) } }
+
+    expect((await orch.getUsage(taskTarget)).all).toMatchObject({ input: 140, cost: 2 })
+    const report = await orch.getUsageReport()
+    expect(report.total.all).toMatchObject({ input: 140, cost: 2 })
+    expect(report.themes[0].targets[0].usage.all.input).toBe(140)
+    expect(report.profiles.map((p) => [p.id, p.name, p.billing, p.report.total.all.input])).toEqual([
+      ['default', 'Default', 'own', 100],
+      [work, 'Work', 'company', 40],
+    ])
+    expect(report.profiles[1].report.themes.find((t) => t.themeId === themeId)!.targets[0].usage.all.input).toBe(40)
   })
 })
 
@@ -1915,6 +2542,20 @@ describe('Orchestrator: budgets', () => {
       daily: { level: 'warn', spent: 8.5, limit: 10, fraction: 0.85 },
       tasks: { [tasks[0].id]: { level: 'ok', spent: 3, limit: 10, fraction: 0.3 } },
     })
+  })
+
+  it('counts the usage of every profile together, whose cost is own-billed profiles’ only, never one alone', async () => {
+    const { orch, usage, settings, tasks } = await withTasks()
+    await orch.addProfile({ name: 'Work', configDir: '/srv/claude-work', billing: 'own' })
+    const work = (await orch.listProfiles())[1].id
+    const [a] = tasks
+    usage.byRoot[a.worktreePath] = summary(1)
+    usage.byGroup.total = summary(1, 1)
+    usage.byProfile[work] = { byRoot: { [a.worktreePath]: summary(40) }, byGroup: { total: summary(80, 80) } }
+    await settings.update({ taskBudgetUsd: 5, dailyBudgetUsd: 10 })
+    const budgets = await orch.getBudgets()
+    expect(budgets.daily).toEqual({ level: 'ok', spent: 1, limit: 10, fraction: 0.1 })
+    expect(budgets.tasks[a.id]).toEqual({ level: 'ok', spent: 1, limit: 5, fraction: 0.2 })
   })
 })
 
@@ -2456,6 +3097,8 @@ describe('Orchestrator: sendToClaude', () => {
 
 describe('Orchestrator: run command', () => {
   const SESSION = 'mmt_client-x_my-api_fix'
+  /** How the fake shows a window started in the Default profile: the session's CLAUDE_CONFIG_DIR removed first. */
+  const DEFAULT_ENV = ' env -CLAUDE_CONFIG_DIR'
   async function withTask(): Promise<Ctx & { target: Target; worktree: string }> {
     const ctx = await setup()
     const task = taskOf(await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'fix'))
@@ -2491,7 +3134,7 @@ describe('Orchestrator: run command', () => {
     const ctx = await withTask()
     const tabs = await ctx.orch.startRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
-      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}${DEFAULT_ENV}`,
     ])
     expect(tabs).toEqual([
       { index: 0, name: 'claude', active: false },
@@ -2529,7 +3172,7 @@ describe('Orchestrator: run command', () => {
     await ctx.orch.openTarget(folder)
     await ctx.orch.startRun(folder)
     expect(ctx.tmux.calls.at(-1)).toBe(
-      `newWindow mmf_client-x_site run [remain-on-exit] in /docs/site: ${runWindowCommand('hugo server')}`,
+      `newWindow mmf_client-x_site run [remain-on-exit] in /docs/site: ${runWindowCommand('hugo server')}${DEFAULT_ENV}`,
     )
   })
 
@@ -2554,7 +3197,7 @@ describe('Orchestrator: run command', () => {
     const tabs = await ctx.orch.restartRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
       `sendInterrupt ${SESSION} run`,
-      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev -- --port 4000')}`,
+      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev -- --port 4000')}${DEFAULT_ENV}`,
     ])
     expect(tabs.find((t) => t.active)).toEqual({ index: 1, name: 'run', active: true })
   })
@@ -2586,14 +3229,14 @@ describe('Orchestrator: run command', () => {
     ctx.tmux.calls = []
     await ctx.orch.restartRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
-      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+      `respawnWindow ${SESSION} run in ${ctx.worktree}: ${runWindowCommand('npm run dev')}${DEFAULT_ENV}`,
     ])
     expect(runWindow(ctx)?.dead).toBeUndefined()
     await ctx.orch.closeTab(ctx.target, 1)
     ctx.tmux.calls = []
     await ctx.orch.restartRun(ctx.target)
     expect(ctx.tmux.calls).toEqual([
-      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}`,
+      `newWindow ${SESSION} run [remain-on-exit] in ${ctx.worktree}: ${runWindowCommand('npm run dev')}${DEFAULT_ENV}`,
     ])
   })
 

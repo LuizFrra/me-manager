@@ -1,10 +1,13 @@
 import { BUDGET_LIMITS } from './budget'
+import { normalizeProfiles } from './profiles'
 import { normalizeTaskTemplates } from './templates'
 import {
   APPEARANCES,
+  PROFILE_BILLINGS,
   UPDATE_STRATEGIES,
   type Appearance,
   type EffectiveClaudeFlags,
+  type ProfileBilling,
   type Settings,
   type UpdateStrategy,
 } from './types'
@@ -27,6 +30,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   dailyBudgetUsd: null,
   taskBudgetUsd: null,
   appearance: 'system',
+  profiles: [],
+  defaultProfileBilling: 'own',
 })
 
 type ClaudeFlagSettings = Pick<Settings, 'claudeArgs' | 'remoteControl' | 'skipPermissions'>
@@ -76,9 +81,15 @@ const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Num
  * Settings. Known keys only; unknown ones are dropped. A missing or wrongly typed value falls back to `base`'s;
  * numbers are rounded and clamped to their limits, and the editor command is trimmed. Task templates are checked
  * one by one (see normalizeTaskTemplates): invalid ones are dropped, the rest kept. A budget is null (none) or a
- * positive number, rounded to cents and clamped to BUDGET_LIMITS.
+ * positive number, rounded to cents and clamped to BUDGET_LIMITS. Claude profiles are checked one by one too (see
+ * normalizeProfiles).
  */
-export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAULT_SETTINGS): Settings {
+export function normalizeSettings(
+  raw: unknown,
+  base: Readonly<Settings> = DEFAULT_SETTINGS,
+  /** The Default profile's folder, when known: a saved profile with it is dropped (see normalizeProfiles). */
+  defaultProfileDir?: string,
+): Settings {
   const r = isRecord(raw) ? raw : {}
   const claudeArgs = Array.isArray(r.claudeArgs) && r.claudeArgs.every(isArgString) ? r.claudeArgs : base.claudeArgs
   const number = (v: unknown, fallback: number, limits: { min: number; max: number }): number =>
@@ -108,5 +119,9 @@ export function normalizeSettings(raw: unknown, base: Readonly<Settings> = DEFAU
     dailyBudgetUsd: budget(r.dailyBudgetUsd, base.dailyBudgetUsd),
     taskBudgetUsd: budget(r.taskBudgetUsd, base.taskBudgetUsd),
     appearance: APPEARANCES.includes(r.appearance as Appearance) ? (r.appearance as Appearance) : base.appearance,
+    profiles: normalizeProfiles(Array.isArray(r.profiles) ? r.profiles : base.profiles, defaultProfileDir),
+    defaultProfileBilling: PROFILE_BILLINGS.includes(r.defaultProfileBilling as ProfileBilling)
+      ? (r.defaultProfileBilling as ProfileBilling)
+      : base.defaultProfileBilling,
   }
 }

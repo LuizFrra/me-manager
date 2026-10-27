@@ -2,8 +2,12 @@ import {
   MAX_COMMIT_MESSAGE,
   MAX_TASK_NOTES,
   MAX_TASK_PROMPT,
+  PROFILE_BILLINGS,
   type AppState,
+  type ClaudeProfile,
   type MeManagerApi,
+  type ProfileBilling,
+  type ProfileStatus,
   type SearchMatch,
   type Settings,
   type TabInfo,
@@ -29,8 +33,19 @@ import { normalizeThemeStyle } from '../../../shared/themeStyle'
 import { normalizeRunCommand, RUN_WINDOW } from '../../../shared/runCommand'
 import { moveActiveTask, moveEntry } from '../../../shared/reorder'
 import { normalizeBudget } from '../../../shared/budget'
+import {
+  allProfiles,
+  DEFAULT_PROFILE_ID,
+  effectiveProfileId,
+  MAX_PROFILES,
+  normalizeConfigDir,
+  profileError,
+} from '../../../shared/profiles'
 import { demoBudgets, demoUsage, demoUsageReport } from './demoUsage'
 import { DEMO_BINARY, DEMO_CHANGES, DEMO_DIFFS, DEMO_FILES, DEMO_PATHS, DEMO_PNG_BASE64 } from './demoFiles'
+
+/** The demo's Default Claude profile folder. */
+const DEMO_CLAUDE_DIR = '/home/demo/.claude'
 
 /** The branches a demo task can start from; listBranches' default is the first. */
 const DEMO_BRANCHES = ['origin/main', 'origin/develop', 'origin/release/2.0', 'main']
@@ -115,6 +130,51 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     return clone(tabs)
   }
 
+  /**
+   * The account each demo Claude was started in, by targetKey, as main reports it (LiveStatus.claudeProfiles): set
+   * when a task is created or opened the first time, and when Restart Claude replaces it.
+   */
+  const claudeRuns = new Map<string, string>()
+  const startClaude = (target: Target, replace: boolean): void => {
+    const key = targetKey(target)
+    if (claudeRuns.has(key) && !replace) return
+    const theme = state.themes.find((t) => t.id === target.themeId)
+    const item = theme?.items.find((i) => i.id === target.itemId)
+    const task = item?.kind === 'repo' ? item.tasks.find((k) => k.id === target.taskId) : undefined
+    if (!theme || !item || (target.taskId && !task)) return // the demo opens anything, as it always has
+    claudeRuns.set(key, effectiveProfileId(allProfiles(settings, DEMO_CLAUDE_DIR), theme, task).id)
+  }
+
+  /** Like main: an id no profile has is refused (null, for none, is fine). */
+  const checkProfile = (profileId: string | null): void => {
+    if (profileId !== null && !allProfiles(settings, DEMO_CLAUDE_DIR).some((p) => p.id === profileId))
+      throw new Error('Claude account not found')
+  }
+
+  /** The demo's profiles: Default signed in, the ones added not (yet). */
+  const profiles = (): ProfileStatus[] =>
+    allProfiles(settings, DEMO_CLAUDE_DIR).map((p) => ({
+      ...p,
+      isDefault: p.id === DEFAULT_PROFILE_ID,
+      login: p.id === DEFAULT_PROFILE_ID ? 'signedIn' : 'notSignedIn',
+    }))
+  const checked = (error: string | null): void => {
+    if (error) throw new Error(error)
+  }
+  const checkBilling = (billing: unknown): void => {
+    if (!PROFILE_BILLINGS.includes(billing as ProfileBilling)) throw new Error('Choose who pays for this account')
+  }
+  /** What uses the profile, as main names it when it refuses to remove one. */
+  const profileUsers = (id: string): string[] =>
+    state.themes.flatMap((t) => [
+      ...(t.profileId === id ? [t.name] : []),
+      ...t.items.flatMap((i) =>
+        i.kind === 'repo'
+          ? i.tasks.filter((k) => k.profileId === id).map((k) => `${t.name} › ${i.name} › ${k.name}`)
+          : [],
+      ),
+    ])
+
   const edit = async (themeId: string, fn: (t: Theme) => void): Promise<AppState> => {
     const next = clone(state)
     const theme = next.themes.find((t) => t.id === themeId)
@@ -126,7 +186,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
 
   const api: MeManagerApi = {
     getState: async () => state,
-    getStatus: async () => ({ running: [], missing: [], activity: {} }),
+    getStatus: async () => ({
+      running: [],
+      missing: [],
+      activity: {},
+      claudeProfiles: Object.fromEntries(claudeRuns),
+    }),
     getGitStatus: async (targets) => {
       const out: Record<string, TaskGitStatus> = {}
       for (const target of targets) {
@@ -144,8 +209,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       uiState = normalizeUiState(clone(next), state)
     },
     getSettings: async () => clone(settings),
+    // Like main, the Claude profiles are left out: they have their own calls.
     updateSettings: async (patch) => {
-      settings = normalizeSettings({ ...settings, ...patch }, settings)
+      const rest = { ...patch }
+      delete rest.profiles
+      delete rest.defaultProfileBilling
+      settings = normalizeSettings({ ...settings, ...rest }, settings)
       return clone(settings)
     },
     createTheme: async (name) => {
@@ -237,8 +306,8 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         t.items = [...moveEntry(t.items, from, toIndex)]
       }),
     listBranches: async () => ({ default: 'origin/main', branches: [...DEMO_BRANCHES] }),
-    createTask: (themeId, repoId, name, options = {}) =>
-      edit(themeId, (t) => {
+    createTask: async (themeId, repoId, name, options = {}) => {
+      const next = await edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind !== 'repo') throw new Error('Repository not found')
         const baseRef = options.baseRef || 'origin/main'
@@ -255,7 +324,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
           baseRef,
           createdAt: new Date().toISOString(),
         })
-      }),
+      })
+      const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
+      const task = repo?.kind === 'repo' ? repo.tasks.at(-1) : undefined
+      if (task) startClaude({ themeId, itemId: repoId, taskId: task.id }, true)
+      return next
+    },
     renameTask: (themeId, repoId, taskId, name) =>
       edit(themeId, (t) => {
         const repo = t.items.find((i) => i.id === repoId)
@@ -282,6 +356,71 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         if (budget === null) delete task.budgetUsd
         else task.budgetUsd = budget
       }),
+    setThemeProfile: (themeId, profileId) =>
+      edit(themeId, (t) => {
+        checkProfile(profileId)
+        if (profileId === null) delete t.profileId
+        else t.profileId = profileId
+      }),
+    setTaskProfile: (themeId, repoId, taskId, profileId) =>
+      edit(themeId, (t) => {
+        const task = taskIn(t, repoId, taskId)
+        checkProfile(profileId)
+        if (profileId === null) delete task.profileId
+        else task.profileId = profileId
+      }),
+    listProfiles: async () => profiles(),
+    // Checked like main; `~/` is the demo's home folder.
+    addProfile: async ({ name, configDir, billing }) => {
+      const dir = configDir.trim().replace(/^~\//, '/home/demo/')
+      checked(profileError({ name, configDir: dir }, profiles()))
+      checkBilling(billing)
+      if (settings.profiles.length >= MAX_PROFILES) throw new Error(`At most ${MAX_PROFILES} Claude accounts`)
+      const profile = { id: id(), name: name.trim(), configDir: normalizeConfigDir(dir), billing }
+      settings = { ...settings, profiles: [...settings.profiles, profile] }
+      return profiles()
+    },
+    updateProfile: async (profileId, { name, billing }) => {
+      const profile = profiles().find((p) => p.id === profileId)
+      if (!profile) throw new Error('Claude account not found')
+      if (billing !== undefined) checkBilling(billing)
+      if (profile.isDefault) {
+        if (name !== undefined) throw new Error("Default can't be renamed")
+        if (billing) settings = { ...settings, defaultProfileBilling: billing }
+        return profiles()
+      }
+      if (name !== undefined) {
+        checked(
+          profileError(
+            { name, configDir: profile.configDir },
+            profiles().filter((p) => p.id !== profileId),
+          ),
+        )
+      }
+      const edited = (p: ClaudeProfile): ClaudeProfile => ({
+        ...p,
+        name: name?.trim() ?? p.name,
+        billing: billing ?? p.billing,
+      })
+      settings = { ...settings, profiles: settings.profiles.map((p) => (p.id === profileId ? edited(p) : p)) }
+      return profiles()
+    },
+    removeProfile: async (profileId) => {
+      if (!profiles().some((p) => p.id === profileId)) throw new Error('Claude account not found')
+      if (profileId === DEFAULT_PROFILE_ID) throw new Error("Default can't be removed")
+      const users = profileUsers(profileId)
+      if (users.length > 0) throw new Error(`Used by ${users.slice(0, 3).join(', ')}${users.length > 3 ? ', …' : ''}`)
+      settings = { ...settings, profiles: settings.profiles.filter((p) => p.id !== profileId) }
+      return profiles()
+    },
+    // A new active `login` tab, like main.
+    loginProfile: async (profileId) => {
+      if (!profiles().some((p) => p.id === profileId)) throw new Error('Claude account not found')
+      const index = Math.max(-1, ...tabs.map((t) => t.index)) + 1
+      tabs.push({ index, name: 'login', active: true })
+      activate(index)
+      return clone(tabs)
+    },
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: async (themeId, repoId, taskId) => ({
       state: await edit(themeId, (t) => {
@@ -309,13 +448,19 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
         const repo = t.items.find((i) => i.id === repoId)
         if (repo?.kind === 'repo') repo.tasks = [...moveActiveTask(repo.tasks, taskId, toIndex)]
       }),
-    openTarget: async () => clone(tabs),
+    openTarget: async (target) => {
+      startClaude(target, false)
+      return clone(tabs)
+    },
     detachTerminal: async () => {},
     listTabs: async () => clone(tabs),
     newTab: async () => clone(tabs),
     selectTab: async () => clone(tabs),
     closeTab: async () => clone(tabs),
-    restartClaude: async () => clone(tabs),
+    restartClaude: async (target, options) => {
+      startClaude(target, options?.replace === true)
+      return clone(tabs)
+    },
     leaveCopyMode: async () => false,
     startRun: async (target) => run(target, false),
     restartRun: async (target) => run(target, true),
@@ -416,7 +561,8 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     getUsage: async (target) => demoUsage(targetKey(target)),
     getUsageReport: async () => demoUsageReport(state),
     getBudgets: async () => demoBudgets(state, settings),
-    getUsageFolder: async () => '/home/me/.claude/projects',
+    getUsageFolders: async () =>
+      profiles().map((p) => ({ profileId: p.id, name: p.name, folder: `${p.configDir}/projects` })),
     ptyWrite: () => {},
     ptyResize: () => {},
     pathForFile: (file) => `/demo/${file.name}`,

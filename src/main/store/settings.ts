@@ -18,8 +18,12 @@ const defaults = (): Settings => normalizeSettings(DEFAULT_SETTINGS)
 export class SettingsStore implements SettingsStoreApi {
   private readonly json: JsonFile<Settings>
 
-  constructor(file: string) {
-    this.json = new JsonFile(file, (data) => normalizeSettings(data), defaults)
+  /** `defaultProfileDir`: the Default Claude profile's folder, which no saved profile may have. */
+  constructor(
+    file: string,
+    private readonly defaultProfileDir?: string,
+  ) {
+    this.json = new JsonFile(file, (data) => normalizeSettings(data, DEFAULT_SETTINGS, defaultProfileDir), defaults)
   }
 
   async load(): Promise<Settings> {
@@ -31,7 +35,7 @@ export class SettingsStore implements SettingsStoreApi {
   }
 
   save(settings: Settings): Promise<void> {
-    return this.json.save(normalizeSettings(settings))
+    return this.json.save(normalizeSettings(settings, DEFAULT_SETTINGS, this.defaultProfileDir))
   }
 }
 

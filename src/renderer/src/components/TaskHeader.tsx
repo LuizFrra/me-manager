@@ -16,6 +16,7 @@ import {
   Square,
   SquareTerminal,
   StickyNote,
+  UserRound,
 } from 'lucide-react'
 import type { BudgetStatus, DevUrl, TaskGitStatus, UpdateStrategy, UsageSummary } from '../../../shared/types'
 import { GH_INSTALL_HINT } from '../../../shared/git'
@@ -261,6 +262,14 @@ export function TaskHeader(props: {
   onEditNotes?: () => void
   /** Set for tasks: "Set budget…" in the More actions menu, which opens the task's budget dialog. */
   onEditBudget?: () => void
+  /** Set for tasks while there are accounts to choose from: "Claude account…" in the More actions menu. */
+  onChooseProfile?: () => void
+  /**
+   * The Claude account new sessions start in, while there is more than one: a badge. `running` names the account
+   * Claude runs in when that differs (it started before a change), with a way to restart it in this one. `unknown`:
+   * the account chosen for it is no longer there, and `name` is the one used instead.
+   */
+  account?: { name: string; unknown?: boolean; running?: string; onRestart: () => void }
   /** Copy buttons (branch, path, attach command). */
   copies: CopyEntry[]
   onCopy: (entry: CopyEntry) => void
@@ -273,6 +282,8 @@ export function TaskHeader(props: {
   usage?: UsageSummary
   /** The task's budget against its all-time cost (see UsageBadge); null or absent when it has none. */
   budget?: BudgetStatus | null
+  /** Its usage is billed to a company (see UsageBadge's `company`): tokens only. */
+  usageCompany?: boolean
   onOpenUsage?: () => void
   /** A task's git status, once loaded, and the base ref it is compared with. */
   git?: TaskGitStatus
@@ -325,6 +336,36 @@ export function TaskHeader(props: {
                 ⚠ permissions skipped
               </span>
             )}
+            {props.account && (
+              <span className="account-badge-wrap">
+                {props.account.unknown ? (
+                  <span
+                    className="session-badge session-badge-warn"
+                    title={`The Claude account chosen for it no longer exists: new sessions start in ${props.account.name}`}
+                  >
+                    Account: unknown → {props.account.name}
+                  </span>
+                ) : (
+                  <span className="session-badge" title="The Claude account new sessions start in">
+                    Account: {props.account.name}
+                  </span>
+                )}
+                {props.account.running !== undefined && (
+                  <>
+                    <span className="account-pending" title={`Claude is still running in ${props.account.running}`}>
+                      (applies when Claude restarts)
+                    </span>
+                    <button
+                      className="link-button account-restart"
+                      aria-label={`Restart Claude in ${props.account.name}…`}
+                      onClick={props.account.onRestart}
+                    >
+                      Restart Claude
+                    </button>
+                  </>
+                )}
+              </span>
+            )}
           </div>
           <div className="task-subtitle" title={props.subtitle}>
             {props.subtitle}
@@ -342,7 +383,12 @@ export function TaskHeader(props: {
         <div className="task-header-actions">
           <div className="task-header-actions-row">
             {props.usage && props.onOpenUsage && (
-              <UsageBadge usage={props.usage} budget={props.budget} onOpen={props.onOpenUsage} />
+              <UsageBadge
+                usage={props.usage}
+                budget={props.budget}
+                company={props.usageCompany}
+                onOpen={props.onOpenUsage}
+              />
             )}
             <button
               className="header-btn"
@@ -369,6 +415,9 @@ export function TaskHeader(props: {
                   : []),
                 ...(props.onEditBudget
                   ? [{ label: 'Set budget…', icon: <CircleDollarSign {...ICON} />, run: props.onEditBudget }]
+                  : []),
+                ...(props.onChooseProfile
+                  ? [{ label: 'Claude account…', icon: <UserRound {...ICON} />, run: props.onChooseProfile }]
                   : []),
               ]}
             />

@@ -12,6 +12,7 @@ const hasTmux = await run('tmux', ['-V']).then(
   () => false,
 )
 const socket = `mm-test-${process.pid}-${Date.now()}`
+const savedClaudeDir = process.env.CLAUDE_CONFIG_DIR
 let svc: TmuxService
 let cwd: string
 
@@ -20,10 +21,13 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     cwd = await mkdtemp(join(tmpdir(), 'mm-tmux-'))
     // Set before the server starts so #() jobs (run by the server) see it; keeps the marker in our temp dir.
     process.env.MM_TEST_MARKER = join(cwd, 'PWNED')
+    // Nor in the server's global environment, so a session without one shows that it has none.
+    delete process.env.CLAUDE_CONFIG_DIR
     svc = new TmuxService(socket, join(cwd, 'tmux.conf'))
     await svc.ensureConfig()
   })
   afterAll(async () => {
+    if (savedClaudeDir !== undefined) process.env.CLAUDE_CONFIG_DIR = savedClaudeDir
     await run('tmux', ['-L', socket, 'kill-server']).catch(() => {})
     // tmux leaves the socket file behind when the server exits; remove it too.
     const uid = process.getuid?.()
@@ -339,6 +343,13 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     return id ? svc.captureTail(id, lines) : null
   }
 
+  /** The last lines of the window named `name` once they include `text` (or after 5 s). */
+  const shownIn = (session: string, name: string, text: string): Promise<string | null> =>
+    until(
+      () => tailOf(session, name),
+      (t) => t?.includes(text) ?? false,
+    )
+
   /** A session of its own with a finished `run` window, so each test stands alone. */
   const withRunWindow = async (session: string): Promise<string> => {
     await svc.newSession(session, cwd, 'claude', 'sh')
@@ -472,6 +483,93 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await expect(svc.listWindowActivity(session)).resolves.toEqual([])
   })
 
+  it('starts a session with the given environment, taken literally', async () => {
+    const session = 'mmt_env_x_y'
+    const show = `printf '[%s] [%s]\\n' "$CLAUDE_CONFIG_DIR" "$MM_HASH"; exec cat`
+    // `#` and `#{}` are no tmux formats in -e values, and backslashes are kept: they reach the process as typed.
+    const env = { CLAUDE_CONFIG_DIR: '/x y/z', MM_HASH: 'a ## #{session_name} #S \\; \\' }
+    await svc.newSession(session, cwd, 'claude', show, env)
+    expect(await shownIn(session, 'claude', '[/x y/z]')).toContain('[/x y/z] [a ## #{session_name} #S \\; \\]')
+    // Its windows get the session's environment.
+    await svc.newWindow(session, cwd, 'plain', show)
+    expect(await shownIn(session, 'plain', '[/x y/z]')).toContain('[/x y/z] [a ## #{session_name} #S \\; \\]')
+    await svc.killSession(session)
+  })
+
+  it("sets or removes the session's variables in the same call that opens or respawns a window", async () => {
+    const session = 'mmt_envsync_x_y'
+    const show = `printf '[%s]\\n' "\${CLAUDE_CONFIG_DIR-unset}"; exec cat`
+    await svc.newSession(session, cwd, 'claude', show, { CLAUDE_CONFIG_DIR: '/p' })
+    expect(await shownIn(session, 'claude', '[/p]')).toContain('[/p]')
+    // One tmux call each, so no other call can change the session's environment in between.
+    const calls = vi.spyOn(svc as unknown as { tmux: (args: string[]) => Promise<string> }, 'tmux')
+    // Back to Default: no CLAUDE_CONFIG_DIR at all, not even an empty one, for this window and the next ones.
+    await svc.newWindow(session, cwd, 'default', show, { env: { CLAUDE_CONFIG_DIR: null } })
+    expect(await shownIn(session, 'default', '[unset]')).toContain('[unset]')
+    await svc.newWindow(session, cwd, 'next', show)
+    expect(await shownIn(session, 'next', '[unset]')).toContain('[unset]')
+    // Another profile, taken literally; with remain-on-exit too.
+    await svc.newWindow(session, cwd, 'run', show, {
+      env: { CLAUDE_CONFIG_DIR: '/q r/#{session_name} #S' },
+      remainOnExit: true,
+    })
+    expect(await shownIn(session, 'run', '[/q r/')).toContain('[/q r/#{session_name} #S]')
+    await svc.respawnWindow(session, 'run', cwd, show, { CLAUDE_CONFIG_DIR: '/own' })
+    expect(await shownIn(session, 'run', '[/own]')).toContain('[/own]')
+    await svc.respawnWindow(session, 'run', cwd, show, { CLAUDE_CONFIG_DIR: null })
+    expect(await shownIn(session, 'run', '[unset]')).toContain('[unset]')
+    const changing = calls.mock.calls.map(([args]) => args).filter((args) => args.includes('set-environment'))
+    expect(changing.map((args) => args.filter((a) => /^(set-environment|new-window|respawn-window)$/.test(a)))).toEqual(
+      [
+        ['set-environment', 'new-window'],
+        ['set-environment', 'new-window'],
+        ['set-environment', 'respawn-window'],
+        ['set-environment', 'respawn-window'],
+      ],
+    )
+    calls.mockRestore()
+    await svc.killSession(session)
+  })
+
+  it("gives one window its own variables, leaving the session's as they are", async () => {
+    const session = 'mmt_winenv_x_y'
+    const show = `printf '[%s]\\n' "\${CLAUDE_CONFIG_DIR-unset}"; exec cat`
+    await svc.newSession(session, cwd, 'claude', show, { CLAUDE_CONFIG_DIR: '/p' })
+    expect(await shownIn(session, 'claude', '[/p]')).toContain('[/p]')
+    await svc.newWindow(session, cwd, 'login', show, { windowEnv: { CLAUDE_CONFIG_DIR: '/q r/#{session_name} #S' } })
+    expect(await shownIn(session, 'login', '[/q r/')).toContain('[/q r/#{session_name} #S]')
+    // The next window gets the session's again.
+    await svc.newWindow(session, cwd, 'next', show)
+    expect(await shownIn(session, 'next', '[/p]')).toContain('[/p]')
+    const own = await run('tmux', ['-L', socket, 'show-environment', '-t', session, 'CLAUDE_CONFIG_DIR'])
+    expect(own).toBe('CLAUDE_CONFIG_DIR=/p\n')
+    await svc.killSession(session)
+  })
+
+  it('refuses an environment variable name that is not one, and a value ending in ;', async () => {
+    for (const key of ['A=B', 'lower', '1ST', '', 'A B']) {
+      await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { [key]: 'x' })).rejects.toThrow(
+        /environment variable/i,
+      )
+      await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { [key]: null } })).rejects.toThrow(
+        /environment variable/i,
+      )
+      await expect(svc.respawnWindow('mmt_envbad_x_y', 'w', cwd, 'sh', { [key]: 'x' })).rejects.toThrow(
+        /environment variable/i,
+      )
+      await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { windowEnv: { [key]: 'x' } })).rejects.toThrow(
+        /environment variable/i,
+      )
+    }
+    // tmux would read the ; as the end of its command.
+    await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { A: '/x;' })).rejects.toThrow(/end in ;/)
+    await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { A: '/x;' } })).rejects.toThrow(/end in ;/)
+    await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { windowEnv: { A: '/x;' } })).rejects.toThrow(
+      /end in ;/,
+    )
+    await expect(svc.hasSession('mmt_envbad_x_y')).resolves.toBe(false)
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)
@@ -502,6 +600,35 @@ describe('TmuxService timeouts', () => {
       await expect(hung.sendText('s', 'claude', 'hi')).rejects.toThrow(/timed out/)
       await expect(hung.newSession('s', bin, 'claude', 'sh')).rejects.toThrow(/timed out/)
       expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      process.env.PATH = savedPath
+    }
+  })
+})
+
+describe('TmuxService on a tmux older than 3.2', () => {
+  const savedPath = process.env.PATH
+  let bin: string
+  beforeAll(async () => {
+    bin = await mkdtemp(join(tmpdir(), 'mm-tmux-old-'))
+    // tmux 3.0 and 3.1 know no `new-session -e`: they print the command's usage.
+    const usage = 'usage: new-session [-AdDEPX] [-c start-directory] [-F format] [-n window-name] [-s session-name]'
+    await writeFile(join(bin, 'tmux'), `#!/bin/sh\necho '${usage}' >&2\nexit 1\n`, { mode: 0o755 })
+  })
+  afterAll(async () => {
+    process.env.PATH = savedPath
+    await rm(bin, { recursive: true, force: true })
+  })
+
+  it('says a profile needs a newer tmux when a session with an environment is refused', async () => {
+    const old = new TmuxService('mm-old', join(bin, 'tmux.conf'))
+    process.env.PATH = `${bin}:${savedPath}`
+    try {
+      await expect(old.newSession('s', bin, 'claude', 'sh', { CLAUDE_CONFIG_DIR: '/p' })).rejects.toThrow(
+        'Claude accounts other than Default need tmux 3.2 or newer',
+      )
+      // Without an environment, the usage error is tmux's own.
+      await expect(old.newSession('s', bin, 'claude', 'sh')).rejects.toThrow(/usage: new-session/)
     } finally {
       process.env.PATH = savedPath
     }

@@ -1,8 +1,11 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { MAX_TASK_TEMPLATES } from '../../../shared/templates'
+import { createMockApi } from '../api/mockApi'
 import { SettingsDialog } from './SettingsDialog'
 
 describe('SettingsDialog: Remote Control and permissions', () => {
@@ -357,5 +360,201 @@ describe('SettingsDialog: while saving', () => {
     await user.keyboard('{Escape}{Escape}')
     expect(onCancel).not.toHaveBeenCalled()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsDialog: Claude accounts', () => {
+  const target = { themeId: 't1', itemId: 'r1', taskId: 'k1' }
+  const setup = async (
+    api = createMockApi(),
+    accountTarget: { target: typeof target; label: string } | null = { target, label: 'fix-login' },
+  ): Promise<{ user: ReturnType<typeof userEvent.setup>; onChange: ReturnType<typeof vi.fn> }> => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(
+      <SettingsDialog
+        settings={DEFAULT_SETTINGS}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        accounts={{ api, target: accountTarget, onChange, onLogin: vi.fn() }}
+      />,
+    )
+    await screen.findByRole('listitem', { name: 'Default' })
+    return { user, onChange }
+  }
+  const section = (): HTMLElement => screen.getByRole('region', { name: 'Claude accounts' })
+
+  it('lists Default first, with its folder and login state, and no Rename or Remove', async () => {
+    const api = createMockApi()
+    await api.addProfile({ name: 'Work', configDir: '/home/demo/.claude-work', billing: 'company' })
+    await setup(api)
+    const rows = within(section()).getAllByRole('listitem')
+    expect(rows.map((r) => r.getAttribute('aria-label'))).toEqual(['Default', 'Work'])
+    expect(rows[0]).toHaveTextContent('/home/demo/.claude')
+    expect(rows[0]).toHaveTextContent('Signed in')
+    expect(within(rows[0]).queryByRole('button', { name: /Rename/ })).not.toBeInTheDocument()
+    expect(within(rows[0]).queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+    expect(rows[1]).toHaveTextContent('Not signed in')
+    expect(within(rows[1]).getByRole('combobox', { name: 'Billing for Work' })).toHaveValue('company')
+  })
+
+  it('adds an account, suggesting its folder from the name until the folder is edited', async () => {
+    const api = createMockApi()
+    const addProfile = vi.spyOn(api, 'addProfile')
+    const { user, onChange } = await setup(api)
+    await user.click(within(section()).getByRole('button', { name: 'Add account' }))
+    await user.type(screen.getByLabelText('Account name'), 'My Work')
+    expect(screen.getByLabelText('Folder')).toHaveValue('~/.claude-my-work')
+    await user.selectOptions(screen.getByLabelText('Billing'), 'company')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    expect(addProfile).toHaveBeenCalledWith({ name: 'My Work', configDir: '~/.claude-my-work', billing: 'company' })
+    expect(await within(section()).findByRole('listitem', { name: 'My Work' })).toHaveTextContent(
+      '/home/demo/.claude-my-work',
+    )
+    expect(onChange).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ name: 'My Work' })]))
+  })
+
+  it("checks the new account as it is typed, and shows main's refusal inline", async () => {
+    const api = createMockApi({ addProfile: vi.fn(async () => Promise.reject(new Error('Could not create it'))) })
+    const { user } = await setup(api)
+    await user.click(within(section()).getByRole('button', { name: 'Add account' }))
+    await user.type(screen.getByLabelText('Account name'), 'default')
+    expect(screen.getByText('Another account is named “Default”')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled()
+    await user.clear(screen.getByLabelText('Account name'))
+    await user.type(screen.getByLabelText('Account name'), 'Work')
+    await user.clear(screen.getByLabelText('Folder'))
+    await user.type(screen.getByLabelText('Folder'), 'relative')
+    expect(screen.getByText('Choose an absolute folder (starting with /)')).toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Folder'))
+    await user.type(screen.getByLabelText('Folder'), '/home/demo/w{Enter}')
+    expect(await screen.findByText('Could not create it')).toBeInTheDocument()
+    expect(screen.getByLabelText('Account name')).toHaveValue('Work')
+  })
+
+  it("shows main's refusal to remove an account in use", async () => {
+    const api = createMockApi()
+    const [, work] = await api.addProfile({ name: 'Work', configDir: '/w', billing: 'own' })
+    const { themes } = await api.createTheme('Acme')
+    await api.setThemeProfile(themes[0].id, work.id)
+    const { user } = await setup(api)
+    const row = within(section()).getByRole('listitem', { name: 'Work' })
+    await user.click(within(row).getByRole('button', { name: 'Remove Work' }))
+    await user.click(within(row).getByRole('button', { name: 'Remove account' }))
+    expect(await within(row).findByText('Used by Acme')).toBeInTheDocument()
+    expect(within(section()).getByRole('listitem', { name: 'Work' })).toBeInTheDocument()
+  })
+
+  it('removes and renames an account', async () => {
+    const api = createMockApi()
+    await api.addProfile({ name: 'Work', configDir: '/w', billing: 'own' })
+    await api.addProfile({ name: 'Old', configDir: '/o', billing: 'own' })
+    const removeProfile = vi.spyOn(api, 'removeProfile')
+    const { user } = await setup(api)
+    // Asked first: what removing it does to the usage. Cancel keeps it, with the focus back on Remove.
+    await user.click(within(section()).getByRole('button', { name: 'Remove Old' }))
+    const ask = within(section()).getByRole('group', { name: 'Remove Old?' })
+    expect(ask).toHaveTextContent(
+      'Its usage history leaves the usage totals and budgets, as its folder is no longer read. The folder itself stays as it is.',
+    )
+    expect(within(ask).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(within(section()).queryByRole('group', { name: 'Remove Old?' })).not.toBeInTheDocument()
+    expect(within(section()).getByRole('button', { name: 'Remove Old' })).toHaveFocus()
+    expect(removeProfile).not.toHaveBeenCalled()
+    await user.click(within(section()).getByRole('button', { name: 'Remove Old' }))
+    await user.click(within(section()).getByRole('button', { name: 'Remove account' }))
+    await waitFor(() => expect(within(section()).queryByRole('listitem', { name: 'Old' })).not.toBeInTheDocument())
+    await waitFor(() => expect(within(section()).getByRole('button', { name: 'Add account' })).toHaveFocus())
+    await user.click(within(section()).getByRole('button', { name: 'Rename Work' }))
+    const input = screen.getByRole('textbox', { name: 'New name for Work' })
+    await user.clear(input)
+    await user.type(input, 'Job{Enter}')
+    expect(await within(section()).findByRole('listitem', { name: 'Job' })).toBeInTheDocument()
+    expect(within(section()).getByRole('button', { name: 'Rename Job' })).toHaveFocus()
+    // Esc and Cancel give the focus back to Rename too, leaving the name as it was.
+    await user.click(within(section()).getByRole('button', { name: 'Rename Job' }))
+    await user.keyboard('x{Escape}')
+    expect(within(section()).getByRole('button', { name: 'Rename Job' })).toHaveFocus()
+    await user.click(within(section()).getByRole('button', { name: 'Rename Job' }))
+    await user.click(within(section()).getByRole('button', { name: 'Cancel' }))
+    expect(within(section()).getByRole('button', { name: 'Rename Job' })).toHaveFocus()
+    expect(within(section()).getByRole('listitem', { name: 'Job' })).toBeInTheDocument()
+  })
+
+  it('changes who pays for an account, Default included', async () => {
+    const api = createMockApi()
+    const updateProfile = vi.spyOn(api, 'updateProfile')
+    const { user } = await setup(api)
+    await user.selectOptions(within(section()).getByRole('combobox', { name: 'Billing for Default' }), 'company')
+    expect(updateProfile).toHaveBeenCalledWith('default', { billing: 'company' })
+    await waitFor(() =>
+      expect(within(section()).getByRole('combobox', { name: 'Billing for Default' })).toHaveValue('company'),
+    )
+  })
+
+  it('logs in in the selected task or folder', async () => {
+    const api = createMockApi()
+    const loginProfile = vi.spyOn(api, 'loginProfile')
+    const { user } = await setup(api)
+    await user.click(within(section()).getByRole('button', { name: 'Log in to Default' }))
+    expect(loginProfile).toHaveBeenCalledWith('default', target)
+    expect(await within(section()).findByText(/Opened a “login” tab in fix-login/)).toBeInTheDocument()
+  })
+
+  it('says to open a task or folder first when none is selected', async () => {
+    await setup(createMockApi(), null)
+    expect(within(section()).getByRole('button', { name: 'Log in to Default' })).toBeDisabled()
+    expect(section()).toHaveTextContent('Open a task or folder first: the login runs in its terminal.')
+  })
+
+  it('reads the login states again when the window gets the focus back', async () => {
+    const api = createMockApi()
+    await api.addProfile({ name: 'Work', configDir: '/w', billing: 'own' })
+    const listProfiles = api.listProfiles
+    const { onChange } = await setup(api)
+    const work = (): HTMLElement => within(section()).getByRole('listitem', { name: 'Work' })
+    expect(work()).toHaveTextContent('Not signed in')
+    // A /login in a terminal meanwhile.
+    api.listProfiles = async () =>
+      (await listProfiles()).map((p) => (p.name === 'Work' ? { ...p, login: 'signedIn' as const } : p))
+    fireEvent.focus(window)
+    await waitFor(() => expect(work()).toHaveTextContent('Signed in'))
+    expect(work()).not.toHaveTextContent('Not signed in')
+    expect(onChange).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ login: 'signedIn' })]))
+  })
+
+  it('lets the list grow with the dialog, which scrolls, instead of scrolling inside it', async () => {
+    const style = document.createElement('style')
+    style.textContent = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+    document.head.append(style)
+    try {
+      await setup()
+      const list = within(section()).getByRole('list')
+      expect(getComputedStyle(list).maxHeight).toBe('none')
+      expect(getComputedStyle(list).overflowY).not.toBe('auto')
+    } finally {
+      style.remove()
+    }
+  })
+
+  it("keeps Esc and Enter in the accounts' fields to themselves", async () => {
+    const api = createMockApi()
+    const onCancel = vi.fn()
+    const onSave = vi.fn(async () => {})
+    const user = userEvent.setup()
+    render(
+      <SettingsDialog
+        settings={DEFAULT_SETTINGS}
+        onSave={onSave}
+        onCancel={onCancel}
+        accounts={{ api, target: null, onChange: vi.fn(), onLogin: vi.fn() }}
+      />,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Add account' }))
+    await user.type(screen.getByLabelText('Account name'), 'x{Escape}')
+    expect(screen.queryByLabelText('Account name')).not.toBeInTheDocument()
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(onSave).not.toHaveBeenCalled()
   })
 })

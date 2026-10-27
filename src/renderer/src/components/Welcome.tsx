@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, FolderDown, FolderGit2, GitBranch, Layers, Plus, Search } from 'lucide-react'
-import { MAX_TASK_PROMPT, type AppState, type LiveStatus, type Target } from '../../../shared/types'
+import { MAX_TASK_PROMPT, type AppState, type LiveStatus, type ProfileStatus, type Target } from '../../../shared/types'
 import { targetKey } from '../../../shared/naming'
 import { waitingTargets } from '../lib/attention'
 import { defaultRepo, greeting, repoChoices, taskNameFromPrompt } from '../lib/composer'
@@ -10,6 +10,12 @@ import { shortcutLabel } from '../lib/shortcuts'
 import { startVisibleInterval } from '../lib/visibleInterval'
 import { ICON } from '../lib/icon'
 import { Spark } from './icons'
+
+/**
+ * The Claude account a new task in a theme starts in (its theme's), while there is more than one; undefined
+ * otherwise.
+ */
+export type AccountOf = (themeId: string) => Pick<ProfileStatus, 'name' | 'login'> | undefined
 
 export interface StartActions {
   onCreateTheme: () => void
@@ -148,6 +154,7 @@ function Composer(p: {
   onStart: (themeId: string, repoId: string, prompt: string) => Promise<boolean>
   /** Opens the New task dialog (base branch, templates) with what the composer holds. */
   onMoreOptions: (themeId: string, repoId: string, prompt: string) => void
+  accountOf?: AccountOf
 }): React.JSX.Element {
   const choices = repoChoices(p.state)
   const [choice, setChoice] = useState(() => {
@@ -166,6 +173,7 @@ function Composer(p: {
     ? p.state.themes.find((t) => t.id === current.themeId)?.items.find((i) => i.id === current.repoId)
     : undefined
   const taken = repo?.kind === 'repo' ? repo.tasks.map((t) => t.slug) : []
+  const account = current && p.accountOf?.(current.themeId)
   const text = prompt.trim()
   const tooLong = text.length > MAX_TASK_PROMPT
   const name = text ? taskNameFromPrompt(text, taken) : ''
@@ -216,6 +224,14 @@ function Composer(p: {
             ))}
           </select>
         </span>
+        {account && (
+          <span
+            className="composer-account"
+            title={`The new task starts in the Claude account ${account.name}${account.login === 'notSignedIn' ? ' (not signed in)' : ''}`}
+          >
+            Account: {account.name}
+          </span>
+        )}
         <span className="composer-name" aria-live={busy || tooLong ? 'polite' : 'off'}>
           {busy ? (
             'Creating the worktree…'
@@ -264,6 +280,7 @@ export function Home(
     onMoreTaskOptions: (themeId: string, repoId: string, prompt: string) => void
     /** Bumped to focus the composer (New task). */
     composerFocus: number
+    accountOf?: AccountOf
   },
 ): React.JSX.Element {
   const recent = recentTasks(p.state)
@@ -283,6 +300,7 @@ export function Home(
             focus={p.composerFocus}
             onStart={p.onStartTask}
             onMoreOptions={p.onMoreTaskOptions}
+            accountOf={p.accountOf}
           />
         ) : (
           <p className="home-title">Add a repository to start tasks, or select a folder in the sidebar.</p>

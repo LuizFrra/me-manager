@@ -28,12 +28,20 @@ const custom: Settings = {
   dailyBudgetUsd: 20,
   taskBudgetUsd: 2.5,
   appearance: 'light',
+  profiles: [{ id: 'p1', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }],
+  defaultProfileBilling: 'company',
 }
 
 describe('SettingsStore', () => {
-  it('loads a settings file from before task templates and budgets unchanged, with none of them', async () => {
-    const { taskTemplates, dailyBudgetUsd, taskBudgetUsd, ...old } = custom
-    expect([taskTemplates, dailyBudgetUsd, taskBudgetUsd]).toEqual([expect.any(Array), 20, 2.5])
+  it('loads a settings file from before task templates, budgets and profiles unchanged, with none of them', async () => {
+    const { taskTemplates, dailyBudgetUsd, taskBudgetUsd, profiles, defaultProfileBilling, ...old } = custom
+    expect([taskTemplates, dailyBudgetUsd, taskBudgetUsd, profiles, defaultProfileBilling]).toEqual([
+      expect.any(Array),
+      20,
+      2.5,
+      expect.any(Array),
+      'company',
+    ])
     await new SettingsStore(file).save(DEFAULT_SETTINGS) // creates the folder
     await writeFile(file, JSON.stringify(old), 'utf8')
     await expect(new SettingsStore(file).load()).resolves.toEqual({
@@ -41,6 +49,8 @@ describe('SettingsStore', () => {
       taskTemplates: [],
       dailyBudgetUsd: null,
       taskBudgetUsd: null,
+      profiles: [],
+      defaultProfileBilling: 'own',
     })
   })
 
@@ -75,6 +85,18 @@ describe('SettingsStore', () => {
       'utf8',
     )
     await expect(store.load()).resolves.toEqual({ ...DEFAULT_SETTINGS, claudeArgs: ['-v'], pollIntervalMs: 1000 })
+  })
+
+  it("drops a profile in the Default profile's folder, or with . or .. in it, when it loads", async () => {
+    const store = new SettingsStore(file, '/home/me/.claude')
+    await store.save(DEFAULT_SETTINGS)
+    const profiles = [
+      { id: 'p1', name: 'Same', configDir: '/home/me/.claude', billing: 'own' },
+      { id: 'p2', name: 'Dots', configDir: '/home/me/../me/.claude-x', billing: 'own' },
+      { id: 'p3', name: 'Work', configDir: '/home/me/.claude-work', billing: 'own' },
+    ]
+    await writeFile(file, JSON.stringify({ profiles }), 'utf8')
+    expect((await store.load()).profiles.map((p) => p.id)).toEqual(['p3'])
   })
 
   it('writes only known keys', async () => {

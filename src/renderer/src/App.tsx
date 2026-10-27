@@ -10,6 +10,7 @@ import type {
   MeManagerApi,
   NewTaskOptions,
   PrereqResult,
+  ProfileStatus,
   Settings,
   TabInfo,
   Target,
@@ -26,6 +27,8 @@ import type {
 import { hasUnsavedWork, isArchived, MAX_TRANSCRIPT_BYTES } from '../../shared/types'
 import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
 import { targetKey } from '../../shared/naming'
+import { usageTokens } from '../../shared/usage'
+import { DEFAULT_PROFILE_ID } from '../../shared/profiles'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { Sidebar } from './components/Sidebar'
@@ -48,6 +51,8 @@ import {
   NameDialog,
   NewTaskDialog,
   NotesDialog,
+  ProfileDialog,
+  RestartClaudeDialog,
   RemoveTaskDialog,
   ReviewCommentDialog,
   RunCommandDialog,
@@ -62,6 +67,7 @@ import { withStableCallbacks } from './lib/stableCallbacks'
 import { describeTarget, resolveTarget } from './lib/describe'
 import { copyEntries, type CopyEntry, type CopyKind } from './lib/copy'
 import { cleanError, useToasts } from './lib/toasts'
+import { targetAccount, targetProfile } from './lib/profiles'
 import { formatCost } from './lib/usageFormat'
 import { GIT_ACTION_BUSY, type GitActionKind } from './lib/gitActions'
 import { archiveSkipReason, bulkSummary, runLimited, type BulkAction, type BulkOutcome, type Settled } from './lib/bulk'
@@ -157,6 +163,21 @@ type DialogBody =
     }
   /** A task's own budget; `initial` is null when it has none. */
   | { kind: 'budget'; target: Target; taskName: string; initial: number | null }
+  /** Restarts the target's running Claude, in account `from`, in its current one, `to`. */
+  | { kind: 'restartClaude'; target: Target; name: string; from: string; to: string }
+  /**
+   * The Claude account of a theme, or of a task (with `itemId` and `taskId`, and `inherit` naming its theme's);
+   * `initial` is the profile id set now, null for none.
+   */
+  | {
+      kind: 'profile'
+      themeId: string
+      itemId?: string
+      taskId?: string
+      name: string
+      inherit?: string
+      initial: string | null
+    }
   | { kind: 'chooseTheme'; title: string; onChoose: (themeId: string) => void }
   | {
       kind: 'confirmRemove'
@@ -500,6 +521,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const gitBusyRef = useRef<Record<string, GitActionKind>>({})
   // The defaults until main answers; the poll interval and terminal font size follow it.
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  // The Claude profiles (Default first), with their login state when last read; [] until main answers.
+  const [profiles, setProfiles] = useState<ProfileStatus[]>([])
+  // Accounts to choose from: only then do themes and tasks offer "Claude account…" and name theirs.
+  const multipleProfiles = profiles.length > 1
   // 'system' until main answers, which already matches: prefers-color-scheme follows main's nativeTheme.themeSource.
   const appearance = useDocumentAppearance(settings.appearance)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
@@ -798,6 +823,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     api.getTmuxSocket().then(setTmuxSocket, () => {}) // without it, only the attach command is missing
     api.getGitTools().then(setGitTools, () => {}) // without it, "PR" says gh is missing
     void attempt(async () => setSettings(await api.getSettings()))
+    api.listProfiles().then(setProfiles, () => {}) // without them, only the account badges are missing
   }, [api, attempt, checkPrereqs])
 
   const pollMs = settings.pollIntervalMs
@@ -850,6 +876,59 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
     setTabs(result ?? [])
     refresh()
+    if (result) void warnAboutAccount(target, known)
+  }
+
+  // Targets already warned about their account, by what was said, targetKey and profile id: once per run each.
+  const accountWarned = useRef(new Set<string>())
+  /**
+   * After a task or folder opened (its Claude started, or was already running), a toast about its account: when
+   * the one chosen for it is no longer there ("Choose…" opens the choice where that id is), or when it is one the
+   * user added that has no login in its folder ("Log in"). Default is left alone, as before accounts existed (its
+   * login may come from elsewhere, an API key in the environment say), without reading the profiles; otherwise they
+   * are read again, for their login state. `known`: the state the target was opened from (a task just created may
+   * not be in stateRef yet).
+   */
+  const warnAboutAccount = async (target: Target, known: AppState): Promise<void> => {
+    const found = resolveTarget(known, target)
+    if (!found || (found.task?.profileId ?? found.theme.profileId ?? DEFAULT_PROFILE_ID) === DEFAULT_PROFILE_ID) return
+    const list = await api.listProfiles().catch(() => undefined)
+    if (!list) return
+    setProfiles(list)
+    const account = targetAccount(known, list, target)
+    if (!account) return
+    const { profile, fellBack } = account
+    const once = (what: string): boolean => {
+      const key = `${what} ${targetKey(target)} ${profile.id}`
+      if (accountWarned.current.has(key)) return false
+      accountWarned.current.add(key)
+      return true
+    }
+    if (fellBack) {
+      if (!once('unknown')) return
+      const name = found.task?.name ?? found.item.name
+      // The task's own choice when that is the unknown one, else its theme's.
+      const taskUnknown = found.task?.profileId !== undefined && !list.some((p) => p.id === found.task?.profileId)
+      showInfo(`The Claude account of ${name} no longer exists: it runs in ${profile.name}`, {
+        warning: true,
+        action: {
+          label: 'Choose…',
+          run: () => chooseProfile(taskUnknown ? target : { themeId: target.themeId }),
+        },
+      })
+      return
+    }
+    if (profile.isDefault || profile.login !== 'notSignedIn' || !once('signedOut')) return
+    showInfo(`Claude account “${profile.name}” isn’t signed in`, {
+      warning: true,
+      action: { label: 'Log in', run: () => loginIn(target, profile.id) },
+    })
+  }
+
+  /** Opens a login tab for the profile in the target's session (see loginProfile), shown if it is still selected. */
+  const loginIn = async (target: Target, profileId: string): Promise<void> => {
+    const tabs = await attempt(() => api.loginProfile(profileId, target))
+    if (tabs && sameTarget(selectedRef.current, target)) setTabs(tabs)
   }
 
   // The UI as it was left (ui-state.json in main): restored once at start, then saved debounced and on unload.
@@ -1103,6 +1182,71 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         ? `Removed the budget of ${dialog.taskName}`
         : `Set the budget of ${dialog.taskName} to ${formatCost(budgetUsd)}`,
     )
+  }
+
+  /**
+   * "Claude account…" of a theme, or of a task with `itemId` and `taskId`. The profiles are read again meanwhile, as
+   * their login state may have changed since.
+   */
+  const chooseProfile = (target: { themeId: string; itemId?: string; taskId?: string }): void => {
+    const theme = state.themes.find((t) => t.id === target.themeId)
+    const task = target.itemId && target.taskId ? resolveTarget(state, target as Target)?.task : undefined
+    if (!theme || (target.taskId && (!task || isArchived(task)))) return
+    api.listProfiles().then(setProfiles, () => {}) // the dialog shows what is known meanwhile
+    const inherited = targetProfile(state, profiles, { themeId: theme.id })
+    openDialog({
+      kind: 'profile',
+      ...target,
+      name: task?.name ?? theme.name,
+      ...(task ? { inherit: `Use the theme’s (${inherited?.name ?? 'Default'})` } : {}),
+      initial: (task ? task.profileId : theme.profileId) ?? null,
+    })
+  }
+
+  const saveProfile = async (dialog: Extract<Dialog, { kind: 'profile' }>, profileId: string | null): Promise<void> => {
+    const { themeId, itemId, taskId } = dialog
+    const next = await update(() =>
+      itemId && taskId
+        ? api.setTaskProfile(themeId, itemId, taskId, profileId)
+        : api.setThemeProfile(themeId, profileId),
+    )
+    if (!next) return
+    closeDialog(dialog.id)
+    const now = targetProfile(next, profiles, { themeId, itemId, taskId })
+    if (now) showInfo(`${dialog.name} uses the Claude account ${now.name}`)
+  }
+
+  /**
+   * The selected target's account, and the one its Claude runs in when that differs, while there is more than one
+   * account. The running Claude's is known only for one this run of the app started (LiveStatus.claudeProfiles).
+   */
+  const targetAccounts = (
+    target: Target,
+  ): { current: ProfileStatus; unknown: boolean; running?: string } | undefined => {
+    const account = targetAccount(state, profiles, target)
+    // Shown with several accounts, or when the one chosen is no longer there, even if Default is all that is left.
+    if (!account || !(multipleProfiles || account.fellBack)) return undefined
+    const { profile: current, fellBack: unknown } = account
+    const runningId = status.claudeProfiles?.[targetKey(target)]
+    if (runningId === undefined || runningId === current.id) return { current, unknown }
+    return { current, unknown, running: profiles.find((p) => p.id === runningId)?.name ?? 'a removed account' }
+  }
+
+  /** The header's Restart Claude, beside an account that applies when Claude restarts. */
+  const askRestartInAccount = (): void => {
+    const target = selectedRef.current
+    const accounts = target && targetAccounts(target)
+    const name = target && describeTarget(state, target)?.title
+    if (!target || !accounts?.running || !name) return
+    openDialog({ kind: 'restartClaude', target, name, from: accounts.running, to: accounts.current.name })
+  }
+
+  const restartInAccount = async (dialog: Extract<Dialog, { kind: 'restartClaude' }>): Promise<void> => {
+    const tabs = await attempt(() => api.restartClaude(dialog.target, { replace: true }))
+    if (!tabs) return
+    closeDialog(dialog.id)
+    if (sameTarget(selectedRef.current, dialog.target)) setTabs(tabs)
+    refresh()
   }
 
   const update = async (fn: () => Promise<AppState>): Promise<AppState | undefined> => {
@@ -1457,7 +1601,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const task = created?.kind === 'repo' ? created.tasks.find((t) => t.name === name) : undefined
     // Opened unless the user went elsewhere meanwhile; the new task is in the sidebar either way.
     const movedOn = selectedRef.current !== null || modalEpoch.current !== epoch || overlayOpenRef.current
-    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id }, { state: next })
     return true
   }
 
@@ -1486,7 +1630,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     closeDialog(dialogId)
     const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
     const task = repo?.kind === 'repo' ? repo.tasks.find((t) => t.name === name) : undefined
-    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id }, { state: next })
   }
 
   // Terminal zoom applies at once and is saved debounced; a size still waiting is saved if the App unmounts.
@@ -2126,6 +2270,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const modalOpen = dialog !== null || overlayOpen
 
   const header = selected ? describeTarget(state, selected) : null
+  const accounts = selected ? targetAccounts(selected) : undefined
   const selectedTask = selected ? resolveTarget(state, selected)?.task : undefined
   const item = selected
     ? state.themes.find((t) => t.id === selected.themeId)?.items.find((i) => i.id === selected.itemId)
@@ -2137,6 +2282,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     selected && selectedTask && !isArchived(selectedTask) && usage?.key === targetKey(selected)
       ? budgetStatus(usage.summary.all.cost, effectiveTaskBudget(selectedTask, settings))
       : null
+  // The usage badge shows tokens only for a target billed to a company: its account is, or all its usage was.
+  const usageCompany =
+    selected !== null &&
+    (targetProfile(state, profiles, selected)?.billing === 'company' ||
+      (usage?.key === targetKey(selected) && usage.summary.all.companyTokens > 0 && usage.summary.all.cost === 0))
 
   // Everything below can read the resolved appearance (the terminal and Mermaid need it; CSS uses the root attribute).
   const content = (
@@ -2160,6 +2310,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
         onNewTask={goHome}
         onRenameTheme={renameTheme}
         onCustomizeTheme={customizeTheme}
+        onChooseProfile={multipleProfiles ? (themeId) => chooseProfile({ themeId }) : undefined}
         onRemoveTheme={removeTheme}
         onAddRepo={(themeId) => void addPath(themeId, api.addRepo)}
         onCloneRepo={cloneRepo}
@@ -2206,6 +2357,15 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               notes={selectedTask?.notes}
               onEditNotes={selectedTask ? () => editNotes(selected) : undefined}
               onEditBudget={selectedTask ? editTaskBudget : undefined}
+              onChooseProfile={selectedTask && multipleProfiles ? () => chooseProfile(selected) : undefined}
+              account={
+                accounts && {
+                  name: accounts.current.name,
+                  unknown: accounts.unknown,
+                  running: accounts.running,
+                  onRestart: askRestartInAccount,
+                }
+              }
               copies={copiesFor(selected)}
               onCopy={(entry) => void copy(entry)}
               onOpenInEditor={() => openExternally('editor')}
@@ -2213,6 +2373,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               sessionFlags={sessionFlags}
               usage={usage?.key === targetKey(selected) ? usage.summary : undefined}
               budget={taskBudget}
+              usageCompany={usageCompany}
               onOpenUsage={() => setUsageOpen(true)}
               git={selectedTask ? gitStatus[selectedTask.id] : undefined}
               baseRef={selectedTask?.baseRef}
@@ -2334,6 +2495,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                 session={sessionState(status, targetKey(selected))}
                 tabs={tabs.length}
                 todayCost={usage?.key === targetKey(selected) ? usage.summary.today.cost : undefined}
+                todayTokens={
+                  usageCompany && usage?.key === targetKey(selected) ? usageTokens(usage.summary.today) : undefined
+                }
                 dailyBudget={budgets?.daily}
                 skipPermissions={sessionFlags.skipPermissions}
                 run={run}
@@ -2365,6 +2529,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
             onStartTask={startTaskFromHome}
             onMoreTaskOptions={moreTaskOptions}
             composerFocus={composerFocus}
+            accountOf={multipleProfiles ? (themeId) => targetProfile(state, profiles, { themeId }) : undefined}
           />
         )}
       </main>
@@ -2467,6 +2632,26 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           onCancel={() => closeDialog(dialog.id)}
         />
       )}
+      {dialog?.kind === 'restartClaude' && (
+        <RestartClaudeDialog
+          name={dialog.name}
+          from={dialog.from}
+          to={dialog.to}
+          onConfirm={() => restartInAccount(dialog)}
+          onCancel={() => closeDialog(dialog.id)}
+        />
+      )}
+      {dialog?.kind === 'profile' && (
+        <ProfileDialog
+          title={`Claude account for ${dialog.name}`}
+          profiles={profiles}
+          inherit={dialog.inherit}
+          initial={dialog.initial}
+          onSave={(profileId) => saveProfile(dialog, profileId)}
+          onCancel={() => closeDialog(dialog.id)}
+          onManage={openSettings}
+        />
+      )}
       {dialog?.kind === 'confirmRemove' && (
         <ConfirmRemoveDialog
           kind={dialog.what}
@@ -2533,6 +2718,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
           settings={settings}
           onSave={(next) => saveSettings(dialog.id, next)}
           onCancel={() => closeDialog(dialog.id)}
+          accounts={{
+            api,
+            target:
+              selected && header && !isArchivedTarget(state, selected)
+                ? { target: selected, label: header.title }
+                : null,
+            onChange: setProfiles,
+            onLogin: (target, next) => {
+              if (sameTarget(selectedRef.current, target)) setTabs(next)
+            },
+          }}
         />
       )}
       {paletteOpen && (

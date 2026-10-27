@@ -18,6 +18,11 @@ export interface Task {
    * shared/budget.ts), in place of Settings.taskBudgetUsd. Absent when it has none, and in state files from before.
    */
   budgetUsd?: number
+  /**
+   * The Claude profile (ClaudeProfile.id) the task's sessions start in, in place of its theme's; absent to use the
+   * theme's. See shared/profiles.ts for the rule.
+   */
+  profileId?: string
 }
 
 /** An archived task has no worktree and no session: nothing may poll, open or attach to it until it is restored. */
@@ -145,6 +150,8 @@ export interface Theme extends ThemeStyle {
   name: string
   slug: string
   items: Item[]
+  /** The Claude profile (ClaudeProfile.id) its tasks' and folders' sessions start in; absent for Default. */
+  profileId?: string
 }
 
 export interface AppState {
@@ -171,6 +178,20 @@ export interface LiveStatus {
   missing: string[]
   /** For running sessions that still have their `claude` window, by id. */
   activity: Record<string, ClaudeActivity>
+  /**
+   * The Claude profile (ClaudeProfile.id) the `claude` window of a running session was started in, by id: only for
+   * windows this run of the app started, as a session left from an earlier run may have been started in any.
+   */
+  claudeProfiles?: Record<string, string>
+}
+
+/** How MeManagerApi.restartClaude goes about a Claude still running. */
+export interface RestartClaudeOptions {
+  /**
+   * Starts it again in its window (the process is ended) in the target's current Claude profile, continuing its last
+   * conversation there. Without it, a running Claude is only shown.
+   */
+  replace?: boolean
 }
 
 /** A repo task's git state, read from its worktree (see GitApi.taskStatus). */
@@ -278,6 +299,54 @@ export interface Settings {
   taskBudgetUsd: number | null
   /** Light or dark colours; `system` follows the OS, live. */
   appearance: Appearance
+  /**
+   * The Claude profiles the user added, at most MAX_PROFILES, each with its own id and folder. The Default profile
+   * is not stored here: it always exists (see shared/profiles.ts).
+   */
+  profiles: ClaudeProfile[]
+  /** Who pays for the Default profile's usage. */
+  defaultProfileBilling: ProfileBilling
+}
+
+/** Who pays for a profile's usage: estimated cost and budgets count `own` profiles only. */
+export type ProfileBilling = 'own' | 'company'
+
+export const PROFILE_BILLINGS: readonly ProfileBilling[] = ['own', 'company']
+
+/** A Claude config folder (CLAUDE_CONFIG_DIR): its own login and settings.json. */
+export interface ClaudeProfile {
+  id: string
+  name: string
+  /** Absolute, normalized (see normalizeConfigDir). */
+  configDir: string
+  billing: ProfileBilling
+}
+
+/**
+ * Whether a profile's folder holds a login, from which files are there (never what is in them): `signedIn` with a
+ * credentials file, `keyOrGateway` when its settings.json sets `apiKeyHelper` or `env.ANTHROPIC_BASE_URL`,
+ * `unknown` on macOS without either (Claude Code keeps the login in the Keychain there), `notSignedIn` otherwise,
+ * and `folderMissing` when the folder is gone.
+ */
+export type ProfileLogin = 'signedIn' | 'keyOrGateway' | 'notSignedIn' | 'unknown' | 'folderMissing'
+
+/** What MeManagerApi.addProfile takes. */
+export interface NewProfile {
+  name: string
+  configDir: string
+  billing: ProfileBilling
+}
+
+/** What MeManagerApi.updateProfile changes: what is left out stays. */
+export interface ProfilePatch {
+  name?: string
+  billing?: ProfileBilling
+}
+
+/** A Claude profile as Settings lists it (see MeManagerApi.listProfiles). */
+export interface ProfileStatus extends ClaudeProfile {
+  isDefault: boolean
+  login: ProfileLogin
 }
 
 /**
@@ -385,7 +454,8 @@ export interface MeManagerApi {
   getSettings(): Promise<SettingsView>
   /**
    * Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result, with
-   * `effective` as getSettings has it.
+   * `effective` as getSettings has it. The Claude profiles (`profiles`, `defaultProfileBilling`) are left out of the
+   * patch: they change through addProfile, updateProfile and removeProfile.
    */
   updateSettings(patch: Partial<Settings>): Promise<SettingsView>
 
@@ -460,6 +530,33 @@ export interface MeManagerApi {
    */
   setTaskBudget(themeId: string, repoId: string, taskId: string, budgetUsd: number | null): Promise<AppState>
   /**
+   * Sets the Claude profile (ClaudeProfile.id, see listProfiles) the theme's sessions start in; null removes it, so
+   * Default applies. Running sessions keep theirs until Claude restarts. Rejects an id no profile has.
+   */
+  setThemeProfile(themeId: string, profileId: string | null): Promise<AppState>
+  /** Sets the task's own Claude profile, as setThemeProfile; null removes it, so the theme's applies. */
+  setTaskProfile(themeId: string, repoId: string, taskId: string, profileId: string | null): Promise<AppState>
+  /** Every Claude profile, Default first, with its login state (see ProfileLogin). */
+  listProfiles(): Promise<ProfileStatus[]>
+  /**
+   * Adds a Claude profile: `configDir` is absolute or starts with `~/` (the home folder), and is created, empty,
+   * when missing. Refused as profileError says (a name or folder another profile has), and past MAX_PROFILES.
+   */
+  addProfile(input: NewProfile): Promise<ProfileStatus[]>
+  /** Renames a profile or changes who pays for it; its folder never changes. Default's billing only. */
+  updateProfile(id: string, patch: ProfilePatch): Promise<ProfileStatus[]>
+  /**
+   * Removes a profile from the app; its folder is left as it is. Refused for Default, and while a theme or task
+   * (archived ones too) uses it: the message names them.
+   */
+  removeProfile(id: string): Promise<ProfileStatus[]>
+  /**
+   * Opens a `login` tab in the target's session (started first when it isn't running) that runs `claude` in the
+   * profile's folder, for the user to run /login in. The session's own profile is left as it is. Refused like
+   * openTarget, and for a profile whose folder is gone.
+   */
+  loginProfile(profileId: string, target: Target): Promise<TabInfo[]>
+  /**
    * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
    * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.
    */
@@ -497,7 +594,11 @@ export interface MeManagerApi {
   newTab(target: Target): Promise<TabInfo[]>
   selectTab(target: Target, index: number): Promise<TabInfo[]>
   closeTab(target: Target, index: number): Promise<TabInfo[]>
-  restartClaude(target: Target): Promise<TabInfo[]>
+  /**
+   * Starts Claude again in its tab when it was closed (a new `claude` window, continuing its last conversation), or
+   * opens the session when it isn't running; a running Claude is shown, unless `options.replace`.
+   */
+  restartClaude(target: Target, options?: RestartClaudeOptions): Promise<TabInfo[]>
   /**
    * Leaves copy mode in the target's active tab, if it is in it. After a scroll back, tmux (not the program) gets
    * the keys: the terminal calls this before it sends the next one.
@@ -601,19 +702,20 @@ export interface MeManagerApi {
   sendToClaude(target: Target, text: string): Promise<TabInfo[]>
 
   /**
-   * Claude usage of one task or folder, from Claude Code's transcripts (`~/.claude/projects`). A message counts
-   * for the most specific task or folder whose path contains its working directory.
+   * Claude usage of one task or folder, from Claude Code's transcripts (`projects` in every Claude profile's
+   * folder). A message counts for the most specific task or folder whose path contains its working directory. Cost
+   * counts own-billed profiles only (see UsageTotals.companyTokens).
    */
   getUsage(target: Target): Promise<UsageSummary>
   /** Usage of every task and folder, per theme, with totals. Cheap to call again: it is computed from a cache. */
   getUsageReport(): Promise<UsageReport>
   /**
-   * Where the daily budget and each active task's budget stand, from the same cached usage as getUsageReport.
-   * Reads no usage at all while no budget is set.
+   * Where the daily budget and each active task's budget stand, from the same cached usage as getUsageReport:
+   * own-billed profiles only. Reads no usage at all while no budget is set.
    */
   getBudgets(): Promise<BudgetReport>
-  /** The folder the usage is read from: `projects` in the Claude config folder (CLAUDE_CONFIG_DIR or ~/.claude). */
-  getUsageFolder(): Promise<string>
+  /** The folders the usage is read from: `projects` in each Claude profile's folder, Default first. */
+  getUsageFolders(): Promise<UsageFolder[]>
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
@@ -715,6 +817,11 @@ export interface UsageTotals {
   cost: number
   /** Tokens of models without a known price (see shared/pricing.ts); not in `cost`. */
   unpricedTokens: number
+  /**
+   * Tokens of priced models used through a Claude profile billed to a company (ProfileBilling `company`): not in
+   * `cost`, which counts own-billed profiles only. Unpriced ones stay in `unpricedTokens`.
+   */
+  companyTokens: number
   messages: number
   /** Distinct Claude Code sessions. */
   sessions: number
@@ -792,6 +899,25 @@ export interface BudgetAlert {
 export interface UsageReport {
   /** ISO time the report was computed. */
   generatedAt: string
+  /** Every Claude profile's usage together: tokens of all, cost of own-billed ones only (see companyTokens). */
   total: UsageSummary
   themes: UsageThemeReport[]
+  /** The same report for each Claude profile alone, Default first. */
+  profiles: UsageProfileReport[]
+}
+
+/** One Claude profile's usage (see UsageReport.profiles): a company-billed one's has tokens but no cost. */
+export interface UsageProfileReport {
+  id: string
+  name: string
+  billing: ProfileBilling
+  report: Omit<UsageReport, 'profiles' | 'generatedAt'>
+}
+
+/** Where one Claude profile's usage is read from (see MeManagerApi.getUsageFolders). */
+export interface UsageFolder {
+  profileId: string
+  name: string
+  /** `projects` in the profile's folder. */
+  folder: string
 }

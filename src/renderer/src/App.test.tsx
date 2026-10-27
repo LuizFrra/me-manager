@@ -1842,7 +1842,7 @@ describe('App usage', () => {
                 input: 5000,
               },
             ]
-        return { generatedAt: new Date().toISOString(), total, themes }
+        return { generatedAt: new Date().toISOString(), total, themes, profiles: [] }
       },
       ...extra,
     })
@@ -4678,5 +4678,162 @@ describe('App bulk actions', () => {
     expect(bar().getByText('2 tasks selected')).toBeInTheDocument()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
+  })
+})
+
+describe('App Claude accounts', () => {
+  /** repoApi with a Work account besides Default. */
+  const withWork = async (extra: Partial<MeManagerApi> = {}): Promise<{ api: MeManagerApi; workId: string }> => {
+    const api = repoApi(extra)
+    const [, work] = await api.addProfile({ name: 'Work', configDir: '/home/demo/.claude-work', billing: 'own' })
+    return { api, workId: work.id }
+  }
+  const taskOf = async (api: MeManagerApi): Promise<{ profileId?: string }> => {
+    const repo = (await api.getState()).themes[0].items[0]
+    return repo.kind === 'repo' ? repo.tasks[0] : {}
+  }
+
+  it("chooses a theme's account, and a task's own over it", async () => {
+    const user = userEvent.setup()
+    const { api, workId } = await withWork()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
+    expect(screen.getByRole('radio', { name: /^Default/ })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /^Work/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('Client X uses the Claude account Work')).toBeInTheDocument()
+    expect((await api.getState()).themes[0].profileId).toBe(workId)
+
+    await headerAction(user, 'Claude account…')
+    expect(screen.getByRole('radio', { name: 'Use the theme’s (Work)' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /^Default/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText('fix login bug uses the Claude account Default')).toBeInTheDocument()
+    expect((await taskOf(api)).profileId).toBe('default')
+  })
+
+  it("names the task's account in its header, and restarts a Claude still running in another one", async () => {
+    const user = userEvent.setup()
+    // Every task's Claude runs in the account it started in, Default.
+    const getStatus = async (): Promise<LiveStatus> => {
+      const ids = (await api.getState()).themes.flatMap((t) =>
+        t.items.flatMap((i) => (i.kind === 'repo' ? i.tasks.map((k) => k.id) : [])),
+      )
+      return {
+        running: ids,
+        missing: [],
+        activity: {},
+        claudeProfiles: Object.fromEntries(ids.map((id) => [id, 'default'])),
+      }
+    }
+    const { api } = await withWork({ getStatus })
+    const restartClaude = vi.spyOn(api, 'restartClaude')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const header = screen.getByRole('banner')
+    expect(await within(header).findByText('Account: Default')).toBeInTheDocument()
+    expect(within(header).queryByText('(applies when Claude restarts)')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
+    await user.click(screen.getByRole('radio', { name: /^Work/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await within(header).findByText('Account: Work')).toBeInTheDocument()
+    expect(within(header).getByText('(applies when Claude restarts)')).toBeInTheDocument()
+    await user.click(within(header).getByRole('button', { name: 'Restart Claude in Work…' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Restart Claude in Work' })
+    expect(dialog).toHaveTextContent('Claude in my-api › fix login bug runs in Default')
+    await user.click(within(dialog).getByRole('button', { name: 'Restart Claude' }))
+    expect(restartClaude).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }), {
+      replace: true,
+    })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  })
+
+  it('offers to log in when a task opens in an account that is not signed in, once', async () => {
+    const user = userEvent.setup()
+    const { api, workId } = await withWork()
+    const loginProfile = vi.spyOn(api, 'loginProfile')
+    render(<App api={api} />)
+    await createRepoAndTask(user, 'fix login bug', 'docs') // Default: never warned about
+    expect(screen.queryByText(/isn’t signed in/)).not.toBeInTheDocument()
+    // Nor are the accounts read for it on each open.
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const reads = vi.spyOn(api, 'listProfiles')
+    await user.click(taskButton('fix login bug'))
+    await waitFor(() => expect(openTarget).toHaveBeenCalled())
+    await act(async () => {})
+    expect(reads).not.toHaveBeenCalled()
+    reads.mockRestore()
+    await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
+    await user.click(screen.getByRole('radio', { name: /^Work/ }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await user.click(taskButton('fix login bug'))
+    const toast = (await screen.findByText('Claude account “Work” isn’t signed in')).closest('.toast') as HTMLElement
+    await user.click(within(toast).getByRole('button', { name: 'Log in' }))
+    expect(loginProfile).toHaveBeenCalledWith(workId, expect.objectContaining({ taskId: expect.any(String) }))
+    await waitFor(() => expect(screen.queryByText(/isn’t signed in/)).not.toBeInTheDocument())
+
+    await user.click(taskButton('docs'))
+    expect(await screen.findByText('Claude account “Work” isn’t signed in')).toBeInTheDocument() // docs's
+    const listProfiles = vi.spyOn(api, 'listProfiles')
+    await user.click(taskButton('fix login bug'))
+    await waitFor(() => expect(listProfiles).toHaveBeenCalled()) // its account read again: still not signed in
+    await act(async () => {})
+    expect(screen.getAllByText(/isn’t signed in/)).toHaveLength(1)
+
+    await createTask(user, 'third') // a new task, opened once created
+    await waitFor(() => expect(screen.getAllByText(/isn’t signed in/)).toHaveLength(2))
+  })
+
+  it('shows only tokens in the usage badge of a task whose account is billed to a company', async () => {
+    const user = userEvent.setup()
+    const usage = emptyUsageSummary()
+    usage.all = { ...usage.all, output: 2000 } // none yet billed to the company: its account is
+    usage.today = { ...usage.today, output: 500 }
+    const api = repoApi({ getUsage: async () => usage })
+    await api.updateProfile('default', { billing: 'company' })
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const badge = await within(screen.getByRole('banner')).findByRole('button', { name: /^Claude usage:/ })
+    expect(badge).toHaveAccessibleName('Claude usage: 2k tok, billed to your company')
+    // The status bar's "today" says tokens too, not a cost.
+    expect(screen.getByRole('button', { name: "Today's tokens 500, billed to your company: show usage" })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /^Today's cost/ })).not.toBeInTheDocument()
+  })
+
+  it('says when a task opens in an account no longer there, once, and in its header', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    const themeId = (await api.createTheme('Client X')).themes[0].id
+    const repoId = (await api.addRepo(themeId, '/home/me/code/my-api')).themes[0].items[0].id
+    await api.createTask(themeId, repoId, 'fix')
+    // The theme was restored after its account was removed (state from before this fix, or a hand edit).
+    const getState = api.getState
+    api.getState = async () => {
+      const s = await getState()
+      return { ...s, themes: s.themes.map((t) => ({ ...t, profileId: 'gone' })) }
+    }
+    render(<App api={api} />)
+    await user.click(await screen.findByRole('button', { name: /^(\S )?fix$/ }))
+    const toast = (await screen.findByText('The Claude account of fix no longer exists: it runs in Default')).closest(
+      '.toast',
+    ) as HTMLElement
+    expect(within(screen.getByRole('banner')).getByText('Account: unknown → Default')).toBeInTheDocument()
+    // Choosing goes to the theme, whose account it is: Default shows as chosen, and saving clears the unknown one.
+    await user.click(within(toast).getByRole('button', { name: 'Choose…' }))
+    expect(screen.getByRole('dialog', { name: 'Claude account for Client X' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /^Default/ })).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('offers no choice of account while Default is the only one', async () => {
+    const user = userEvent.setup()
+    render(<App api={repoApi()} />)
+    await createRepoAndTask(user)
+    expect(screen.queryByRole('button', { name: 'Claude account for Client X' })).not.toBeInTheDocument()
+    expect(await headerActions(user)).not.toContain('Claude account…')
+    expect(within(screen.getByRole('banner')).queryByText(/^Account:/)).not.toBeInTheDocument()
   })
 })

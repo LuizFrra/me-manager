@@ -1,8 +1,26 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { FONT_SIZE_LIMITS } from '../../../shared/settings'
 import { MAX_TASK_TEMPLATES, type TemplateErrors } from '../../../shared/templates'
-import { MAX_TASK_PROMPT, type Appearance, type Settings, type UpdateStrategy } from '../../../shared/types'
+import {
+  MAX_TASK_PROMPT,
+  PROFILE_BILLINGS,
+  type Appearance,
+  type ClaudeProfile,
+  type MeManagerApi,
+  type ProfileBilling,
+  type ProfileLogin,
+  type ProfileStatus,
+  type Settings,
+  type TabInfo,
+  type Target,
+  type UpdateStrategy,
+} from '../../../shared/types'
+import { slugify } from '../../../shared/naming'
+import { profileError } from '../../../shared/profiles'
 import { plural } from '../lib/gitStatus'
+import { BILLING_LABEL, LOGIN_TEXT } from '../lib/profiles'
+import { cleanError } from '../lib/toasts'
+import { useLatestCallback } from '../lib/useLatestCallback'
 import {
   errorCount,
   formChanged,
@@ -261,6 +279,477 @@ function TaskTemplatesSection(props: {
   )
 }
 
+/** What the Claude accounts section calls; profile changes go straight to main, not through Save. */
+export interface AccountsProps {
+  api: Pick<MeManagerApi, 'listProfiles' | 'addProfile' | 'updateProfile' | 'removeProfile' | 'loginProfile'>
+  /** Where Log in opens its tab: the selected task or folder, with its name; null when none is (or it's archived). */
+  target: { target: Target; label: string } | null
+  /** The profiles as main has them, once read and after each change. */
+  onChange: (profiles: ProfileStatus[]) => void
+  /** Log in opened its tab in `target`: the target's tabs, the login one active. */
+  onLogin: (target: Target, tabs: TabInfo[]) => void
+}
+
+const LOGIN_TITLE: Record<ProfileLogin, string> = {
+  signedIn: 'Its folder has a login (a credentials file)',
+  keyOrGateway: 'Its settings.json sets an apiKeyHelper or ANTHROPIC_BASE_URL',
+  notSignedIn: 'No login in its folder yet: Log in, then run /login in the tab it opens',
+  unknown: 'On macOS Claude Code keeps the login in the Keychain, which the app doesn’t read',
+  folderMissing: 'The folder was deleted or moved: its tasks and folders won’t start until it is back',
+}
+
+/** The folder a new account gets until one is typed: ~/.claude-<the name as a slug>. */
+const suggestedFolder = (name: string): string => `~/.claude-${slugify(name) || 'account'}`
+
+/**
+ * profileError for a folder as typed: main expands a leading `~/` to the home folder, which the renderer doesn't
+ * know, so such a folder is checked under a stand-in absolute one (main still refuses one another account has).
+ */
+const accountError = (name: string, folder: string, others: readonly ClaudeProfile[]): string | null => {
+  const trimmed = folder.trim()
+  return profileError({ name, configDir: trimmed.startsWith('~/') ? `/~${trimmed.slice(1)}` : trimmed }, others)
+}
+
+/** For an account's field: Enter runs `run` instead of the dialog's Save, Esc `cancel` instead of its Cancel. */
+const ownKeys =
+  (run: () => void, cancel: () => void) =>
+  (e: React.KeyboardEvent): void => {
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      run()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      cancel()
+    }
+  }
+
+/** Runs one profile call; resolves to main's refusal, or null once the list it returned is shown. */
+type Change = (op: () => Promise<ProfileStatus[]>) => Promise<string | null>
+
+/** One account: name, login state, folder and billing, with Log in, and Rename and Remove for those added. */
+function AccountRow(props: {
+  api: AccountsProps['api']
+  profile: ProfileStatus
+  /** The other accounts, which its new name is checked against. */
+  others: readonly ProfileStatus[]
+  busy: boolean
+  /** Log in is off without a target; `loginHintId` says why. */
+  canLogin: boolean
+  loginHintId: string
+  change: Change
+  onLogin: () => Promise<string | null>
+  /** It was removed: its row, and the focus with it, is gone. */
+  onRemoved: () => void
+}): React.JSX.Element {
+  const { api, profile: p, busy } = props
+  // Main's last refusal (or a failed Log in), shown under the row until the next action.
+  const [error, setError] = useState<string | null>(null)
+  // The name being typed while renaming; null otherwise.
+  const [renaming, setRenaming] = useState<string | null>(null)
+  // Set when renaming ends: Rename, which the name field took the place of, gets the focus back.
+  const refocus = useRef(false)
+  const renameRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (renaming !== null || !refocus.current) return
+    refocus.current = false
+    renameRef.current?.focus()
+  }, [renaming])
+  const endRename = (): void => {
+    refocus.current = true
+    setRenaming(null)
+  }
+  // Remove asks first, in the row, what removing the account does; Cancel and Esc give the focus back to Remove.
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const removeRef = useRef<HTMLButtonElement>(null)
+  const refocusRemove = useRef(false)
+  useEffect(() => {
+    if (confirmingRemove || !refocusRemove.current) return
+    refocusRemove.current = false
+    removeRef.current?.focus() // enabled again by now
+  }, [confirmingRemove])
+  const cancelRemove = (): void => {
+    refocusRemove.current = true
+    setConfirmingRemove(false)
+  }
+  const remove = (): Promise<void> =>
+    act(async () => {
+      const refused = await props.change(() => api.removeProfile(p.id))
+      if (refused) setConfirmingRemove(false)
+      else props.onRemoved()
+      return refused
+    })
+  const errorId = useId()
+  const renameError = renaming === null ? null : accountError(renaming, p.configDir, props.others)
+  const shown = renameError ?? error
+  const act = async (op: () => Promise<string | null>): Promise<void> => {
+    setError(null)
+    setError(await op())
+  }
+  const rename = async (): Promise<void> => {
+    if (renaming === null || renameError || busy) return
+    if (renaming.trim() === p.name) return endRename()
+    const refused = await props.change(() => api.updateProfile(p.id, { name: renaming }))
+    setError(refused)
+    if (!refused) endRename()
+  }
+  return (
+    <li className="account-row" aria-label={p.name}>
+      <div className="account-main">
+        {renaming === null ? (
+          <span className="account-name">{p.name}</span>
+        ) : (
+          <span className="settings-input account-rename">
+            <input
+              autoFocus
+              aria-label={`New name for ${p.name}`}
+              aria-invalid={shown ? true : undefined}
+              aria-describedby={shown ? errorId : undefined}
+              value={renaming}
+              onChange={(e) => setRenaming(e.target.value)}
+              onKeyDown={(e) => ownKeys(() => void rename(), endRename)(e)}
+            />
+          </span>
+        )}
+        <span className={`account-login login-${p.login}`} title={LOGIN_TITLE[p.login]}>
+          {LOGIN_TEXT[p.login]}
+        </span>
+      </div>
+      <code className="account-folder" title={p.configDir}>
+        {p.configDir}
+      </code>
+      <div className="account-actions">
+        <select
+          aria-label={`Billing for ${p.name}`}
+          title="Estimated cost and budgets count only accounts you pay for; a company's shows its tokens"
+          value={p.billing}
+          disabled={busy}
+          onChange={(e) => {
+            const billing = e.target.value as ProfileBilling
+            void act(() => props.change(() => api.updateProfile(p.id, { billing })))
+          }}
+        >
+          {PROFILE_BILLINGS.map((b) => (
+            <option key={b} value={b}>
+              {BILLING_LABEL[b]}
+            </option>
+          ))}
+        </select>
+        <span className="account-buttons">
+          {renaming === null ? (
+            <>
+              <button
+                type="button"
+                aria-label={`Log in to ${p.name}`}
+                aria-describedby={props.canLogin ? undefined : props.loginHintId}
+                title="Opens a “login” tab running claude in this account’s folder: run /login there"
+                disabled={busy || !props.canLogin || p.login === 'folderMissing'}
+                onClick={() => void act(props.onLogin)}
+              >
+                Log in
+              </button>
+              {!p.isDefault && (
+                <>
+                  <button
+                    ref={renameRef}
+                    type="button"
+                    aria-label={`Rename ${p.name}`}
+                    disabled={busy}
+                    onClick={() => {
+                      setError(null)
+                      setRenaming(p.name)
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    ref={removeRef}
+                    type="button"
+                    aria-label={`Remove ${p.name}`}
+                    title="Removes it from the app; its folder stays as it is"
+                    disabled={busy || confirmingRemove}
+                    onClick={() => {
+                      setError(null)
+                      setConfirmingRemove(true)
+                    }}
+                  >
+                    Remove
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={endRename}>
+                Cancel
+              </button>
+              <button type="button" disabled={busy || renameError !== null} onClick={() => void rename()}>
+                Save name
+              </button>
+            </>
+          )}
+        </span>
+      </div>
+      {confirmingRemove && (
+        <div
+          className="account-confirm"
+          role="group"
+          aria-label={`Remove ${p.name}?`}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.preventDefault()
+            e.stopPropagation()
+            cancelRemove()
+          }}
+        >
+          <p className="settings-hint">
+            Its usage history leaves the usage totals and budgets, as its folder is no longer read. The folder itself
+            stays as it is.
+          </p>
+          <span className="account-buttons">
+            <button type="button" autoFocus onClick={cancelRemove}>
+              Cancel
+            </button>
+            <button type="button" className="danger" disabled={busy} onClick={() => void remove()}>
+              Remove account
+            </button>
+          </span>
+        </div>
+      )}
+      {shown && (
+        <p id={errorId} className="settings-error" role="alert">
+          {shown}
+        </p>
+      )}
+    </li>
+  )
+}
+
+/** The Add account form's fields; `folder` is null while it follows the name (suggestedFolder). */
+interface NewAccount {
+  name: string
+  folder: string | null
+  billing: ProfileBilling
+}
+
+/**
+ * The "Claude accounts" section: one row per Claude profile, Default first, and a form to add one. Its changes are
+ * made in main as they happen, apart from the dialog's Save and Cancel.
+ */
+function ClaudeAccountsSection({ api, target, ...props }: AccountsProps): React.JSX.Element {
+  const [profiles, setProfiles] = useState<ProfileStatus[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  // Where the last Log in opened its tab, to say what to do there.
+  const [loginNote, setLoginNote] = useState<string | null>(null)
+  const [adding, setAdding] = useState<NewAccount | null>(null)
+  // Main's refusal of the last Add; the form's own errors are checked as it is typed.
+  const [addRefused, setAddRefused] = useState<string | null>(null)
+  const addRef = useRef<HTMLButtonElement>(null)
+  const loginHintId = useId()
+  const addErrorId = useId()
+  const onChange = useLatestCallback(props.onChange)
+
+  // Counts reads of the list and changes to it: a read answers only if nothing was read or changed since it began.
+  const readSeq = useRef(0)
+
+  // Read when shown, and again whenever the window gets the focus back: a /login run in a terminal meanwhile (the
+  // app's or another) changes an account's login state. Not while a change is under way: it returns the list.
+  useEffect(() => {
+    let live = true
+    const read = (): void => {
+      if (busyRef.current) return
+      const seq = ++readSeq.current
+      const current = (): boolean => live && seq === readSeq.current
+      api.listProfiles().then(
+        (list) => {
+          if (!current()) return
+          setProfiles(list)
+          setLoadError(null)
+          onChange(list)
+        },
+        (err: unknown) => current() && setLoadError(cleanError(err)),
+      )
+    }
+    read()
+    window.addEventListener('focus', read)
+    return () => {
+      live = false
+      window.removeEventListener('focus', read)
+    }
+  }, [api, onChange])
+
+  const change: Change = async (op) => {
+    if (busyRef.current) return null
+    readSeq.current++ // a read under way may predate the change
+    busyRef.current = true
+    setBusy(true)
+    try {
+      const list = await op()
+      setProfiles(list)
+      onChange(list)
+      return null
+    } catch (err) {
+      return cleanError(err)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  const login = async (profile: ProfileStatus): Promise<string | null> => {
+    if (!target || busyRef.current) return null
+    setLoginNote(null)
+    try {
+      props.onLogin(target.target, await api.loginProfile(profile.id, target.target))
+      setLoginNote(`Opened a “login” tab in ${target.label}: close Settings and run /login there.`)
+      return null
+    } catch (err) {
+      return cleanError(err)
+    }
+  }
+
+  const folder = adding ? (adding.folder ?? suggestedFolder(adding.name)) : ''
+  const addError = adding && profiles ? accountError(adding.name, folder, profiles) : null
+  // "Enter a name" only once something was typed: the empty form is not an error yet.
+  const shownAddError = adding && (adding.name || adding.folder !== null) ? (addError ?? addRefused) : addRefused
+  const closeAdd = (): void => {
+    setAdding(null)
+    setAddRefused(null)
+    requestAnimationFrame(() => addRef.current?.focus())
+  }
+  const add = async (): Promise<void> => {
+    if (!adding || addError) return
+    const refused = await change(() =>
+      api.addProfile({ name: adding.name, configDir: folder, billing: adding.billing }),
+    )
+    setAddRefused(refused)
+    if (!refused) closeAdd()
+  }
+  const edit = (patch: Partial<NewAccount>): void => {
+    setAddRefused(null)
+    setAdding((a) => (a ? { ...a, ...patch } : a))
+  }
+  const keys = (e: React.KeyboardEvent): void => ownKeys(() => void add(), closeAdd)(e)
+
+  return (
+    <section className="settings-section accounts-section" aria-label="Claude accounts">
+      <h3>Claude accounts</h3>
+      <p className="settings-hint">
+        Each account is a Claude config folder, with its own login and settings.json (a company gateway, say). A theme
+        or task picks one: the account button on a theme’s row, or “Claude account…” in a task’s menu. Changes here
+        apply at once, not with Save; a running Claude keeps its account until it restarts.
+      </p>
+      {loadError && (
+        <p className="settings-error" role="alert">
+          Could not read the accounts: {loadError}
+        </p>
+      )}
+      {profiles && (
+        <ul className="account-list">
+          {profiles.map((p) => (
+            <AccountRow
+              key={p.id}
+              api={api}
+              profile={p}
+              others={profiles.filter((o) => o.id !== p.id)}
+              busy={busy}
+              canLogin={target !== null}
+              loginHintId={loginHintId}
+              change={change}
+              onLogin={() => login(p)}
+              onRemoved={() => requestAnimationFrame(() => addRef.current?.focus())}
+            />
+          ))}
+        </ul>
+      )}
+      {!target && (
+        <p id={loginHintId} className="settings-hint">
+          Open a task or folder first: the login runs in its terminal.
+        </p>
+      )}
+      {loginNote && (
+        <p className="settings-hint" role="status">
+          {loginNote}
+        </p>
+      )}
+      {adding ? (
+        <fieldset className="template-card account-add" aria-label="New account">
+          <div className="settings-row">
+            <Field label="Account name">
+              {(aria) => (
+                <input
+                  {...aria}
+                  autoFocus
+                  placeholder="e.g. Work"
+                  aria-invalid={Boolean(shownAddError)}
+                  aria-describedby={shownAddError ? addErrorId : undefined}
+                  value={adding.name}
+                  onChange={(e) => edit({ name: e.target.value })}
+                  onKeyDown={keys}
+                />
+              )}
+            </Field>
+            <Field label="Billing">
+              {(aria) => (
+                <select
+                  {...aria}
+                  value={adding.billing}
+                  onChange={(e) => edit({ billing: e.target.value as ProfileBilling })}
+                  onKeyDown={keys}
+                >
+                  {PROFILE_BILLINGS.map((b) => (
+                    <option key={b} value={b}>
+                      {BILLING_LABEL[b]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          </div>
+          <Field label="Folder" hint="Created, empty, if it doesn’t exist. Removing the account later leaves it.">
+            {(aria) => (
+              <input
+                {...aria}
+                className="mono"
+                spellCheck={false}
+                value={folder}
+                onChange={(e) => edit({ folder: e.target.value })}
+                onKeyDown={keys}
+              />
+            )}
+          </Field>
+          {shownAddError && (
+            <p id={addErrorId} className="settings-error" role="alert">
+              {shownAddError}
+            </p>
+          )}
+          <div className="template-actions">
+            <button type="button" onClick={closeAdd}>
+              Cancel
+            </button>
+            <button type="button" disabled={busy || addError !== null} onClick={() => void add()}>
+              Add
+            </button>
+          </div>
+        </fieldset>
+      ) : (
+        <div className="template-add">
+          <button
+            ref={addRef}
+            type="button"
+            disabled={!profiles}
+            onClick={() => setAdding({ name: '', folder: null, billing: 'own' })}
+          >
+            Add account
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 const UPDATE_CHOICES: { value: UpdateStrategy; label: string; hint: string }[] = [
   { value: 'rebase', label: 'Rebase', hint: 'replays the task’s commits on top of the base (git rebase)' },
   { value: 'merge', label: 'Merge', hint: 'adds a merge commit (git merge --no-edit)' },
@@ -282,6 +771,8 @@ export function SettingsDialog(props: {
   /** The edited settings, a patch over the current ones. */
   onSave: (settings: EditableSettings) => Promise<void>
   onCancel: () => void
+  /** The Claude accounts section; left out without it (tests of the other sections). */
+  accounts?: AccountsProps
 }): React.JSX.Element {
   const [form, setForm] = useState<SettingsForm>(() => toForm(props.settings))
   const [start] = useState(form)
@@ -426,6 +917,8 @@ export function SettingsDialog(props: {
             Applies to sessions started after saving; running sessions keep the arguments they started with.
           </p>
         </section>
+
+        {props.accounts && <ClaudeAccountsSection {...props.accounts} />}
 
         <section className="settings-section" aria-label="Editor">
           <h3>Editor</h3>

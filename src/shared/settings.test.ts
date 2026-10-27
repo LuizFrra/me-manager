@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { builtInClaudeFlags, DEFAULT_SETTINGS, effectiveClaudeFlags, normalizeSettings } from './settings'
+import { MAX_PROFILES } from './profiles'
 import type { Settings } from './types'
 
 describe('normalizeSettings', () => {
@@ -20,6 +21,8 @@ describe('normalizeSettings', () => {
       dailyBudgetUsd: null,
       taskBudgetUsd: null,
       appearance: 'system',
+      profiles: [],
+      defaultProfileBilling: 'own',
     })
   })
 
@@ -39,6 +42,8 @@ describe('normalizeSettings', () => {
       dailyBudgetUsd: 20,
       taskBudgetUsd: 5.5,
       appearance: 'light',
+      profiles: [{ id: 'p1', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }],
+      defaultProfileBilling: 'company',
       theme: 'light',
       __proto__: { polluted: true },
     })
@@ -57,15 +62,19 @@ describe('normalizeSettings', () => {
       dailyBudgetUsd: 20,
       taskBudgetUsd: 5.5,
       appearance: 'light',
+      profiles: [{ id: 'p1', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' }],
+      defaultProfileBilling: 'company',
     })
     expect(Object.keys(s).sort()).toEqual([
       'appearance',
       'claudeArgs',
       'cloneDirectory',
       'dailyBudgetUsd',
+      'defaultProfileBilling',
       'editorCommand',
       'notifications',
       'pollIntervalMs',
+      'profiles',
       'remoteControl',
       'showStatusBar',
       'skipPermissions',
@@ -111,6 +120,57 @@ describe('normalizeSettings', () => {
         taskBudgetUsd: 2,
       })
     }
+  })
+
+  it('keeps the valid Claude profiles, normalized, and none in settings from before profiles', () => {
+    expect(normalizeSettings({ pollIntervalMs: 5000 })).toMatchObject({ profiles: [], defaultProfileBilling: 'own' })
+    const p = (id: unknown, name: unknown, configDir: unknown, billing?: unknown): unknown => ({
+      id,
+      name,
+      configDir,
+      billing,
+    })
+    expect(
+      normalizeSettings({
+        profiles: [
+          p('a', ' Work ', '/home/me/.claude-work/', 'company'),
+          p(7, 'Bad id', '/x'),
+          p('', 'Empty id', '/x'),
+          p('b', 3, '/y'),
+          p('c', '  ', '/y'),
+          p('d', 'Relative', 'claude-d'),
+          p('e', 'Nul', '/a\0b'),
+          p('a', 'Same id', '/z'),
+          p('f', 'Same folder', '/home/me//.claude-work'),
+          p('default', 'Default again', '/q'),
+          p('g', 'Home', '/home/me/.claude-home', 'free'),
+          'not a profile',
+          null,
+        ],
+      }).profiles,
+    ).toEqual([
+      { id: 'a', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' },
+      { id: 'g', name: 'Home', configDir: '/home/me/.claude-home', billing: 'own' },
+    ])
+    const many = Array.from({ length: 25 }, (_, i) => p(`p${i}`, `P${i}`, `/c/${i}`, 'own'))
+    const kept = normalizeSettings({ profiles: many }).profiles
+    expect(kept).toHaveLength(MAX_PROFILES)
+    expect(kept.at(-1)?.id).toBe(`p${MAX_PROFILES - 1}`)
+    // Not a list: the current profiles stay, as for any wrongly typed value.
+    const current: Settings = {
+      ...DEFAULT_SETTINGS,
+      profiles: [{ id: 'a', name: 'A', configDir: '/a', billing: 'own' }],
+    }
+    expect(normalizeSettings({ profiles: 'A' }, current).profiles).toEqual(current.profiles)
+  })
+
+  it('accepts only the two billings for the Default profile', () => {
+    expect(normalizeSettings({ defaultProfileBilling: 'company' }).defaultProfileBilling).toBe('company')
+    for (const defaultProfileBilling of ['free', 'Own', '', 1, null]) {
+      expect(normalizeSettings({ defaultProfileBilling }).defaultProfileBilling).toBe('own')
+    }
+    const company: Settings = { ...DEFAULT_SETTINGS, defaultProfileBilling: 'company' }
+    expect(normalizeSettings({ defaultProfileBilling: 'x' }, company).defaultProfileBilling).toBe('company')
   })
 
   it('keeps only an absolute clone directory', () => {

@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { budgetStatus } from '../../../shared/budget'
-import type { BudgetReport, MeManagerApi, UsageReport } from '../../../shared/types'
+import type { BudgetReport, MeManagerApi, UsageFolder, UsageReport } from '../../../shared/types'
 import { emptyUsageSummary } from '../../../shared/usage'
 import { UsageView } from './UsageView'
 
@@ -23,13 +23,16 @@ const report: UsageReport = {
       })),
     },
   ],
+  profiles: [],
 }
 
-function renderView(budgets: BudgetReport, usage: UsageReport = report, folder = '/home/u/.claude/projects'): void {
-  const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'> = {
+const defaultFolder: UsageFolder = { profileId: 'default', name: 'Default', folder: '/home/u/.claude/projects' }
+
+function renderView(budgets: BudgetReport, usage: UsageReport = report, folders = [defaultFolder]): void {
+  const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolders'> = {
     getUsageReport: async () => usage,
     getBudgets: async () => budgets,
-    getUsageFolder: async () => folder,
+    getUsageFolders: async () => folders,
   }
   render(<UsageView api={api} onClose={vi.fn()} onOpenTarget={vi.fn()} onOpenSettings={vi.fn()} />)
 }
@@ -70,8 +73,8 @@ describe('UsageView budgets', () => {
 
 describe('UsageView errors', () => {
   it("shows why the usage can't be read without the IPC wrapper's prefix", async () => {
-    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolder'> = {
-      getUsageFolder: async () => '/home/u/.claude/projects',
+    const api: Pick<MeManagerApi, 'getUsageReport' | 'getBudgets' | 'getUsageFolders'> = {
+      getUsageFolders: async () => [defaultFolder],
       getUsageReport: async () => {
         throw new Error(
           "Error invoking remote method 'api:getUsageReport': Error: EACCES: permission denied, scandir '/home/u/.claude/projects'",
@@ -105,8 +108,98 @@ describe('UsageView periods', () => {
 
 describe('UsageView footnote', () => {
   it('names the folder the transcripts are read from (CLAUDE_CONFIG_DIR when set)', async () => {
-    renderView({ daily: null, tasks: {} }, report, '/custom/claude/projects')
+    renderView({ daily: null, tasks: {} }, report, [{ ...defaultFolder, folder: '/custom/claude/projects' }])
     expect(await screen.findByText('/custom/claude/projects')).toBeInTheDocument()
     expect(screen.queryByText(/~\/\.claude/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Default/)).not.toBeInTheDocument()
+  })
+
+  it('names every Claude profile’s folder, with the profile, when there are several', async () => {
+    renderView({ daily: null, tasks: {} }, report, [
+      defaultFolder,
+      { profileId: 'w', name: 'Work', folder: '/srv/claude-work/projects' },
+    ])
+    const note = (await screen.findByText('/srv/claude-work/projects')).closest('p')!
+    expect(note).toHaveTextContent(
+      'in /home/u/.claude/projects (Default) and /srv/claude-work/projects (Work), which it prunes',
+    )
+  })
+})
+
+describe('UsageView Claude profiles', () => {
+  /** A report whose month has `cost` and `tokens` (input), with `companyTokens` of them billed to a company. */
+  const withMonth = (
+    cost: number,
+    tokens: number,
+    companyTokens = 0,
+  ): Omit<UsageReport, 'profiles' | 'generatedAt'> => {
+    const summary = emptyUsageSummary()
+    summary.month = {
+      ...summary.month,
+      cost,
+      input: tokens,
+      companyTokens,
+      messages: 2,
+      models: [
+        { ...emptyUsageSummary().month, model: 'claude-opus-4', priced: true, cost, input: tokens, companyTokens },
+      ],
+    }
+    return {
+      total: summary,
+      themes: [{ ...report.themes[0], usage: summary, targets: [{ ...report.themes[0].targets[0], usage: summary }] }],
+    }
+  }
+  const all = withMonth(3, 3_000_000, 2_000_000)
+  const twoProfiles: UsageReport = {
+    generatedAt: report.generatedAt,
+    ...all,
+    profiles: [
+      { id: 'default', name: 'Default', billing: 'own', report: withMonth(3, 1_000_000) },
+      { id: 'w', name: 'Work', billing: 'company', report: withMonth(0, 2_000_000, 2_000_000) },
+    ],
+  }
+
+  it('filters by account; a company one shows tokens, billed to the company, instead of a cost', async () => {
+    const user = userEvent.setup()
+    renderView({ daily: null, tasks: {} }, twoProfiles)
+    const filter = await screen.findByRole('group', { name: 'Claude account' })
+    const buttons = within(filter).getAllByRole('button')
+    expect(buttons.map((b) => b.textContent)).toEqual(['All', 'Default', 'Work'])
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$3.00')
+    expect(screen.getByRole('note', { name: 'Cost' })).toHaveTextContent(
+      'The cost counts your own accounts only: 2M tokens billed to your company are not in it.',
+    )
+
+    await user.click(buttons[2])
+    const totals = screen.getByRole('region', { name: 'Totals' })
+    expect(totals).toHaveTextContent('Billed to your company')
+    expect(totals).not.toHaveTextContent('$')
+    const table = screen.getByRole('table', { name: 'Usage by task and folder' })
+    expect(within(table).getAllByText('company')).not.toHaveLength(0)
+    expect(table).not.toHaveTextContent('$')
+    expect(screen.queryByRole('region', { name: 'Budgets' })).not.toBeInTheDocument()
+    // Sorted by tokens, as it has no cost to sort by.
+    expect(within(table).getByRole('columnheader', { name: /^Tokens/ })).toHaveAttribute('aria-sort', 'descending')
+    expect(within(table).getByRole('columnheader', { name: /^Est\. cost/ })).toHaveAttribute('aria-sort', 'none')
+
+    await user.click(buttons[1])
+    expect(screen.getByRole('region', { name: 'Totals' })).toHaveTextContent('$3.00')
+    expect(
+      within(screen.getByRole('table', { name: 'Usage by task and folder' })).getByRole('columnheader', {
+        name: /^Est\. cost/,
+      }),
+    ).toHaveAttribute('aria-sort', 'descending')
+    expect(screen.getByRole('region', { name: 'Budgets' })).toBeInTheDocument()
+  })
+
+  it('has no filter, and no note on cost, with one account', async () => {
+    renderView(
+      { daily: null, tasks: {} },
+      { ...twoProfiles, ...withMonth(3, 1_000_000), profiles: twoProfiles.profiles.slice(0, 1) },
+    )
+    await screen.findByRole('region', { name: 'Totals' })
+    expect(screen.queryByRole('group', { name: 'Claude account' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('note', { name: 'Cost' })).not.toBeInTheDocument()
   })
 })

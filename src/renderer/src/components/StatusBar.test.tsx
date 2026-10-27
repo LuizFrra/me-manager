@@ -284,3 +284,17 @@ describe('StatusBar on a narrow window', () => {
     }
   })
 })
+
+describe('StatusBar company-billed usage', () => {
+  it("shows today's tokens instead of a cost, without the daily budget, for a task billed to a company", async () => {
+    const onOpenUsage = vi.fn()
+    renderBar({ todayCost: 0, todayTokens: 12_300, dailyBudget: budgetStatus(5.5, 5), onOpenUsage })
+    expect(screen.queryByRole('button', { name: /^Today's cost/ })).not.toBeInTheDocument()
+    const tokens = screen.getByRole('button', { name: "Today's tokens 12.3k, billed to your company: show usage" })
+    expect(tokens).toHaveTextContent('12.3k tok today')
+    expect(tokens).not.toHaveClass('budget-over')
+    expect(tokens).not.toHaveTextContent('$')
+    await userEvent.setup().click(tokens)
+    expect(onOpenUsage).toHaveBeenCalled()
+  })
+})

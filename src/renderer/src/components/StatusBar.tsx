@@ -6,7 +6,7 @@ import type { BudgetStatus, DevUrl, TaskGitStatus } from '../../../shared/types'
 import { baseSummary, plural } from '../lib/gitStatus'
 import { RUN_STATE_INFO, type RunState } from '../lib/run'
 import { SESSION_STATE_INFO, type SessionState } from '../lib/sessionState'
-import { formatCost } from '../lib/usageFormat'
+import { formatCost, formatTokens } from '../lib/usageFormat'
 import { claudeStateText, STATUS_SUBJECT_MAX, truncate } from '../lib/statusText'
 import { DevUrlLinks } from './DevUrlLinks'
 
@@ -28,6 +28,11 @@ export interface StatusBarProps {
   tabs: number
   /** Today's estimated Claude cost in USD, once the usage is loaded. */
   todayCost?: number
+  /**
+   * Today's tokens, for a target billed to a company (see UsageBadge's `company`): shown in place of the cost,
+   * which it has none of, and without the daily budget, which counts own accounts only.
+   */
+  todayTokens?: number
   /**
    * All usage today against the daily budget (see BudgetReport.daily): today's cost turns amber from 80% of it and
    * red from 100%, and its tooltip says how much is spent. Null or absent without a daily budget.
@@ -210,7 +215,18 @@ export function StatusBar(p: StatusBarProps): React.JSX.Element {
         <span className="status-seg" title="Terminal tabs in this session">
           {plural(p.tabs, 'tab')}
         </span>
-        {p.todayCost !== undefined && <TodayCost cost={p.todayCost} budget={p.dailyBudget} onOpen={p.onOpenUsage} />}
+        {p.todayTokens !== undefined ? (
+          <button
+            className="status-seg status-cost"
+            aria-label={`Today's tokens ${formatTokens(p.todayTokens)}, billed to your company: show usage`}
+            title="Claude tokens today, billed to your company (no cost estimate). Click for the usage view."
+            onClick={p.onOpenUsage}
+          >
+            {formatTokens(p.todayTokens)} tok today
+          </button>
+        ) : (
+          p.todayCost !== undefined && <TodayCost cost={p.todayCost} budget={p.dailyBudget} onOpen={p.onOpenUsage} />
+        )}
         {p.skipPermissions && (
           <span
             className="status-seg status-warn"

@@ -237,6 +237,15 @@ describe('TaskHeader usage badge and budget', () => {
     expect(badge).toHaveAccessibleName('Claude usage: $6.00 · 1k tok, over its budget')
     expect(badge).toHaveAccessibleDescription(/\$6\.00 of \$5\.00 task budget \(120%\)/)
   })
+
+  it('shows tokens only, billed to the company, for a task on a company account', () => {
+    render(<TaskHeader {...base} usage={usageOf(0)} usageCompany onOpenUsage={vi.fn()} />)
+    const badge = screen.getByRole('button', { name: /^Claude usage:/ })
+    expect(badge).toHaveAccessibleName('Claude usage: 1k tok, billed to your company')
+    expect(badge).not.toHaveTextContent('$')
+    expect(badge).toHaveAccessibleDescription(/Billed to your company/)
+    expect(badge).not.toHaveAccessibleDescription(/\$/)
+  })
 })
 
 describe('TaskHeader long names', () => {
@@ -262,5 +271,52 @@ describe('TaskHeader budget', () => {
     render(<TaskHeader {...base} />) // a folder
     await user.click(screen.getByRole('button', { name: 'More actions' }))
     expect(screen.queryByRole('menuitem', { name: 'Set budget…' })).not.toBeInTheDocument()
+  })
+})
+
+describe('TaskHeader Claude account', () => {
+  it('chooses the account from the More actions menu, when there are accounts', async () => {
+    const user = userEvent.setup()
+    const onChooseProfile = vi.fn()
+    const { unmount } = render(<TaskHeader {...base} onChooseProfile={onChooseProfile} />)
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Claude account…' }))
+    expect(onChooseProfile).toHaveBeenCalledTimes(1)
+    unmount()
+
+    render(<TaskHeader {...base} />)
+    await user.click(screen.getByRole('button', { name: 'More actions' }))
+    expect(screen.queryByRole('menuitem', { name: 'Claude account…' })).not.toBeInTheDocument()
+  })
+})
+
+describe('TaskHeader account badge', () => {
+  it('names the account, and says when the running Claude is in another one, with Restart Claude', async () => {
+    const user = userEvent.setup()
+    const onRestart = vi.fn()
+    const { rerender } = render(<TaskHeader {...base} account={{ name: 'Work', onRestart }} />)
+    expect(screen.getByText('Account: Work')).toBeInTheDocument()
+    expect(screen.queryByText(/applies when Claude restarts/)).not.toBeInTheDocument()
+
+    rerender(<TaskHeader {...base} account={{ name: 'Work', running: 'Default', onRestart }} />)
+    expect(screen.getByText('(applies when Claude restarts)')).toHaveAttribute(
+      'title',
+      'Claude is still running in Default',
+    )
+    await user.click(screen.getByRole('button', { name: 'Restart Claude in Work…' }))
+    expect(onRestart).toHaveBeenCalledTimes(1)
+  })
+
+  it('says when the account chosen is no longer there, naming the one used instead', () => {
+    render(<TaskHeader {...base} account={{ name: 'Default', unknown: true, onRestart: vi.fn() }} />)
+    expect(screen.getByText('Account: unknown → Default')).toHaveAttribute(
+      'title',
+      'The Claude account chosen for it no longer exists: new sessions start in Default',
+    )
+  })
+
+  it('shows nothing without an account (a single one)', () => {
+    render(<TaskHeader {...base} />)
+    expect(screen.queryByText(/^Account:/)).not.toBeInTheDocument()
   })
 })

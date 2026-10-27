@@ -22,6 +22,38 @@ export function escapeFormat(value: string): string {
  */
 export const shellCommandArg = (command: string): string => (command.endsWith(';') ? `${command} ` : command)
 
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
+
+/**
+ * Refuses a variable tmux can't be handed as is: a name that isn't a shell variable name, or a value ending in `;`,
+ * which tmux would read as the end of its command. Anything else is one execFile argument, never seen by a shell,
+ * in which tmux expands no formats: it needs no escaping.
+ */
+function checkEnv(name: string, value: string | null): void {
+  if (!ENV_NAME.test(name)) throw new Error(`Invalid environment variable name: ${JSON.stringify(name)}`)
+  if (value?.endsWith(';')) throw new Error(`The value of ${name} can't end in ;`)
+}
+
+/** `-e NAME=value` per variable (see checkEnv). */
+function envArgs(env: Record<string, string> = {}): string[] {
+  return Object.entries(env).flatMap(([name, value]) => {
+    checkEnv(name, value)
+    return ['-e', `${name}=${value}`]
+  })
+}
+
+/**
+ * `set-environment` per variable on the session (`-u` for null, see checkEnv), each ending with `;`: put before
+ * new-window or respawn-window in the same tmux call, so no other call changes the session's environment between
+ * the two.
+ */
+function sessionEnvCommands(session: string, env: Record<string, string | null> = {}): string[] {
+  return Object.entries(env).flatMap(([name, value]) => {
+    checkEnv(name, value)
+    return ['set-environment', '-t', `=${session}`, ...(value === null ? ['-u', name] : [name, value]), ';']
+  })
+}
+
 const isNoServer = (err: unknown): boolean =>
   err instanceof CommandError && /no server running|error connecting/i.test(err.stderr)
 
@@ -217,18 +249,34 @@ export class TmuxService implements TmuxApi {
     await this.tmux(['send-keys', '-t', target, 'Enter'])
   }
 
-  async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
-    await this.tmux([
-      'new-session',
-      '-d',
-      '-s',
-      name,
-      '-c',
-      escapeFormat(cwd),
-      '-n',
-      windowName,
-      shellCommandArg(command),
-    ])
+  async newSession(
+    name: string,
+    cwd: string,
+    windowName: string,
+    command: string,
+    env: Record<string, string> = {},
+  ): Promise<void> {
+    try {
+      await this.tmux([
+        'new-session',
+        '-d',
+        '-s',
+        name,
+        '-c',
+        escapeFormat(cwd),
+        '-n',
+        windowName,
+        ...envArgs(env),
+        shellCommandArg(command),
+      ])
+    } catch (err) {
+      // `new-session -e` came with tmux 3.2: older ones print the command's usage (newer ones, an unknown flag).
+      const old = err instanceof CommandError && /usage: new-session|unknown flag -e/.test(err.stderr)
+      if (old && Object.keys(env).length > 0) {
+        throw new Error('Claude accounts other than Default need tmux 3.2 or newer (see tmux -V)', { cause: err })
+      }
+      throw err
+    }
   }
 
   /** Resolves when the session is gone, including when it was never there or ended on its own meanwhile. */
@@ -270,6 +318,7 @@ export class TmuxService implements TmuxApi {
     options: NewWindowOptions = {},
   ): Promise<void> {
     await this.tmux([
+      ...sessionEnvCommands(session, options.env),
       'new-window',
       '-t',
       `=${session}:`,
@@ -277,6 +326,7 @@ export class TmuxService implements TmuxApi {
       escapeFormat(cwd),
       '-n',
       windowName,
+      ...envArgs(options.windowEnv),
       ...(command ? [shellCommandArg(command)] : []),
       // In the same tmux call, so it is set before a command that exits at once is reaped: tmux runs a call's
       // commands in one go. The new window is the session's current one (`=session:`), as it was not made with -d.
@@ -284,8 +334,15 @@ export class TmuxService implements TmuxApi {
     ])
   }
 
-  async respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void> {
+  async respawnWindow(
+    session: string,
+    windowName: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string | null>,
+  ): Promise<void> {
     await this.tmux([
+      ...sessionEnvCommands(session, env),
       'respawn-window',
       '-k',
       '-t',

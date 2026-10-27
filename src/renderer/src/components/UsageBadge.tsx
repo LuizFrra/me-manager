@@ -23,16 +23,19 @@ const budgetNote = (budget: BudgetStatus): string =>
 /**
  * The selected task's or folder's Claude usage, all time: "$3.42 · 1.2M tok". Hovering or focusing it shows the
  * periods and the token split; clicking opens the usage view. With a budget, the tooltip says how much of it is
- * spent, and the badge turns amber from 80% of it (`budget-warn`) and red from 100% (`budget-over`).
+ * spent, and the badge turns amber from 80% of it (`budget-warn`) and red from 100% (`budget-over`). With
+ * `company`, its usage is billed to a company: tokens only ("1.2M tok"), no cost.
  */
 export function UsageBadge({
   usage,
   budget,
+  company = false,
   onOpen,
 }: {
   usage: UsageSummary
   /** The task's budget, against its all-time cost; null or absent when it has none. */
   budget?: BudgetStatus | null
+  company?: boolean
   onOpen: () => void
 }): React.JSX.Element {
   const tipId = useId()
@@ -42,7 +45,11 @@ export function UsageBadge({
     <span className="usage-badge-wrap">
       <button
         className={`usage-badge${level}`}
-        aria-label={`Claude usage: ${formatUsageShort(all)}${budget ? budgetNote(budget) : ''}`}
+        aria-label={
+          company
+            ? `Claude usage: ${formatTokens(usageTokens(all))} tok, billed to your company`
+            : `Claude usage: ${formatUsageShort(all)}${budget ? budgetNote(budget) : ''}`
+        }
         aria-describedby={tipId}
         onClick={onOpen}
       >
@@ -51,15 +58,19 @@ export function UsageBadge({
             ⚠
           </span>
         )}
-        <span className="usage-badge-cost">{formatCost(all.cost)}</span>
-        <span className="usage-badge-sep" aria-hidden="true">
-          ·
-        </span>
+        {!company && (
+          <>
+            <span className="usage-badge-cost">{formatCost(all.cost)}</span>
+            <span className="usage-badge-sep" aria-hidden="true">
+              ·
+            </span>
+          </>
+        )}
         <span className="usage-badge-tokens">{formatTokens(usageTokens(all))} tok</span>
       </button>
       <div role="tooltip" id={tipId} className="usage-tip">
-        <div className="usage-tip-title">{COST_LABEL}</div>
-        {budget && (
+        <div className="usage-tip-title">{company ? 'Billed to your company' : COST_LABEL}</div>
+        {budget && !company && (
           <p className={`usage-tip-budget budget-${budget.level}`}>
             {budgetSummary(budget, 'task budget')} ({budgetPercent(budget)}%)
           </p>
@@ -69,7 +80,7 @@ export function UsageBadge({
             {USAGE_PERIODS.map((period) => (
               <tr key={period}>
                 <th scope="row">{PERIOD_LABEL[period]}</th>
-                <td>{formatCost(usage[period].cost)}</td>
+                {!company && <td>{formatCost(usage[period].cost)}</td>}
                 <td>{formatTokens(usageTokens(usage[period]))} tok</td>
               </tr>
             ))}
@@ -93,12 +104,12 @@ export function UsageBadge({
             <dd>{formatTokens(all.cacheWrite5m + all.cacheWrite1h)}</dd>
           </div>
         </dl>
-        {all.unpricedTokens > 0 && (
+        {all.unpricedTokens > 0 && !company && (
           <p className="usage-tip-note">
             {formatTokens(all.unpricedTokens)} tokens from unpriced models not in the cost.
           </p>
         )}
-        <p className="usage-tip-note">{SUBSCRIPTION_NOTE}</p>
+        {!company && <p className="usage-tip-note">{SUBSCRIPTION_NOTE}</p>}
         <p className="usage-tip-hint">Click for all tasks and folders ({shortcutLabel('usage')})</p>
       </div>
     </span>
