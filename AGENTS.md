@@ -187,7 +187,7 @@ npm run build:unpack   # dist/*-unpacked: quick local check
 | `src/main/{git,tmux,files,usage,notify,store}/` | services behind the contracts                                               |
 | `src/preload/`                                  | exposes a generic `window.api`                                              |
 | `src/renderer/src/`                             | React UI; `api/mockApi.ts` is the in-memory API used by renderer tests      |
-| `docs/plans/`, `docs/features-backlog.md`       | designs and the feature log                                                 |
+| `docs/` (local only, git-ignored)               | designs, plans and the feature log, when present                            |
 
 Adding an API method touches, in order:
 

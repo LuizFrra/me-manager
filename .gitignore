@@ -8,3 +8,6 @@ out
 # Claude Code local state
 .claude/*.local.md
 *.tsbuildinfo
+
+# Design notes and the feature log: kept locally, not published
+docs/
