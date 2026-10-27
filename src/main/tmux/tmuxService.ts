@@ -76,9 +76,18 @@ export class TmuxService implements TmuxApi {
     this.timeoutMs = options.timeoutMs ?? TMUX_TIMEOUT_MS
   }
 
+  /**
+   * Writes the config, and applies it to a server that is already running: `-f` is read only when the server
+   * starts, and sessions outlive the app, so a new version's settings would otherwise wait for the next reboot.
+   */
   async ensureConfig(): Promise<void> {
     await mkdir(dirname(this.configFile), { recursive: true })
     await writeFile(this.configFile, TMUX_CONF, 'utf8')
+    try {
+      await this.tmux(['source-file', this.configFile])
+    } catch (err) {
+      if (!isNoServer(err)) throw err
+    }
   }
 
   private baseArgs(): string[] {
@@ -256,6 +265,10 @@ export class TmuxService implements TmuxApi {
     const target = `=${session}:=${windowName}`
     await this.leaveMode(target)
     await this.tmux(['send-keys', '-t', target, 'C-c'])
+  }
+
+  async leaveCopyMode(session: string): Promise<void> {
+    await this.leaveMode(`=${session}:`) // the session's active window
   }
 
   async listWindowActivity(session: string): Promise<WindowActivity[]> {

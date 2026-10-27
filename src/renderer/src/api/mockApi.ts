@@ -315,6 +315,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     selectTab: async () => clone(tabs),
     closeTab: async () => clone(tabs),
     restartClaude: async () => clone(tabs),
+    leaveCopyMode: async () => {},
     startRun: async (target) => run(target, false),
     restartRun: async (target) => run(target, true),
     // The demo's run tab "prints" Vite's address while it runs.
@@ -415,6 +416,7 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
     getBudgets: async () => demoBudgets(state, settings),
     ptyWrite: () => {},
     ptyResize: () => {},
+    pathForFile: (file) => `/demo/${file.name}`,
     onPtyData: () => () => {},
     onPtyExit: () => () => {},
     onSelectTarget: () => () => {},

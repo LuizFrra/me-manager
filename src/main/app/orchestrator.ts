@@ -838,6 +838,11 @@ export class Orchestrator implements AppService {
     return this.deps.tmux.listWindows(session)
   }
 
+  async leaveCopyMode(target: Target): Promise<void> {
+    const { session } = this.resolve(target)
+    await this.deps.tmux.leaveCopyMode(session)
+  }
+
   // The run command, in a `run` tab of the target's session (see runWindowCommand). Each runs on the session's run
   // queue, against the state as it is when its turn comes.
 

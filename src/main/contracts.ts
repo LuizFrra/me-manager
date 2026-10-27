@@ -114,6 +114,8 @@ export interface TmuxApi {
   respawnWindow(session: string, windowName: string, cwd: string, command: string): Promise<void>
   /** Presses Ctrl-C in the window named `windowName` (exactly), after leaving copy mode if it is in it. */
   sendInterrupt(session: string, windowName: string): Promise<void>
+  /** Leaves copy mode (or another mode) in the session's active pane, if it is in one. */
+  leaveCopyMode(session: string): Promise<void>
   /**
    * The session's windows with their `#{window_id}` and `#{window_activity}` (the last time each printed anything,
    * in Unix seconds); [] when the session or the server isn't running.
@@ -267,6 +269,7 @@ export type AppService = Omit<
   | 'pickDirectory'
   | 'ptyWrite'
   | 'ptyResize'
+  | 'pathForFile'
   | 'onPtyData'
   | 'onPtyExit'
   | 'onSelectTarget'

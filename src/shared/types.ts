@@ -487,6 +487,11 @@ export interface MeManagerApi {
   closeTab(target: Target, index: number): Promise<TabInfo[]>
   restartClaude(target: Target): Promise<TabInfo[]>
   /**
+   * Leaves copy mode in the target's active tab, if it is in it. After a scroll back, tmux (not the program) gets
+   * the keys: the terminal calls this before it sends the next one.
+   */
+  leaveCopyMode(target: Target): Promise<void>
+  /**
    * Shows the target's `run` tab, or opens one (active) that runs its repo's or folder's run command with the
    * user's shell in the worktree or folder. The tab stays open with the output when the command exits, as a `dead`
    * TabInfo. Refuses without a run command, or when the session isn't running.
@@ -595,6 +600,8 @@ export interface MeManagerApi {
 
   ptyWrite(data: string): void
   ptyResize(cols: number, rows: number): void
+  /** Where a file dragged in from the desktop is on disk; '' for one that isn't a local file. Synchronous. */
+  pathForFile(file: File): string
   onPtyData(cb: (data: string) => void): () => void
   onPtyExit(cb: (code: number) => void): () => void
   /** Main asks to select a target (a desktop notification for it was clicked). Returns an unsubscribe function. */
