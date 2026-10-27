@@ -1277,6 +1277,20 @@ button:disabled {
   flex: 1;
   padding: 6px 8px;
 }
+.account-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 8px;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+.account-confirm p {
+  flex: 1 1 240px;
+  color: var(--text);
+}
 .account-buttons {
   display: flex;
   gap: 6px;

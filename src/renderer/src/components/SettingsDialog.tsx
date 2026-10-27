@@ -359,6 +359,26 @@ function AccountRow(props: {
     refocus.current = true
     setRenaming(null)
   }
+  // Remove asks first, in the row, what removing the account does; Cancel and Esc give the focus back to Remove.
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const removeRef = useRef<HTMLButtonElement>(null)
+  const refocusRemove = useRef(false)
+  useEffect(() => {
+    if (confirmingRemove || !refocusRemove.current) return
+    refocusRemove.current = false
+    removeRef.current?.focus() // enabled again by now
+  }, [confirmingRemove])
+  const cancelRemove = (): void => {
+    refocusRemove.current = true
+    setConfirmingRemove(false)
+  }
+  const remove = (): Promise<void> =>
+    act(async () => {
+      const refused = await props.change(() => api.removeProfile(p.id))
+      if (refused) setConfirmingRemove(false)
+      else props.onRemoved()
+      return refused
+    })
   const errorId = useId()
   const renameError = renaming === null ? null : accountError(renaming, p.configDir, props.others)
   const shown = renameError ?? error
@@ -443,17 +463,15 @@ function AccountRow(props: {
                     Rename
                   </button>
                   <button
+                    ref={removeRef}
                     type="button"
                     aria-label={`Remove ${p.name}`}
                     title="Removes it from the app; its folder stays as it is"
-                    disabled={busy}
-                    onClick={() =>
-                      void act(async () => {
-                        const refused = await props.change(() => api.removeProfile(p.id))
-                        if (!refused) props.onRemoved()
-                        return refused
-                      })
-                    }
+                    disabled={busy || confirmingRemove}
+                    onClick={() => {
+                      setError(null)
+                      setConfirmingRemove(true)
+                    }}
                   >
                     Remove
                   </button>
@@ -472,6 +490,32 @@ function AccountRow(props: {
           )}
         </span>
       </div>
+      {confirmingRemove && (
+        <div
+          className="account-confirm"
+          role="group"
+          aria-label={`Remove ${p.name}?`}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.preventDefault()
+            e.stopPropagation()
+            cancelRemove()
+          }}
+        >
+          <p className="settings-hint">
+            Its usage history leaves the usage totals and budgets, as its folder is no longer read. The folder itself
+            stays as it is.
+          </p>
+          <span className="account-buttons">
+            <button type="button" autoFocus onClick={cancelRemove}>
+              Cancel
+            </button>
+            <button type="button" className="danger" disabled={busy} onClick={() => void remove()}>
+              Remove account
+            </button>
+          </span>
+        </div>
+      )}
       {shown && (
         <p id={errorId} className="settings-error" role="alert">
           {shown}
