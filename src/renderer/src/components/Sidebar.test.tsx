@@ -724,13 +724,14 @@ describe('Sidebar multi-selection', () => {
     )
   }
   const fixTarget = { themeId: 'Client', itemId: 'api', taskId: 'fix' }
-  const label = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(`^\\S ${name}$`, 'u') })
+  const label = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: new RegExp(`^\\S ${name}(, selected)?$`, 'u') })
   const row = (name: string): HTMLElement => label(name).closest('.row') as HTMLElement
-  /** The tasks in the multi-selection, by their rows' aria-selected. */
+  /** The tasks in the multi-selection, as screen readers hear them: "● docs, selected". */
   const chosen = (): string[] =>
-    [...document.querySelectorAll('.task-row[aria-selected="true"]')].map(
-      (r) => r.querySelector('.row-label')?.textContent?.replace(/^\S /u, '') ?? '',
-    )
+    screen
+      .queryAllByRole('button', { name: /^\S .+, selected$/u })
+      .map((b) => b.textContent?.replace(/^\S |, selected$/gu, '') ?? '')
   const bar = (): HTMLElement => screen.getByRole('toolbar', { name: 'Selected tasks' })
 
   it('toggles tasks in with Ctrl+click, the current one included, without opening them', async () => {
@@ -746,7 +747,7 @@ describe('Sidebar multi-selection', () => {
     await user.keyboard('{/Control}')
     expect(chosen()).toEqual(['docs', 'ui'])
     expect(onSelect).not.toHaveBeenCalled()
-    expect(row('ship')).toHaveAttribute('aria-selected', 'false')
+    expect(label('ship')).toHaveAccessibleName('○ ship')
   })
 
   it('marks selected rows apart from the current task', () => {
@@ -755,7 +756,9 @@ describe('Sidebar multi-selection', () => {
     expect(row('fix')).not.toHaveClass('multi-selected')
     expect(row('docs')).toHaveClass('multi-selected')
     expect(row('docs')).not.toHaveClass('selected')
-    expect(row('docs')).toHaveAttribute('aria-selected', 'true')
+    expect(label('docs')).toHaveAccessibleName('○ docs, selected')
+    // aria-selected means nothing on an element without a role that takes it: screen readers never heard it.
+    expect(document.querySelector('[aria-selected]')).toBeNull()
   })
 
   it("selects a range with Shift+click, within the clicked task's repo", async () => {

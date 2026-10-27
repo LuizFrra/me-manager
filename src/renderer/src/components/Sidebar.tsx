@@ -797,7 +797,6 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 onKeyDown={(e) =>
                                   taskKeys(e, { kind: 'task', themeId: theme.id, repoId: item.id, taskId: task.id })
                                 }
-                                aria-selected={p.multiSelection.has(task.id)}
                               >
                                 <button
                                   className="row-label"
@@ -808,6 +807,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 >
                                   {dot(task.id)} <span className="row-name">{task.name}</span>
                                   {p.unread?.has(task.id) && <UnreadMark />}
+                                  {/* In the multi-selection: said with the name, as the row is not a selectable role. */}
+                                  {p.multiSelection.has(task.id) && <span className="sr-only">, selected</span>}
                                 </button>
                                 <OverBudget status={p.budgets?.[task.id]} />
                                 {p.gitStatus?.[task.id] && (

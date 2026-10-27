@@ -87,8 +87,9 @@ interface Hold {
   gate?: Deferred
 }
 
-/** The sidebar button for a task; its label may start with a status dot. */
-const taskButton = (name: string): HTMLElement => screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}$`) })
+/** The sidebar button for a task; its label may start with a status dot, and end with ", selected". */
+const taskButton = (name: string): HTMLElement =>
+  screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}(, selected)?$`) })
 
 /** Each task reports tabs named after it; `hold` delays responses for one task until released. */
 function perTaskTabs(getApi: () => MeManagerApi, hold: Hold): (target: Target) => Promise<TabInfo[]> {
