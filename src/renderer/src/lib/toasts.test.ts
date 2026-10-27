@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ACTION_MS, cleanError, INFO_MS, useToasts } from './toasts'
+import { ACTION_MS, cleanError, INFO_MS, RESUME_MS, useToasts } from './toasts'
 
 describe('cleanError', () => {
   it('strips the Electron IPC prefix', () => {
@@ -65,5 +65,36 @@ describe('useToasts', () => {
     act(() => result.current.showInfo('Removed a', { action: { label: 'Undo', run: () => {} } }))
     act(() => result.current.showInfo('Removed b', { action: { label: 'Undo', run: () => {} } }))
     expect(result.current.toasts.map((t) => t.message)).toEqual(['Removed a', 'Removed b'])
+  })
+
+  it('keeps a hovered toast until the pointer leaves, then a little longer', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useToasts())
+    act(() => result.current.showError(new Error('push failed: a long reason to read')))
+    const id = result.current.toasts[0].id
+    act(() => result.current.hold(id))
+    act(() => vi.advanceTimersByTime(60_000))
+    expect(result.current.toasts).toHaveLength(1)
+    act(() => result.current.release(id))
+    act(() => vi.advanceTimersByTime(RESUME_MS - 1))
+    expect(result.current.toasts).toHaveLength(1)
+    act(() => vi.advanceTimersByTime(1))
+    expect(result.current.toasts).toEqual([])
+  })
+
+  it('shows the same error once, however often it happens', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useToasts())
+    act(() => result.current.showError(new Error('offline')))
+    act(() => vi.advanceTimersByTime(5000))
+    act(() => result.current.showError(new Error('offline')))
+    act(() => result.current.showError(new Error('other')))
+    expect(result.current.toasts.map((t) => t.message)).toEqual(['offline', 'other'])
+    act(() => vi.advanceTimersByTime(5000))
+    expect(result.current.toasts.map((t) => t.message)).toEqual(['offline', 'other']) // its time started again
+    act(() => vi.advanceTimersByTime(3000))
+    expect(result.current.toasts).toEqual([])
+    act(() => result.current.showError(new Error('offline')))
+    expect(result.current.toasts).toHaveLength(1) // gone, so shown again
   })
 })
