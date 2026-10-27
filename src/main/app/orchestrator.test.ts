@@ -1754,9 +1754,23 @@ describe('Orchestrator: Claude activity', () => {
     expect((await orch.getStatus()).activity).toEqual({})
   })
 
+  it('reads the sessions and their activity with one tmux call', async () => {
+    const { orch, tmux, clock, task, taskSession } = await withSessions()
+    tmux.activity.set(taskSession, secondsAgo(clock, 1))
+    const listSessions = vi.spyOn(tmux, 'listSessions')
+    const windowActivity = vi.spyOn(tmux, 'windowActivity')
+    const sessionActivity = vi.spyOn(tmux, 'sessionActivity')
+    const status = await orch.getStatus()
+    expect(status.running).toContain(task.id)
+    expect(status.activity).toEqual({ [task.id]: 'busy' })
+    expect(sessionActivity).toHaveBeenCalledTimes(1)
+    expect(listSessions).not.toHaveBeenCalled()
+    expect(windowActivity).not.toHaveBeenCalled()
+  })
+
   it('still reports sessions when the activity call fails', async () => {
     const { orch, tmux, task } = await withSessions()
-    tmux.windowActivity = async () => Promise.reject(new Error('tmux died'))
+    tmux.sessionActivity = async () => Promise.reject(new Error('tmux died'))
     const status = await orch.getStatus()
     expect(status.running).toContain(task.id)
     expect(status.activity).toEqual({})

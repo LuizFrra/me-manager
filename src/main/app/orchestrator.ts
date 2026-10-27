@@ -414,15 +414,14 @@ export class Orchestrator implements AppService {
   }
 
   /**
-   * Sessions, missing folders and Claude's activity. Kept cheap for polling: two tmux calls, plus a screen capture
+   * Sessions, missing folders and Claude's activity. Kept cheap for polling: one tmux call, plus a screen capture
    * only for a quiet session whose window printed something since its last capture. Archived tasks are left out:
    * their worktree is gone on purpose, and they have no session.
    */
   async getStatus(): Promise<LiveStatus> {
-    const [sessionList, activityBySession] = await Promise.all([
-      this.deps.tmux.listSessions().catch(() => [] as string[]),
-      this.deps.tmux.windowActivity(CLAUDE_WINDOW).catch(() => ({}) as Record<string, number>),
-    ])
+    const { sessions: sessionList, activity: activityBySession } = await this.deps.tmux
+      .sessionActivity(CLAUDE_WINDOW)
+      .catch(async () => ({ sessions: await this.deps.tmux.listSessions().catch(() => []), activity: {} }))
     const sessions = new Set(sessionList)
     const running: string[] = []
     const missing: string[] = []
