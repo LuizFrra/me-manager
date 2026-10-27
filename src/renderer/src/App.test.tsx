@@ -4757,6 +4757,14 @@ describe('App Claude accounts', () => {
     render(<App api={api} />)
     await createRepoAndTask(user, 'fix login bug', 'docs') // Default: never warned about
     expect(screen.queryByText(/isn’t signed in/)).not.toBeInTheDocument()
+    // Nor are the accounts read for it on each open.
+    const openTarget = vi.spyOn(api, 'openTarget')
+    const reads = vi.spyOn(api, 'listProfiles')
+    await user.click(taskButton('fix login bug'))
+    await waitFor(() => expect(openTarget).toHaveBeenCalled())
+    await act(async () => {})
+    expect(reads).not.toHaveBeenCalled()
+    reads.mockRestore()
     await user.click(screen.getByRole('button', { name: 'Claude account for Client X' }))
     await user.click(screen.getByRole('radio', { name: /^Work/ }))
     await user.click(screen.getByRole('button', { name: 'Save' }))
@@ -4774,6 +4782,9 @@ describe('App Claude accounts', () => {
     await waitFor(() => expect(listProfiles).toHaveBeenCalled()) // its account read again: still not signed in
     await act(async () => {})
     expect(screen.getAllByText(/isn’t signed in/)).toHaveLength(1)
+
+    await createTask(user, 'third') // a new task, opened once created
+    await waitFor(() => expect(screen.getAllByText(/isn’t signed in/)).toHaveLength(2))
   })
 
   it('shows only tokens in the usage badge of a task whose account is billed to a company', async () => {

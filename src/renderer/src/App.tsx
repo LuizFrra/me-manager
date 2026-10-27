@@ -28,6 +28,7 @@ import { hasUnsavedWork, isArchived, MAX_TRANSCRIPT_BYTES } from '../../shared/t
 import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
 import { targetKey } from '../../shared/naming'
 import { usageTokens } from '../../shared/usage'
+import { DEFAULT_PROFILE_ID } from '../../shared/profiles'
 import { clamp, DEFAULT_SETTINGS, FONT_SIZE_LIMITS } from '../../shared/settings'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { Sidebar } from './components/Sidebar'
@@ -875,7 +876,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     }
     setTabs(result ?? [])
     refresh()
-    if (result) void warnIfSignedOut(target)
+    if (result) void warnIfSignedOut(target, known)
   }
 
   // Targets already warned that their account isn't signed in, by targetKey and profile id: once per run each.
@@ -883,14 +884,17 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   /**
    * After a task or folder opened (its Claude started, or was already running): a toast with "Log in" when its
    * account is one the user added that has no login in its folder. Default is left alone, as before accounts
-   * existed (its login may come from elsewhere, an API key in the environment say). The profiles are read again,
-   * for their login state.
+   * existed (its login may come from elsewhere, an API key in the environment say), without reading the profiles;
+   * otherwise they are read again, for their login state. `known`: the state the target was opened from (a task
+   * just created may not be in stateRef yet).
    */
-  const warnIfSignedOut = async (target: Target): Promise<void> => {
+  const warnIfSignedOut = async (target: Target, known: AppState): Promise<void> => {
+    const found = resolveTarget(known, target)
+    if (!found || (found.task?.profileId ?? found.theme.profileId ?? DEFAULT_PROFILE_ID) === DEFAULT_PROFILE_ID) return
     const list = await api.listProfiles().catch(() => undefined)
     if (!list) return
     setProfiles(list)
-    const profile = targetProfile(stateRef.current, list, target)
+    const profile = targetProfile(known, list, target)
     if (!profile || profile.isDefault || profile.login !== 'notSignedIn') return
     const key = `${targetKey(target)} ${profile.id}`
     if (signedOutWarned.current.has(key)) return
@@ -1573,7 +1577,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const task = created?.kind === 'repo' ? created.tasks.find((t) => t.name === name) : undefined
     // Opened unless the user went elsewhere meanwhile; the new task is in the sidebar either way.
     const movedOn = selectedRef.current !== null || modalEpoch.current !== epoch || overlayOpenRef.current
-    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id }, { state: next })
     return true
   }
 
@@ -1602,7 +1606,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     closeDialog(dialogId)
     const repo = next.themes.find((t) => t.id === themeId)?.items.find((i) => i.id === repoId)
     const task = repo?.kind === 'repo' ? repo.tasks.find((t) => t.name === name) : undefined
-    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id })
+    if (task && !movedOn) void open({ themeId, itemId: repoId, taskId: task.id }, { state: next })
   }
 
   // Terminal zoom applies at once and is saved debounced; a size still waiting is saved if the App unmounts.
