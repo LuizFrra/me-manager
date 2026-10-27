@@ -1453,7 +1453,7 @@ describe('Orchestrator: Claude profiles', () => {
     expect(await claudeProfiles()).toEqual({ [fixTask.id]: 'p-work' })
   })
 
-  it("refuses to restart the run command when the profile's folder is gone, leaving the running one alone", async () => {
+  it("opens shell and run tabs without CLAUDE_CONFIG_DIR when the profile's folder is gone, but no Claude", async () => {
     const missing: string[] = []
     const ctx = await withProfiles({ themeProfile: 'p-work', missing })
     await ctx.orch.openTarget(ctx.target)
@@ -1461,10 +1461,20 @@ describe('Orchestrator: Claude profiles', () => {
     await ctx.orch.startRun(ctx.target)
     missing.push('/home/me/.claude-work')
     ctx.tmux.calls = []
-    await expect(ctx.orch.restartRun(ctx.target)).rejects.toThrow(
-      'Claude account “Work”: folder not found (/home/me/.claude-work)',
-    )
-    expect(ctx.tmux.calls).toEqual([]) // no Ctrl-C, no respawn
+    const refusal = 'Claude account “Work”: folder not found (/home/me/.claude-work)'
+
+    await ctx.orch.restartRun(ctx.target)
+    expect(ctx.tmux.calls.find((c) => c.startsWith('respawnWindow'))).toMatch(/ env -CLAUDE_CONFIG_DIR$/)
+    expect(envOf(ctx, SESSION, 'run')).toBeUndefined()
+    await ctx.orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION, 'shell')).toBeUndefined()
+
+    // Claude, and a login tab, still refuse rather than start in another account.
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    ctx.tmux.calls = []
+    await expect(ctx.orch.restartClaude(ctx.target)).rejects.toThrow(refusal)
+    await expect(ctx.orch.loginProfile('p-work', ctx.target)).rejects.toThrow(refusal)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newWindow'))).toEqual([])
   })
 
   it("refuses to start anything when the profile's folder is gone, never falling back to another account", async () => {

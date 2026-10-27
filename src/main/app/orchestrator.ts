@@ -528,6 +528,17 @@ export class Orchestrator implements AppService {
   }
 
   /**
+   * windowEnv for a shell or run tab, which doesn't start Claude: with the profile's folder gone, the tab opens
+   * without CLAUDE_CONFIG_DIR (removed from the session) instead of being refused. Claude's windows and the login
+   * tab still refuse, never starting in another account.
+   */
+  private shellWindowEnv(target: Target): Record<string, string | null> {
+    const profile = this.profileFor(target)
+    const gone = profile.id !== DEFAULT_PROFILE_ID && !this.deps.pathExists(profile.configDir)
+    return gone ? { CLAUDE_CONFIG_DIR: null } : this.windowEnv(target, profile)
+  }
+
+  /**
    * Runs `start` (a tmux call starting `claude`) with `prompt` in a private file (see claudePromptCommand), or
    * without a file when there is no prompt. The file is removed once the command had time to read it, or right
    * away when `start` fails.
@@ -1301,7 +1312,7 @@ export class Orchestrator implements AppService {
     const names = new Set((await this.deps.tmux.listWindows(session)).map((t) => t.name))
     let name = 'shell'
     for (let n = 2; names.has(name); n++) name = `shell ${n}`
-    await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: this.windowEnv(target) })
+    await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: this.shellWindowEnv(target) })
     return this.deps.tmux.listWindows(session)
   }
 
@@ -1410,7 +1421,7 @@ export class Orchestrator implements AppService {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run) await this.deps.tmux.selectWindow(session, run.index)
-      else await this.newRunWindow(session, cwd, command, this.windowEnv(target))
+      else await this.newRunWindow(session, cwd, command, this.shellWindowEnv(target))
     })
   }
 
@@ -1422,7 +1433,7 @@ export class Orchestrator implements AppService {
   async restartRun(target: Target): Promise<TabInfo[]> {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const { tmux } = this.deps
-      const env = this.windowEnv(target) // a gone profile folder refuses before the command stops
+      const env = this.shellWindowEnv(target)
       let run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run && !run.dead) {
         await tmux.sendInterrupt(session, RUN_WINDOW)
