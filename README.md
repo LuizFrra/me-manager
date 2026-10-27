@@ -47,6 +47,12 @@ The packaged builds handle this themselves:
   whose Claude finished while you were elsewhere is marked in the sidebar until you open it.
 - **Tasks and sessions:** a git worktree per task, with Claude in a persistent tmux session and extra shell tabs.
   Templates pre-fill new tasks. Tasks can be archived (worktree removed, branch kept) and restored.
+- **Terminal:** Ctrl+click (Cmd+click on macOS) opens links in Claude's output: web addresses in the browser,
+  `path:line` in the files panel at that line. On Linux, Ctrl+C copies a selection and still interrupts when
+  nothing is selected, and Ctrl+V pastes text, or hands an image on the clipboard to Claude. Shift+Enter starts a
+  new line in Claude's prompt, Ctrl+Backspace deletes a word, a right click offers Copy and Paste, and files
+  dropped on the terminal are typed as their paths. After scrolling back, typing goes to Claude, and "Jump to the
+  bottom" returns to the prompt. Emoji line up as tmux draws them, and Claude gets 24-bit colour.
 - **Files panel:** a file tree, a code viewer and search. Diffs against the base (unified or split, virtualized
   for large diffs) and rendered Markdown with Mermaid.
 - **Review:** select lines in a diff or file, write comments, and paste them into Claude's prompt.
