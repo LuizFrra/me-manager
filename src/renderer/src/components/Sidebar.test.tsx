@@ -330,9 +330,10 @@ describe('Sidebar git badges', () => {
 })
 
 describe('Sidebar status dot', () => {
-  /** The dot of a task or folder row: its button is named "<dot> <name>". */
+  /** The dot of a task or folder row: its button is named "<dot> <name>", then its state. */
   const dotOf = (name: string): HTMLElement => {
-    const dot = screen.getByRole('button', { name: new RegExp(`^\\S ${name}$`, 'u') }).querySelector('.dot')
+    const label = screen.getByRole('button', { name: new RegExp(`^\\S ${name}(, [^,]+)?$`, 'u') })
+    const dot = label.querySelector('.dot')
     if (!(dot instanceof HTMLElement)) throw new Error('no dot')
     return dot
   }
@@ -357,6 +358,18 @@ describe('Sidebar status dot', () => {
     expect(dotOf('shell').className).toBe('dot running')
     expect(dotOf('fix')).toHaveTextContent('✻') // Claude Code's working mark
     for (const name of ['docs', 'ship', 'shell']) expect(dotOf(name)).toHaveTextContent('●')
+  })
+
+  it('says the session state with each name, as the dot shows waiting, idle and running alike', () => {
+    renderSidebar({
+      state: appState(theme('Client', [repo('api', [task('fix'), task('docs'), task('ship')]), folder('notes')])),
+      status: { running: ['fix', 'docs', 'notes'], missing: ['ship'], activity: { fix: 'busy', docs: 'waiting' } },
+      unread: new Set(['docs']),
+    })
+    expect(screen.getByRole('button', { name: '✻ fix, working' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '● docs, waiting for you, new' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '⚠ ship, path missing' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '● notes' })).toBeInTheDocument() // a session, nothing more to say
   })
 
   it('keeps ○ for no session and ⚠ for a missing path', () => {

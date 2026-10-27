@@ -87,9 +87,9 @@ interface Hold {
   gate?: Deferred
 }
 
-/** The sidebar button for a task; its label may start with a status dot, and end with ", selected". */
+/** The sidebar button for a task; its label may start with a status dot, and end with its state (", selected"). */
 const taskButton = (name: string): HTMLElement =>
-  screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}(, selected)?$`) })
+  screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}(, [^,]+)*$`) })
 
 /** Each task reports tabs named after it; `hold` delays responses for one task until released. */
 function perTaskTabs(getApi: () => MeManagerApi, hold: Hold): (target: Target) => Promise<TabInfo[]> {
@@ -3582,7 +3582,7 @@ describe('App welcome and home screens', () => {
       api.getStatus = async () => ({ running: [fix.id, docs.id], missing: [], activity })
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
       render(<App api={api} />)
-      await user.click(await screen.findByRole('button', { name: /^\S docs$/ }))
+      await user.click(await screen.findByRole('button', { name: /^\S docs, working$/ }))
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_500)
       })
@@ -3590,9 +3590,9 @@ describe('App welcome and home screens', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_500)
       })
-      await user.click(await screen.findByRole('button', { name: /^\S fix, new$/ }))
-      expect(screen.getByRole('button', { name: /^\S docs$/ })).toBeInTheDocument()
-      expect(await screen.findByRole('button', { name: /^\S fix$/ })).toBeInTheDocument()
+      await user.click(await screen.findByRole('button', { name: /^\S fix, idle, new$/ }))
+      expect(screen.getByRole('button', { name: /^\S docs, idle$/ })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: /^\S fix, idle$/ })).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }
