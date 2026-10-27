@@ -24,7 +24,7 @@ export interface PanelReveal extends SelectedLines {
 export interface PanelState {
   tab: PanelTab
   selected?: string
-  /** Lines to scroll to and mark in the Files tab; cleared when another file is picked. */
+  /** Lines to scroll to and mark, in the file or its diff; cleared when another file is picked. */
   reveal?: PanelReveal
   search: SearchState
   mdMode: 'view' | 'raw'

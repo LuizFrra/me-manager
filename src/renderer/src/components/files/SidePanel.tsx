@@ -263,14 +263,17 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
     })
   })
-  // A comment opens where it was made: the diff, or the file at its first line (Markdown and SVG as their text).
+  // A comment opens at its lines, where it was made: the diff, or the file (Markdown and SVG as their text).
   const openComment = (c: ReviewComment): void => {
     const inFiles = c.tab === 'files' || !isRepo
     onState({
       ...state,
       tab: inFiles ? 'files' : 'changes',
       selected: c.path,
-      reveal: inFiles ? { path: c.path, lines: { ...(c.lines ?? c.removed) } as LineRange } : undefined,
+      // New objects: a click on the same comment again scrolls back to its lines.
+      reveal: inFiles
+        ? { path: c.path, lines: { ...((c.lines ?? c.removed) as LineRange) } }
+        : { path: c.path, lines: c.lines && { ...c.lines }, removed: c.removed && { ...c.removed } },
       history: [],
       mdMode: inFiles && (isMarkdown(c.path) || isSvgPath(c.path)) ? 'raw' : state.mdMode,
     })
@@ -444,7 +447,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             mdMode={state.mdMode}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}
-            markLines={tab === 'files' && state.reveal?.path === shownPath ? state.reveal?.lines : undefined}
+            reveal={state.reveal?.path === shownPath ? state.reveal : undefined}
             canGoBack={state.history.length > 0}
             onBack={back}
             onMdMode={setMdMode}

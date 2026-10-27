@@ -40,8 +40,8 @@ vi.mock('../../lib/fileTree', async (importOriginal) => {
   }
 })
 vi.mock('./DiffView', () => ({
-  DiffView: (p: { diff: string; layout?: string }) => (
-    <pre data-testid="diff" data-layout={p.layout ?? 'unified'}>
+  DiffView: (p: { diff: string; layout?: string; mark?: unknown }) => (
+    <pre data-testid="diff" data-layout={p.layout ?? 'unified'} data-mark={p.mark && JSON.stringify(p.mark)}>
       DIFF:{p.diff}
     </pre>
   ),
@@ -695,6 +695,27 @@ describe('SidePanel', () => {
       } finally {
         HTMLElement.prototype.scrollIntoView = original
       }
+    })
+
+    it('opens a comment made in a diff at its lines there', async () => {
+      const user = userEvent.setup()
+      const onDiff: ReviewComment = {
+        id: 2,
+        tab: 'changes',
+        path: 'src/app.ts',
+        lines: { start: 3, end: 4 },
+        removed: { start: 2, end: 2 },
+        note: 'Why?',
+      }
+      render(<Harness api={createMockApi()} review={review({ comments: [onDiff] })} />)
+      await user.click(screen.getByRole('button', { name: 'src/app.ts:3-4 (and removed line 2)' }))
+      expect(screen.getByRole('tab', { name: /Changes/ })).toHaveAttribute('aria-selected', 'true')
+      const diff = await screen.findByTestId('diff')
+      expect(JSON.parse(diff.dataset.mark ?? '')).toEqual({
+        path: 'src/app.ts',
+        lines: { start: 3, end: 4 },
+        removed: { start: 2, end: 2 },
+      })
     })
 
     it('shows the lines to reveal only on their own file (not one opened from elsewhere)', async () => {

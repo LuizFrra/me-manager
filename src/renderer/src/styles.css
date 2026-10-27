@@ -2449,6 +2449,18 @@ pre code.hljs {
 .diff-split td.diff-ln.diff-selected {
   box-shadow: inset 2px 0 0 var(--accent);
 }
+/* A review comment's lines, opened from the tray: marked like the code view's .code-line-mark. */
+.diff-unified tr.diff-marked td,
+.diff-split td.diff-marked {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--waiting) 12%, transparent),
+    color-mix(in srgb, var(--waiting) 12%, transparent)
+  );
+}
+.diff-unified tr.diff-marked td:first-child,
+.diff-split td.diff-ln.diff-marked {
+  box-shadow: inset 2px 0 0 var(--waiting);
+}
 /* A long diff renders only the rows in view (see DiffView): every row is one 18 px line (DIFF_ROW_HEIGHT), and
    spacer rows stand for the others. */
 .diff-virtual tr {

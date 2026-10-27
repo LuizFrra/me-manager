@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   mixedLineEndings,
   modeChangeText,
@@ -15,7 +15,8 @@ import {
   type LineSelection,
   type LineSelectProps,
 } from '../../lib/lineSelection'
-import { diffLinesRange } from '../../lib/review'
+import { diffLinesRange, type LineRange, type SelectedLines } from '../../lib/review'
+import { useLatestCallback } from '../../lib/useLatestCallback'
 import { useVirtualRows } from '../../lib/useVirtualRows'
 
 export interface DiffViewProps {
@@ -27,6 +28,11 @@ export interface DiffViewProps {
    * left out, so a selection means the same lines in either layout.
    */
   select?: LineSelectProps
+  /**
+   * Lines to mark and scroll to (a review comment's): `lines` by their number in the new file, `removed` by theirs
+   * in the old one. Scrolls when another object is passed, not when the diff or the layout changes.
+   */
+  mark?: SelectedLines
 }
 
 /** The lines that can be selected (all but notes), in order, and where each one is by line object and number. */
@@ -80,6 +86,19 @@ interface TableRows {
    */
   digits: number
   longest: number
+}
+
+const inRange = (range: LineRange | undefined, n: number | undefined): boolean =>
+  range !== undefined && n !== undefined && n >= range.start && n <= range.end
+
+/** The selectable rows `mark` covers, in order. */
+function markedRows(lines: readonly DiffLine[], mark: SelectedLines | undefined): number[] {
+  if (!mark) return []
+  const rows: number[] = []
+  lines.forEach((line, i) => {
+    if (line.kind === 'del' ? inRange(mark.removed, line.oldNo) : inRange(mark.lines, line.newNo)) rows.push(i)
+  })
+  return rows
 }
 
 const sideSel = (cell: SplitCell | null, by: Map<number, number>): number | undefined =>
@@ -141,16 +160,18 @@ function SplitSide({
   cell,
   sel,
   selected,
+  marked,
   clipped,
   eol,
 }: {
   cell: SplitCell | null
   sel?: number
   selected: boolean
+  marked: boolean
   clipped: boolean
   eol: boolean
 }): React.JSX.Element {
-  const cls = `${cell ? ROW_CLASS[cell.kind] : 'diff-empty'}${selected ? ' diff-selected' : ''}`
+  const cls = `${cell ? ROW_CLASS[cell.kind] : 'diff-empty'}${selected ? ' diff-selected' : ''}${marked ? ' diff-marked' : ''}`
   return (
     <>
       <td className={`diff-ln ${cls}`} data-sel={sel}>
@@ -185,7 +206,7 @@ const pickedRow = (e: React.MouseEvent): number | null => {
   return cell ? Number(cell.dataset.sel) : null
 }
 
-export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): React.JSX.Element {
+export function DiffView({ diff, layout = 'unified', select, mark }: DiffViewProps): React.JSX.Element {
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff])
   const split = useMemo(() => (layout === 'split' ? splitHunks(parsed.hunks) : null), [layout, parsed])
   // Remembers which diff text the user expanded, so a new diff starts collapsed again.
@@ -195,6 +216,8 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
   const eol = useMemo(() => mixedLineEndings(parsed), [parsed])
   const selectable = useMemo(() => selectableLines(parsed), [parsed])
   const table = useMemo(() => tableRows(parsed, split, selectable), [parsed, split, selectable])
+  const markedList = useMemo(() => markedRows(selectable.lines, mark), [selectable, mark])
+  const marked = useMemo(() => new Set(markedList), [markedList])
   // A long diff renders the rows in view of the viewer's body (its scroller), all one line high.
   const { setContainer, virtual, start, end, scrollToIndex } = useVirtualRows<HTMLTableSectionElement>({
     count: table.rows.length,
@@ -219,11 +242,31 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
     if (virtual) scrollToIndex(table.rowOf[index])
     pendingScroll.current = scrollToLine(index) ? null : index
   })
+  // The marked lines, scrolled to once per request: they may be out of the rows rendered too.
+  const viewRef = useRef<HTMLDivElement>(null)
+  const pendingMark = useRef(false)
+  const scrollToMark = (): boolean => {
+    const el = viewRef.current?.querySelector('.diff-marked')
+    if (!el) return false
+    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', inline: 'nearest' })
+    return true
+  }
+  const revealMark = useLatestCallback((): void => {
+    if (markedList.length === 0) return
+    if (virtual) scrollToIndex(table.rowOf[markedList[0]])
+    pendingMark.current = !scrollToMark()
+  })
+  const hasMark = markedList.length > 0
+  useEffect(() => {
+    if (hasMark) revealMark()
+  }, [mark, hasMark, revealMark])
   useLayoutEffect(() => {
     if (pendingScroll.current !== null && scrollToLine(pendingScroll.current)) pendingScroll.current = null
+    if (pendingMark.current && scrollToMark()) pendingMark.current = false
   })
   const [low, high] = select?.selection ? selectionBounds(select.selection) : [-1, -2]
   const isSelected = (i: number | undefined): boolean => i !== undefined && i >= low && i <= high
+  const isMarked = (i: number | undefined): boolean => i !== undefined && marked.has(i)
   // Line numbers are clicked (Shift extends); the table takes focus for the keys. Shift-clicks would select text.
   const selectProps = select && {
     ref: tableRef,
@@ -291,8 +334,22 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
       const right = select ? row.right : undefined
       shown.push(
         <tr key={i} aria-rowindex={index}>
-          <SplitSide cell={row.row.left} sel={left} selected={isSelected(left)} clipped={virtual} eol={eol} />
-          <SplitSide cell={row.row.right} sel={right} selected={isSelected(right)} clipped={virtual} eol={eol} />
+          <SplitSide
+            cell={row.row.left}
+            sel={left}
+            selected={isSelected(left)}
+            marked={isMarked(row.left)}
+            clipped={virtual}
+            eol={eol}
+          />
+          <SplitSide
+            cell={row.row.right}
+            sel={right}
+            selected={isSelected(right)}
+            marked={isMarked(row.right)}
+            clipped={virtual}
+            eol={eol}
+          />
         </tr>,
       )
     } else {
@@ -301,7 +358,7 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
       shown.push(
         <tr
           key={i}
-          className={`${ROW_CLASS[line.kind]}${isSelected(sel) ? ' diff-selected' : ''}`}
+          className={`${ROW_CLASS[line.kind]}${isSelected(sel) ? ' diff-selected' : ''}${isMarked(row.sel) ? ' diff-marked' : ''}`}
           aria-rowindex={index}
         >
           <td className="diff-ln" data-sel={sel}>
@@ -334,7 +391,7 @@ export function DiffView({ diff, layout = 'unified', select }: DiffViewProps): R
   const virtualClass = virtual ? ' diff-virtual' : ''
 
   return (
-    <div className={`diff-view${split ? ' diff-view-split' : ''}`}>
+    <div className={`diff-view${split ? ' diff-view-split' : ''}`} ref={viewRef}>
       {parsed.renamed && (
         <div className="diff-message">
           Renamed from {parsed.oldPath} to {parsed.newPath}

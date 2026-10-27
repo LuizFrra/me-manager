@@ -157,6 +157,40 @@ describe('DiffView', () => {
   })
 })
 
+describe('DiffView marked lines', () => {
+  it("marks a comment's lines, new ones by their new number and removed ones by their old one, and scrolls to them", () => {
+    const scroll = vi.fn()
+    const original = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scroll
+    try {
+      const mark = { lines: { start: 27, end: 28 }, removed: { start: 27, end: 27 } }
+      const { rerender } = render(<DiffView diff={MULTI_HUNK} mark={mark} />)
+      const marked = (): string[] =>
+        [...document.querySelectorAll('.diff-marked')].map((el) => el.querySelector('.diff-text')?.textContent ?? '')
+      expect(marked()).toEqual(['line 27', 'line twenty-seven', 'line 28'])
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect(scroll.mock.contexts[0]).toHaveTextContent('line 27')
+      // Not again for the same request (a poll, another layout), but for a new one.
+      rerender(<DiffView diff={`${MULTI_HUNK}`} mark={mark} layout="split" />)
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect([...document.querySelectorAll('td.diff-text.diff-marked')].map((td) => td.textContent)).toEqual([
+        'line 27',
+        'line twenty-seven',
+        'line 28',
+        'line 28',
+      ])
+      rerender(<DiffView diff={MULTI_HUNK} mark={{ ...mark }} layout="split" />)
+      expect(scroll).toHaveBeenCalledTimes(2)
+      // Lines the diff doesn't show: nothing to mark or scroll to.
+      rerender(<DiffView diff={MULTI_HUNK} mark={{ lines: { start: 12, end: 14 } }} />)
+      expect(document.querySelector('.diff-marked')).toBeNull()
+      expect(scroll).toHaveBeenCalledTimes(2)
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original
+    }
+  })
+})
+
 describe('DiffView split layout', () => {
   /** A row's cells as text, `·` for an empty one. */
   const cells = (row: Element): string[] => [...row.querySelectorAll('td')].map((td) => td.textContent || '·')
@@ -330,19 +364,24 @@ describe('DiffView line selection', () => {
  * Renders `ui` in a scroller 10 rows high. jsdom has no layout: the scroller gets its height, and the table's body a
  * position that follows its scrollTop (call `layOut` again when the table is replaced).
  */
-function renderScrolled(ui: React.ReactElement): { scroller: HTMLElement; layOut: () => void } {
-  render(
+function renderScrolled(ui: React.ReactElement): {
+  scroller: HTMLElement
+  layOut: () => void
+  rerender: (ui: React.ReactElement) => void
+} {
+  const inScroller = (child: React.ReactElement): React.JSX.Element => (
     <div data-testid="scroller" style={{ overflowY: 'auto' }}>
-      {ui}
-    </div>,
+      {child}
+    </div>
   )
+  const { rerender } = render(inScroller(ui))
   const scroller = screen.getByTestId('scroller')
   Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 10 * DIFF_ROW_HEIGHT })
   const layOut = (): void => {
     scroller.querySelector('tbody')!.getBoundingClientRect = () => ({ top: -scroller.scrollTop }) as DOMRect
   }
   layOut()
-  return { scroller, layOut }
+  return { scroller, layOut, rerender: (next) => rerender(inScroller(next)) }
 }
 
 const scrollTo = (scroller: HTMLElement, top: number): void => {
@@ -418,6 +457,22 @@ describe('DiffView virtualization', () => {
     fireEvent.click(newNo('added 25003'), { shiftKey: true })
     expect(screen.getByRole('status')).toHaveTextContent('Lines 25001–25003')
     expect(screen.getByText('added 25002')).toHaveClass('diff-selected')
+  })
+
+  it('scrolls to marked lines far down a long diff, rendering them', () => {
+    const scroll = vi.fn()
+    const original = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scroll
+    try {
+      const diff = largeDiff(50_000)
+      const { scroller, rerender } = renderScrolled(<DiffView diff={diff} />)
+      rerender(<DiffView diff={diff} mark={{ lines: { start: 30_000, end: 30_000 } }} />)
+      expect(scroller.scrollTop).toBeGreaterThan(rowTop(29_900))
+      expect(screen.getByText('added 30000').closest('tr')).toHaveClass('diff-marked')
+      expect(scroll.mock.contexts.at(-1)).toHaveTextContent('added 30000')
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original
+    }
   })
 
   it('renders every row of a small diff, without row counts', () => {
