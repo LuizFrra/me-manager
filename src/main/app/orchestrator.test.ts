@@ -88,6 +88,13 @@ describe('Orchestrator: themes and items', () => {
     const { orch, themeId } = await setup()
     await expect(orch.addRepo(themeId, '/not/a/repo')).rejects.toThrow(/Not a git repository/)
   })
+  it('refuses a repository path that is not absolute text before asking git (it would resolve it anywhere)', async () => {
+    const { orch, git, themeId } = await setup()
+    git.roots.set('code/my-api', '/code/my-api') // as git resolves a relative path against the app's folder
+    for (const bad of ['code/my-api', '', '/code/my-api\0', 42, null] as unknown as string[]) {
+      await expect(orch.addRepo(themeId, bad)).rejects.toThrow('Choose a repository to add')
+    }
+  })
   it('refuses a folder path that is not absolute, or not there, before adding it', async () => {
     const { orch, store, deps, themeId } = await setup()
     deps.pathExists = (p) => p !== '/docs/gone'
@@ -855,6 +862,32 @@ describe('Orchestrator: archiving tasks', () => {
       expect(tmux.sessions.has(SESSION)).toBe(false)
       expect(pty.attached).toBeNull()
       expect(orch.currentTarget()).toBeNull()
+    }
+  })
+
+  it('refuses a new tab or a Claude (re)start while the task is being archived or removed', async () => {
+    for (const close of ['archive', 'remove'] as const) {
+      const { orch, tmux, themeId, repoId, target, task } = await withTask()
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const killSession = tmux.killSession.bind(tmux)
+      tmux.killSession = async (name: string): Promise<void> => {
+        await gate // tmux is slow to answer: the session is still there
+        return killSession(name)
+      }
+      const closing =
+        close === 'archive'
+          ? orch.archiveTask(themeId, repoId, task.id)
+          : orch.removeTask(themeId, repoId, task.id, false)
+      await new Promise((r) => setTimeout(r, 0))
+      const refusal = `"fix" is being ${close === 'archive' ? 'archived' : 'removed'}`
+      tmux.sessions.get(SESSION)!.windows = [{ name: 'shell' }] // Claude exited: a restart would start a new one
+      await expect(orch.newTab(target)).rejects.toThrow(refusal)
+      await expect(orch.restartClaude(target)).rejects.toThrow(refusal)
+      await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(refusal)
+      expect(tmux.sessions.get(SESSION)!.windows.map((w) => w.name)).toEqual(['shell'])
+      release()
+      await closing
     }
   })
 

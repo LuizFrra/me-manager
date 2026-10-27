@@ -12,6 +12,7 @@ import {
   parseLastCommit,
   parseLeftRightCount,
   summarizeGitError,
+  gitErrorOutput,
 } from './gitService'
 import { commitFile, git, makeClonedRepo, makeLocalRepo } from './testRepos'
 
@@ -226,6 +227,14 @@ describe('addWorktree with a kept branch', () => {
   })
 })
 
+/** A post-checkout hook that fails, like a git-lfs or husky one whose tool isn't on the app's PATH. */
+async function failingPostCheckout(repo: string): Promise<void> {
+  const hooks = join(repo, '..', 'hooks')
+  await mkdir(hooks, { recursive: true })
+  await writeFile(join(hooks, 'post-checkout'), '#!/bin/sh\necho "hook: tool not found" >&2\nexit 1\n', { mode: 0o755 })
+  await git(repo, 'config', 'core.hooksPath', hooks)
+}
+
 describe('addWorktree whose checkout fails', () => {
   it('deletes the branch it created, so the same task can be created once the cause is fixed', async () => {
     const { root, repo } = await makeLocalRepo()
@@ -245,6 +254,17 @@ describe('addWorktree whose checkout fails', () => {
     await git(repo, 'config', '--unset', 'filter.lfs-like.required')
     await svc.addWorktree(repo, wt, 'claude/t/x', 'main')
     expect(existsSync(join(wt, 'a.dat'))).toBe(true)
+  })
+  it('removes the worktree a failing post-checkout hook left behind, and its branch', async () => {
+    const { root, repo } = await makeLocalRepo()
+    await failingPostCheckout(repo)
+    const wt = join(root, 'wt')
+    await expect(svc.addWorktree(repo, wt, 'claude/t/x', 'main')).rejects.toThrow(
+      /^git worktree add failed: .*hook: tool not found/,
+    )
+    expect(existsSync(wt)).toBe(false)
+    expect((await git(repo, 'branch', '--list', 'claude/t/x')).trim()).toBe('')
+    expect(await git(repo, 'worktree', 'list')).not.toContain(wt)
   })
   it('leaves a folder already at the path, and the branches, as they were', async () => {
     const { root, repo } = await makeLocalRepo()
@@ -463,6 +483,20 @@ describe('restoreWorktree (archived tasks)', () => {
     await git(clone, 'checkout', branch)
     await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(/^git worktree add failed: fatal: /)
   })
+  it('removes the worktree a failing post-checkout hook left behind, keeping the branch', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await failingPostCheckout(clone)
+    await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(
+      /^git worktree add failed: .*hook: tool not found/,
+    )
+    expect(existsSync(wt)).toBe(false)
+    expect(await git(clone, 'worktree', 'list')).not.toContain(wt)
+    expect((await git(clone, 'branch', '--list', branch)).trim()).not.toBe('')
+    await git(clone, 'config', '--unset', 'core.hooksPath')
+    await svc.restoreWorktree(clone, wt, branch) // once the cause is fixed
+    expect(existsSync(join(wt, 'README.md'))).toBe(true)
+  })
   it('refuses an option-like branch', async () => {
     const { clone, wt } = await withTask()
     await expect(svc.restoreWorktree(clone, `${wt}-2`, '--force')).rejects.toThrow('Invalid branch: --force')
@@ -607,6 +641,24 @@ describe('commitAll', () => {
     ).toEqual(['D\told.txt', 'M\tREADME.md', 'A\tnew file ç.txt'].sort())
   })
 
+  it("carries a failing hook's whole output, with its line breaks, for the Commit dialog", async () => {
+    const { wt } = await withTask()
+    const hooks = join(wt, '..', 'hooks')
+    await mkdir(hooks, { recursive: true })
+    // 400 lines of about 30 characters: far over the one-line summary's cap.
+    const hook =
+      '#!/bin/sh\nfor i in $(seq 1 400); do echo "lint: problem number $i found"; done\necho done >&2\nexit 1\n'
+    await writeFile(join(hooks, 'pre-commit'), hook, { mode: 0o755 })
+    await git(wt, 'config', 'core.hooksPath', hooks)
+    await writeFile(join(wt, 'a.txt'), 'a\n')
+    const err = await svc.commitAll(wt, 'add a').catch((e: Error) => e)
+    const lines = (err as Error).message.split('\n')
+    expect(lines[0]).toBe('git commit failed: lint: problem number 1 found')
+    expect(lines[1]).toBe('lint: problem number 2 found')
+    expect(lines.at(-1)).toBe('done')
+    expect(lines).toHaveLength(401)
+  })
+
   it('refuses when there is nothing to commit', async () => {
     const { wt } = await withTask()
     const before = await git(wt, 'rev-parse', 'HEAD')
@@ -624,7 +676,7 @@ describe('commitAll without an identity', () => {
     await writeFile(join(wt, 'a.txt'), 'a\n')
     const err = await svc.commitAll(wt, 'add a').catch((e: Error) => e)
     expect(err).toBeInstanceOf(Error)
-    expect((err as Error).message).toMatch(/^git commit failed: Author identity unknown .*Please tell me who you are/)
+    expect((err as Error).message).toMatch(/^git commit failed: Author identity unknown\s.*Please tell me who you are/s)
     expect((err as Error).message).toMatch(/auto-detection is disabled/)
     expect(await git(wt, 'rev-parse', 'HEAD')).toBe(before)
   })
@@ -689,6 +741,14 @@ describe('git error summaries', () => {
     )
     expect(summarizeGitError('To x\nsomething odd\n')).toBe('To x something odd')
     expect(summarizeGitError(`fatal: ${'x'.repeat(1000)}`)).toHaveLength(500)
+  })
+
+  it("keeps a command's whole output with its line breaks, without hints, colours or blank ends", () => {
+    const stderr = '\n\x1b[31mlint failed\x1b[0m  \r\nhint: use --no-verify\n\n  src/a.ts:1 unused\n\n'
+    expect(gitErrorOutput(stderr)).toBe('lint failed\n\n  src/a.ts:1 unused')
+    const long = gitErrorOutput('x\n'.repeat(20_000))
+    expect(long.length).toBeLessThanOrEqual(20_000)
+    expect(long.endsWith('…')).toBe(true)
   })
 
   it('words a timeout and passes on errors that are not command failures', () => {

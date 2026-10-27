@@ -155,19 +155,28 @@ export class TmuxService implements TmuxApi {
     }
   }
 
-  async captureHistory(
-    session: string,
-    index: number,
-    maxBytes: number,
-  ): Promise<{ text: string; truncated: boolean }> {
-    // By window id (`@3`), never `=session:index`: tmux falls back to matching window *names* (`9` or `9…`) when
-    // there is no window at that index.
+  /**
+   * The id (`@3`) of the window at `index`, to target it by: `=session:index` would make tmux fall back to matching
+   * window *names* (`9` or `9…`) when there is no window at that index. Checks the index itself too: it comes from
+   * the renderer.
+   */
+  private async windowId(session: string, index: number): Promise<string> {
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) throw new Error('Invalid tab')
     const out = await this.tmux(['list-windows', '-t', `=${session}`, '-F', '#{window_index}\t#{window_id}'])
     const id = out
       .split('\n')
       .map((line) => line.split('\t'))
       .find(([i]) => i === String(index))?.[1]
     if (!id || !/^@\d+$/.test(id)) throw new Error(`No tab ${index} in ${session}`)
+    return id
+  }
+
+  async captureHistory(
+    session: string,
+    index: number,
+    maxBytes: number,
+  ): Promise<{ text: string; truncated: boolean }> {
+    const id = await this.windowId(session, index)
     // -J joins wrapped lines; without -e there are no escape sequences; -S - -E -: the whole history and screen.
     const { stdout, truncated } = await runTail(
       'tmux',
@@ -341,11 +350,11 @@ export class TmuxService implements TmuxApi {
   }
 
   async selectWindow(session: string, index: number): Promise<void> {
-    await this.tmux(['select-window', '-t', `=${session}:${index}`])
+    await this.tmux(['select-window', '-t', await this.windowId(session, index)])
   }
 
   async killWindow(session: string, index: number): Promise<void> {
-    await this.tmux(['kill-window', '-t', `=${session}:${index}`])
+    await this.tmux(['kill-window', '-t', await this.windowId(session, index)])
   }
 
   attachCommand(session: string): { file: string; args: string[] } {

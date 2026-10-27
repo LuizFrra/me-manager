@@ -793,6 +793,24 @@ describe('CommitDialog', () => {
     expect(onCommit).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+
+  it("keeps a hook's line breaks in the full output, and sums its lines up on one line", async () => {
+    const user = userEvent.setup()
+    const output = 'git commit failed: lint failed\n  src/a.ts:1 unused\n  src/b.ts:2 unused'
+    const onCommit = vi.fn().mockRejectedValueOnce(new Error(output))
+    render(
+      <CommitDialog taskName="t" branch="b" loadChanges={async () => CHANGES} onCommit={onCommit} onCancel={vi.fn()} />,
+    )
+    await screen.findByText('1 file will be committed')
+    await user.type(screen.getByRole('textbox', { name: 'Commit message' }), 'Fix it')
+    await user.click(screen.getByRole('button', { name: 'Commit' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.querySelector('p')).toHaveTextContent(/^lint failed src\/a\.ts:1 unused src\/b\.ts:2 unused$/)
+    await user.click(within(alert).getByText('Full output')) // short, but more than one line
+    expect(alert.querySelector('.commit-error-output')!.textContent).toBe(
+      'lint failed\n  src/a.ts:1 unused\n  src/b.ts:2 unused',
+    )
+  })
 })
 
 describe('Esc asks before discarding typed text', () => {

@@ -79,6 +79,26 @@ describe('PtyService', () => {
     expect(procs[0].size).toEqual([90, 30])
   })
 
+  it('ignores a size that is not a whole number of at least 2, or more than tmux takes', () => {
+    const { spawn, procs } = fakeSpawn()
+    const svc = new PtyService(spawn)
+    svc.attach('tmux', [], '/w')
+    svc.resize(90, 30)
+    for (const [c, r] of [
+      [1, 30],
+      [90.5, 30],
+      [90, NaN],
+      [Infinity, 30],
+      [90, 10_001],
+      ['90', '30'],
+    ] as [number, number][]) {
+      svc.resize(c, r)
+    }
+    expect(procs[0].size).toEqual([90, 30])
+    svc.attach('tmux', [], '/w') // the next pty starts at the last good size
+    expect([procs[1].opts.cols, procs[1].opts.rows]).toEqual([90, 30])
+  })
+
   it('kills the previous pty on re-attach and ignores its late events', () => {
     const { spawn, procs } = fakeSpawn()
     const svc = new PtyService(spawn)

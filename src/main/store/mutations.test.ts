@@ -299,6 +299,16 @@ describe('renaming', () => {
     expect(() => m.renameTheme(two, 'nope', 'Y')).toThrow(/Theme not found/)
   })
 
+  it('refuses a name that is not text with a clear message, not a TypeError', () => {
+    const { s, themeId, repoId } = withTasks()
+    for (const bad of [undefined, null, 42, {}, ['x']] as unknown as string[]) {
+      expect(() => m.addTheme(s, bad)).toThrow('Theme name must be text')
+      expect(() => m.renameTheme(s, themeId, bad)).toThrow('Theme name must be text')
+      expect(() => m.renameTask(s, themeId, repoId, 'task-fix', bad)).toThrow('Task name must be text')
+      expect(() => m.requireSlug(bad, 'Task')).toThrow('Task name must be text')
+    }
+  })
+
   it('renames a task and keeps its slug, branch and worktree path', () => {
     const { s, themeId, repoId } = withTasks()
     const next = m.renameTask(s, themeId, repoId, 'task-fix', ' Fix the login flow ')

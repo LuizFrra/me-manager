@@ -24,7 +24,13 @@ function clone(state: AppState): AppState {
   return structuredClone(state)
 }
 
+/** Names come from the renderer: anything but a string would fail later with an unclear TypeError. */
+function checkText(name: unknown, what: string): asserts name is string {
+  if (typeof name !== 'string') throw new Error(`${what} name must be text`)
+}
+
 export function requireSlug(name: string, what: string): string {
+  checkText(name, what)
   const slug = slugify(name)
   if (!slug) throw new Error(`${what} name "${name}" must contain letters or numbers`)
   return slug
@@ -68,6 +74,7 @@ const sameName = (a: string, b: string): boolean => a.toLowerCase() === b.toLowe
 
 /** The trimmed display name; throws if it is empty. */
 export function requireName(name: string, what: string): string {
+  checkText(name, what)
   const trimmed = name.trim()
   if (!trimmed) throw new Error(`${what} name can't be empty`)
   return trimmed

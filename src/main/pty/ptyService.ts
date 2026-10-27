@@ -1,6 +1,13 @@
 import type { IPty, IPtyForkOptions } from 'node-pty'
 import type { PtyApi } from '../contracts'
 
+/** The largest window tmux takes (its WINDOW_MAXIMUM): anything bigger is a bug, not a screen. */
+const MAX_TERM_SIZE = 10_000
+
+/** A size a pty can take: a whole number from 2 (smaller ones are a hidden or collapsed terminal) to MAX_TERM_SIZE. */
+const isTermSize = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 2 && n <= MAX_TERM_SIZE
+
 export type SpawnFn = (file: string, args: string[], options: IPtyForkOptions) => IPty
 
 export class PtyService implements PtyApi {
@@ -47,7 +54,7 @@ export class PtyService implements PtyApi {
   }
 
   resize(cols: number, rows: number): void {
-    if (cols < 2 || rows < 2) return
+    if (!isTermSize(cols) || !isTermSize(rows)) return
     this.cols = cols
     this.rows = rows
     this.proc?.resize(cols, rows)
