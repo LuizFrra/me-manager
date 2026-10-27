@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { checkCloneName, checkCloneUrl } from '../../shared/clone'
 import {
   isArchived,
@@ -256,6 +256,15 @@ function assertNotArchived(task: Task): void {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * A new profile's folder as typed: trimmed, `~/` expanded, and when that is absolute, `.` and `..` resolved (so
+ * that profileError compares it as it is); anything else as it is, for profileError to refuse.
+ */
+function resolveFolder(dir: string): string {
+  const expanded = expandHome(dir.trim())
+  return isAbsolute(expanded) ? resolvePath(expanded) : expanded
+}
 
 /** A ProfileBilling from the renderer, or a refusal. */
 function checkBilling(billing: unknown): asserts billing is ProfileBilling {
@@ -962,8 +971,8 @@ export class Orchestrator implements AppService {
     await this.exclusive(async () => {
       const raw: Partial<Record<keyof NewProfile, unknown>> = isRecord(input) ? input : {}
       const name = typeof raw.name === 'string' ? raw.name : ''
-      const configDir = typeof raw.configDir === 'string' ? expandHome(raw.configDir.trim()) : ''
-      const error = profileError({ name, configDir }, this.profiles())
+      const configDir = typeof raw.configDir === 'string' ? resolveFolder(raw.configDir) : ''
+      const error = profileError({ name, configDir }, this.profiles()) ?? (await this.sameFolderError(configDir))
       if (error) throw new Error(error)
       checkBilling(raw.billing)
       const { profiles } = this.deps.settings.get()
@@ -978,6 +987,20 @@ export class Orchestrator implements AppService {
       await this.deps.settings.update({ profiles: [...profiles, profile] })
     })
     return this.listProfiles()
+  }
+
+  /**
+   * Why `dir`, when it is there, is refused as another profile's folder reached another way (a link): profileError
+   * compares the paths only.
+   */
+  private async sameFolderError(dir: string): Promise<string | null> {
+    const { profileFolders } = this.deps
+    const real = await profileFolders.realpath(dir)
+    if (real === null) return null
+    for (const other of this.profiles()) {
+      if ((await profileFolders.realpath(other.configDir)) === real) return `“${other.name}” already uses this folder`
+    }
+    return null
   }
 
   async updateProfile(id: string, patch: ProfilePatch): Promise<ProfileStatus[]> {

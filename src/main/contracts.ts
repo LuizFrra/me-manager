@@ -269,6 +269,8 @@ export interface FilesApi {
 export interface ProfileFoldersApi {
   /** See ProfileLogin. Never rejects: what can't be read counts as not there. */
   loginState(dir: string): Promise<ProfileLogin>
+  /** The folder with every link resolved (realpath), or null when it isn't there. */
+  realpath(dir: string): Promise<string | null>
   /** `mkdir -p`, private to the user; nothing is put in it. Resolves when it is there already. */
   create(dir: string): Promise<void>
 }

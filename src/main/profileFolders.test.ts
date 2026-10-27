@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -73,6 +73,16 @@ describe('ProfileFolders', () => {
     await expect(linux.loginState(await folder('big', { 'settings.json': big }))).resolves.toBe('notSignedIn')
     const fits = `{"apiKeyHelper": "x", "pad": "${'x'.repeat(MAX_SETTINGS_BYTES - 40)}"}`
     await expect(linux.loginState(await folder('fits', { 'settings.json': fits }))).resolves.toBe('keyOrGateway')
+  })
+
+  it('resolves a folder through links, and gives null for one that is not there', async () => {
+    const profiles = new ProfileFolders('linux')
+    const dir = await folder('real')
+    await symlink(dir, join(root, 'link'))
+    const real = await realpath(dir)
+    await expect(profiles.realpath(join(root, 'link'))).resolves.toBe(real)
+    await expect(profiles.realpath(dir)).resolves.toBe(real)
+    await expect(profiles.realpath(join(root, 'gone'))).resolves.toBeNull()
   })
 
   it('creates a folder and the ones above it, private and empty, and accepts one that is there', async () => {

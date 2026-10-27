@@ -1462,6 +1462,38 @@ describe('Orchestrator: Claude profiles', () => {
     expect(ctx.settings.get().profiles).toEqual([work, home])
   })
 
+  it('resolves . and .. in a new folder before checking it, and saves it so', async () => {
+    const ctx = await withProfiles()
+    await expect(
+      ctx.orch.addProfile({ name: 'X', configDir: '/home/me/x/../.claude', billing: 'own' }),
+    ).rejects.toThrow('“Default” already uses this folder')
+    await expect(
+      ctx.orch.addProfile({ name: 'X', configDir: '/home/me/./.claude-work/', billing: 'own' }),
+    ).rejects.toThrow('“Work” already uses this folder')
+    await ctx.orch.addProfile({ name: 'X', configDir: '~/a/../.claude-x/.', billing: 'own' })
+    expect(ctx.settings.get().profiles[2].configDir).toBe(join(homedir(), '.claude-x'))
+    expect(ctx.profileFolders.created).toEqual([join(homedir(), '.claude-x')])
+  })
+
+  it('refuses a folder that is another profile’s through a link', async () => {
+    const ctx = await withProfiles()
+    ctx.profileFolders.realpaths = {
+      '/home/me/.claude-work': '/home/me/.claude-work',
+      '/data/work-link': '/home/me/.claude-work',
+      '/data/home': '/data/home',
+    }
+    await expect(ctx.orch.addProfile({ name: 'X', configDir: '/data/work-link', billing: 'own' })).rejects.toThrow(
+      '“Work” already uses this folder',
+    )
+    ctx.profileFolders.realpaths['/home/me/.claude'] = '/data/home' // Default's is the link this time
+    await expect(ctx.orch.addProfile({ name: 'X', configDir: '/data/home', billing: 'own' })).rejects.toThrow(
+      '“Default” already uses this folder',
+    )
+    expect(ctx.profileFolders.created).toEqual([])
+    await ctx.orch.addProfile({ name: 'X', configDir: '/data/new', billing: 'own' }) // not there yet
+    expect(ctx.profileFolders.created).toEqual(['/data/new'])
+  })
+
   it('refuses a profile past the most there can be', async () => {
     const ctx = await withProfiles()
     for (let i = ctx.settings.get().profiles.length; i < MAX_PROFILES; i++) {

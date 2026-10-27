@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { access, mkdir, open, stat } from 'node:fs/promises'
+import { access, mkdir, open, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProfileLogin } from '../shared/types'
 import type { ProfileFoldersApi } from './contracts'
@@ -60,6 +60,10 @@ export class ProfileFolders implements ProfileFoldersApi {
     if (await usesKeyOrGateway(dir)) return 'keyOrGateway'
     // Claude Code keeps a macOS login in the Keychain, not in the folder.
     return this.platform === 'darwin' ? 'unknown' : 'notSignedIn'
+  }
+
+  realpath(dir: string): Promise<string | null> {
+    return realpath(dir).catch(() => null)
   }
 
   async create(dir: string): Promise<void> {

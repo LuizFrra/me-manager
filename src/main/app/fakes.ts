@@ -546,10 +546,17 @@ export class FakePromptFiles implements PromptFilesApi {
   }
 }
 
-/** `login[dir]` for each folder (`notSignedIn` otherwise); `created` lists the folders made, in order. */
+/**
+ * `login[dir]` for each folder (`notSignedIn` otherwise); `created` lists the folders made, in order. With
+ * `realpaths` set, a folder it lacks isn't there (realpath gives null); without, each folder is its own.
+ */
 export class FakeProfileFolders implements ProfileFoldersApi {
   login: Record<string, ProfileLogin> = {}
   created: string[] = []
+  realpaths: Record<string, string> | null = null
+  async realpath(dir: string): Promise<string | null> {
+    return this.realpaths ? (this.realpaths[dir] ?? null) : dir
+  }
   async loginState(dir: string): Promise<ProfileLogin> {
     return this.login[dir] ?? 'notSignedIn'
   }
