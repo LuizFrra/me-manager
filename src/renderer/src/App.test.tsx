@@ -838,6 +838,29 @@ describe('App keyboard shortcuts', () => {
     expect(closeTab).toHaveBeenCalledWith(expect.anything(), 0)
   })
 
+  it('acts once on a held chord: the auto-repeated keydowns toggle and close nothing more', async () => {
+    const user = userEvent.setup()
+    const api = repoApi({ openTarget: async () => twoTabs, listTabs: async () => twoTabs })
+    const closeTab = vi.spyOn(api, 'closeTab')
+    const newTab = vi.spyOn(api, 'newTab')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    await screen.findByRole('tab', { name: 'bash' })
+    press('W', { shiftKey: true })
+    press('W', { shiftKey: true, repeat: true })
+    press('W', { shiftKey: true, repeat: true })
+    expect(closeTab).toHaveBeenCalledTimes(1)
+    press('T', { shiftKey: true })
+    press('T', { shiftKey: true, repeat: true })
+    expect(newTab).toHaveBeenCalledTimes(1)
+
+    press('P', { shiftKey: true })
+    press('P', { shiftKey: true, repeat: true })
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument()
+    // Still handled: a repeat never reaches the terminal as Ctrl+P.
+    expect(fireEvent.keyDown(window, { key: 'P', ctrlKey: true, shiftKey: true, repeat: true })).toBe(false)
+  })
+
   it('shows the shortcut help with Ctrl+Shift+/ and closes it with Esc', async () => {
     const user = userEvent.setup()
     render(<App api={repoApi()} />)
@@ -1608,6 +1631,21 @@ describe('App terminal zoom', () => {
       expect(fontSize()).toBe('13')
       await wait(ZOOM_SAVE_MS + 50)
       expect(updateSettings).toHaveBeenLastCalledWith({ terminalFontSize: 13 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps zooming while Ctrl+= or Ctrl+- is held', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await setup()
+      press('=')
+      press('=', { repeat: true })
+      press('=', { repeat: true })
+      expect(fontSize()).toBe('16')
+      press('-', { repeat: true })
+      expect(fontSize()).toBe('15')
     } finally {
       vi.useRealTimers()
     }

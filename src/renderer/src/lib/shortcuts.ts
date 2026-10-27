@@ -160,6 +160,14 @@ const WHILE_TYPING: ReadonlySet<ShortcutId> = new Set(['palette', 'help', 'usage
 
 export const worksWhileTyping = (id: ShortcutId): boolean => WHILE_TYPING.has(id)
 
+/**
+ * Shortcuts that act again on the keydowns a held chord repeats: zoom steps and tab cycling. The others act once
+ * per press, so a held toggle doesn't flicker and a held Close tab doesn't close one tab after another.
+ */
+const ON_REPEAT: ReadonlySet<ShortcutId> = new Set(['zoomIn', 'zoomOut', 'prevTab', 'nextTab'])
+
+export const actsOnRepeat = (id: ShortcutId): boolean => ON_REPEAT.has(id)
+
 const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'])
 
 /** True for a focused text field (input, textarea, select, contenteditable) other than the terminal's. */

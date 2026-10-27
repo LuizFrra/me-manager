@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  actsOnRepeat,
   clickSelectMode,
   isEditableTarget,
   isModEnter,
@@ -305,6 +306,14 @@ describe('worksWhileTyping', () => {
     expect(worksWhileTyping('usage')).toBe(true)
     for (const id of ['filterSidebar', 'target', 'newTab', 'closeTab', 'prevTab', 'nextTab'] as const)
       expect(worksWhileTyping(id)).toBe(false)
+  })
+})
+
+describe('actsOnRepeat', () => {
+  it('lets only zoom steps and tab cycling act again while their keys are held', () => {
+    for (const id of ['zoomIn', 'zoomOut', 'prevTab', 'nextTab'] as const) expect(actsOnRepeat(id)).toBe(true)
+    for (const id of ['palette', 'help', 'panel', 'sidebar', 'closeTab', 'newTab', 'newTask', 'zoomReset'] as const)
+      expect(actsOnRepeat(id)).toBe(false)
   })
 })
 
