@@ -10,7 +10,7 @@ import type {
 } from '../../../../shared/types'
 import { ancestorDirs, buildTree, filterPaths, flattenTree, memoByIdentity, sameFileList } from '../../lib/fileTree'
 import { isSvgPath } from '../../../../shared/images'
-import { isMarkdown } from '../../lib/files'
+import { folderIndex, isMarkdown } from '../../lib/files'
 import { autoDiffLayout, loadDiffLayout, saveDiffLayout, type DiffLayout } from '../../lib/diff/layout'
 import type { PanelState, PanelTab, SearchState } from '../../lib/panelState'
 import { PANEL_SHORTCUT_LABEL } from '../../lib/shortcuts'
@@ -238,8 +238,10 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   const select = (nextTab: PanelTab, path: string): void =>
     onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
-  // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown.
-  const openLink = useLatestCallback((path: string, lines?: LineRange): void =>
+  // A link to lines (`#L12`) opens the file at them; Markdown and SVG as their text, where lines can be shown. A link
+  // to a folder opens its README, as on GitHub.
+  const openLink = useLatestCallback((link: string, lines?: LineRange): void => {
+    const path = files && !lines && !files.includes(link) ? (folderIndex(files, link) ?? link) : link
     onState({
       ...state,
       tab: 'files',
@@ -247,8 +249,8 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       reveal: lines && { path, lines: { ...lines } },
       history: state.selected ? [...state.history, state.selected] : state.history,
       mdMode: lines && (isMarkdown(path) || isSvgPath(path)) ? 'raw' : state.mdMode,
-    }),
-  )
+    })
+  })
   const back = useLatestCallback((): void => {
     const history = state.history.slice(0, -1)
     onState({ ...state, tab: 'files', selected: state.history.at(-1), reveal: undefined, history })

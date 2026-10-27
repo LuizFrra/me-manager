@@ -24,6 +24,7 @@ vi.mock('./MarkdownView', () => ({
         MD:{p.source}
         <button onClick={() => p.onOpenLink('docs/guide.md')}>link from {p.filePath}</button>
         <button onClick={() => p.onOpenLink('src/app.ts', { start: 9, end: 10 })}>line link from {p.filePath}</button>
+        <button onClick={() => p.onOpenLink('docs')}>folder link from {p.filePath}</button>
       </div>
     )
   },
@@ -222,6 +223,19 @@ describe('SidePanel', () => {
     expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
     await user.click(screen.getByRole('button', { name: '← Back' }))
     expect(await screen.findByText(/MD:# Demo project/)).toBeInTheDocument()
+  })
+
+  it("opens a Markdown link to a folder at the folder's README", async () => {
+    const user = userEvent.setup()
+    const api = createMockApi({
+      listFiles: async () => ({ paths: ['README.md', 'docs/README.md', 'docs/guide.md'], truncated: false }),
+    })
+    const readFile = vi.spyOn(api, 'readFile')
+    render(<Harness api={api} initial={{ selected: 'README.md' }} />)
+    await screen.findByRole('button', { name: 'docs' })
+    await user.click(await screen.findByRole('button', { name: 'folder link from README.md' }))
+    await vi.waitFor(() => expect(readFile).toHaveBeenLastCalledWith(TASK, 'docs/README.md'))
+    expect(readFile).not.toHaveBeenCalledWith(TASK, 'docs')
   })
 
   it('passes MarkdownView the same callbacks when the panel re-renders', async () => {
