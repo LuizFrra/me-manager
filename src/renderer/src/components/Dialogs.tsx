@@ -1284,10 +1284,14 @@ export function NewTaskDialog(props: {
 
 type ChangesLoad = { kind: 'loading' } | { kind: 'ready'; list: ChangeList } | { kind: 'failed'; error: string }
 
-/** Why a commit failed: its start on a line, and git's whole output (a hook's can be long) behind a disclosure. */
+/**
+ * Why a commit failed: its start on one line, and git's whole output (a hook's can be long), with its line breaks,
+ * behind a disclosure.
+ */
 function CommitError({ error }: { error: string }): React.JSX.Element {
-  const text = error.replace(/^git commit failed: /, '')
-  const { summary, more } = errorSummary(text)
+  const text = error.replace(/^git commit failed: /, '').trim()
+  const { summary, more: cut } = errorSummary(text.replace(/\s+/g, ' '))
+  const more = cut || text.includes('\n')
   return (
     <div className="dialog-warning commit-error" role="alert">
       <strong>Could not commit</strong> <p>{summary}</p>

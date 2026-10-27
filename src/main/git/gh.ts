@@ -75,7 +75,7 @@ export class GhService implements GhApi {
     } catch (err) {
       if (!alreadyExists(err)) {
         if (notPushed(err)) throw new Error(`Push ${branch} first: GitHub doesn't have it yet`, { cause: err })
-        throw commandFailure('gh pr create', err, true)
+        throw commandFailure('gh pr create', err, 'all')
       }
       created = false
     }
@@ -83,7 +83,7 @@ export class GhService implements GhApi {
     try {
       url = (await this.deps.run(this.path, prViewArgs(branch), opts)).trim()
     } catch (err) {
-      throw commandFailure('gh pr view', err, true)
+      throw commandFailure('gh pr view', err, 'all')
     }
     if (!isHttpUrl(url)) throw new Error(`gh pr view did not give a pull request URL: ${url.slice(0, 200)}`)
     return { url, created }

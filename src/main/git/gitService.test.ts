@@ -12,6 +12,7 @@ import {
   parseLastCommit,
   parseLeftRightCount,
   summarizeGitError,
+  gitErrorOutput,
 } from './gitService'
 import { commitFile, git, makeClonedRepo, makeLocalRepo } from './testRepos'
 
@@ -607,6 +608,24 @@ describe('commitAll', () => {
     ).toEqual(['D\told.txt', 'M\tREADME.md', 'A\tnew file ç.txt'].sort())
   })
 
+  it("carries a failing hook's whole output, with its line breaks, for the Commit dialog", async () => {
+    const { wt } = await withTask()
+    const hooks = join(wt, '..', 'hooks')
+    await mkdir(hooks, { recursive: true })
+    // 400 lines of about 30 characters: far over the one-line summary's cap.
+    const hook =
+      '#!/bin/sh\nfor i in $(seq 1 400); do echo "lint: problem number $i found"; done\necho done >&2\nexit 1\n'
+    await writeFile(join(hooks, 'pre-commit'), hook, { mode: 0o755 })
+    await git(wt, 'config', 'core.hooksPath', hooks)
+    await writeFile(join(wt, 'a.txt'), 'a\n')
+    const err = await svc.commitAll(wt, 'add a').catch((e: Error) => e)
+    const lines = (err as Error).message.split('\n')
+    expect(lines[0]).toBe('git commit failed: lint: problem number 1 found')
+    expect(lines[1]).toBe('lint: problem number 2 found')
+    expect(lines.at(-1)).toBe('done')
+    expect(lines).toHaveLength(401)
+  })
+
   it('refuses when there is nothing to commit', async () => {
     const { wt } = await withTask()
     const before = await git(wt, 'rev-parse', 'HEAD')
@@ -624,7 +643,7 @@ describe('commitAll without an identity', () => {
     await writeFile(join(wt, 'a.txt'), 'a\n')
     const err = await svc.commitAll(wt, 'add a').catch((e: Error) => e)
     expect(err).toBeInstanceOf(Error)
-    expect((err as Error).message).toMatch(/^git commit failed: Author identity unknown .*Please tell me who you are/)
+    expect((err as Error).message).toMatch(/^git commit failed: Author identity unknown\s.*Please tell me who you are/s)
     expect((err as Error).message).toMatch(/auto-detection is disabled/)
     expect(await git(wt, 'rev-parse', 'HEAD')).toBe(before)
   })
@@ -689,6 +708,14 @@ describe('git error summaries', () => {
     )
     expect(summarizeGitError('To x\nsomething odd\n')).toBe('To x something odd')
     expect(summarizeGitError(`fatal: ${'x'.repeat(1000)}`)).toHaveLength(500)
+  })
+
+  it("keeps a command's whole output with its line breaks, without hints, colours or blank ends", () => {
+    const stderr = '\n\x1b[31mlint failed\x1b[0m  \r\nhint: use --no-verify\n\n  src/a.ts:1 unused\n\n'
+    expect(gitErrorOutput(stderr)).toBe('lint failed\n\n  src/a.ts:1 unused')
+    const long = gitErrorOutput('x\n'.repeat(20_000))
+    expect(long.length).toBeLessThanOrEqual(20_000)
+    expect(long.endsWith('…')).toBe(true)
   })
 
   it('words a timeout and passes on errors that are not command failures', () => {

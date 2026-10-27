@@ -19,6 +19,8 @@ export const PUSH_TIMEOUT_MS = 60_000
 /** Commit hooks may run linters or tests; a commit still mustn't hang forever (e.g. a signing prompt). */
 const COMMIT_TIMEOUT_MS = 120_000
 const MAX_ERROR_SUMMARY = 500
+/** The most of a command's output a failure carries whole (a commit hook's can be long: its dialog shows it all). */
+const MAX_ERROR_OUTPUT = 20_000
 /** A rebase or merge replays commits (and may run hooks or sign them); it still mustn't hang forever. */
 const UPDATE_TIMEOUT_MS = 120_000
 /** A clone can be big and the network slow, but a GUI app can't wait forever for one that hangs. */
@@ -50,12 +52,33 @@ export function summarizeGitError(stderr: string, all = false): string {
   return text.length > MAX_ERROR_SUMMARY ? `${text.slice(0, MAX_ERROR_SUMMARY - 1)}…` : text
 }
 
-/** `<what> failed: <git's summary>`, or `<what> timed out after …`, for a failed command. */
-export function commandFailure(what: string, err: unknown, all = false): Error {
+/**
+ * A command's stderr as it printed it, line breaks kept, for a reader who needs all of it (a failing commit hook's
+ * report): without `hint:` lines, colour codes, carriage returns, trailing spaces and blank lines at either end.
+ * Capped at MAX_ERROR_OUTPUT characters.
+ */
+export function gitErrorOutput(stderr: string): string {
+  const text = stderr
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // eslint-disable-line no-control-regex
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => !/^hint:/i.test(l.trim()))
+    .join('\n')
+    .replace(/^\n+|\n+$/g, '')
+  return text.length > MAX_ERROR_OUTPUT ? `${text.slice(0, MAX_ERROR_OUTPUT - 1)}…` : text
+}
+
+/**
+ * `<what> failed: <git's summary>`, or `<what> timed out after …`, for a failed command. `detail`: 'errors' keeps
+ * git's error lines, 'all' every line (see summarizeGitError), 'output' the whole output with its line breaks (see
+ * gitErrorOutput).
+ */
+export function commandFailure(what: string, err: unknown, detail: 'errors' | 'all' | 'output' = 'errors'): Error {
   if (!(err instanceof CommandError)) return err instanceof Error ? err : new Error(String(err))
   if (err.timedOut)
     return new Error(`${what} ${err.message.slice(err.message.lastIndexOf('timed out'))}`, { cause: err })
-  const summary = summarizeGitError(err.stderr, all)
+  const summary = detail === 'output' ? gitErrorOutput(err.stderr) : summarizeGitError(err.stderr, detail === 'all')
   return new Error(summary ? `${what} failed: ${summary}` : err.message, { cause: err })
 }
 
@@ -435,7 +458,7 @@ export class GitService implements GitApi {
     await this.work(worktreePath, ['-c', 'user.useConfigOnly=true', 'commit', '-m', message], {
       timeoutMs: COMMIT_TIMEOUT_MS,
     }).catch((err) => {
-      throw commandFailure('git commit', err, true)
+      throw commandFailure('git commit', err, 'output') // the Commit dialog shows it all
     })
     const sha = (await this.work(worktreePath, ['rev-parse', '--short', 'HEAD'])).trim()
     return { sha, files: staged.length }
@@ -500,7 +523,7 @@ export class GitService implements GitApi {
       const stopped = await this.inProgress(worktreePath)
       if (stopped) await this.work(worktreePath, [stopped, '--abort'])
       if (unmerged.length > 0) return { kind: 'conflict', strategy, baseRef, files: [...new Set(unmerged)] }
-      throw commandFailure(`git ${strategy}`, err, true)
+      throw commandFailure(`git ${strategy}`, err, 'all')
     }
     return { kind: 'updated', strategy, baseRef, commits: behind }
   }
