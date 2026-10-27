@@ -69,6 +69,7 @@ import {
   UsageService,
   type UsageRecord,
 } from './usageService'
+import type { UsageFolderSpec, UsageSummaries } from '../contracts'
 
 interface Msg {
   id?: string
@@ -621,6 +622,98 @@ describe('UsageService', () => {
   })
 })
 
+describe('UsageService folders', () => {
+  let work: string
+  beforeEach(async () => {
+    work = await makeTempDir('mm-usage-work-')
+  })
+  /** Writes a transcript under <dir>/projects/<encoded /p/proj>/<rel>. */
+  async function putIn(dir: string, rel: string, content: string): Promise<void> {
+    const file = join(dir, 'projects', encodeProjectPath('/p/proj'), rel)
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, content)
+  }
+  const own = (dir: string): UsageFolderSpec => ({ dir, billing: 'own' })
+  const company = (dir: string): UsageFolderSpec => ({ dir, billing: 'company' })
+  const of = (u: UsageSummaries): UsageServiceAll['all'] => u.roots['/p/proj'].all
+
+  it('counts a message copied into a company folder once, as the own folder’s', async () => {
+    const shared = line({ input: 10 })
+    await putIn(claudeDir, 's1.jsonl', shared)
+    await putIn(work, 's1.jsonl', shared + line({ input: 5 })) // a copied folder, used on since
+    // The company folder first: which copy counts doesn't depend on the order.
+    const result = await service().summarizeFolders([company(work), own(claudeDir)], ['/p/proj'])
+    const mine = of(result.folders[claudeDir])
+    expect(mine).toMatchObject({ input: 10, messages: 1, companyTokens: 0 })
+    expect(mine.cost).toBeGreaterThan(0)
+    expect(of(result.folders[work])).toMatchObject({ input: 5, messages: 1, cost: 0, companyTokens: 5 })
+    expect(of(result.all)).toMatchObject({ input: 15, messages: 2, sessions: 1, cost: mine.cost, companyTokens: 5 })
+  })
+
+  it('counts a message in two own-billed folders once, in one of them', async () => {
+    const shared = line({ input: 10 })
+    await putIn(claudeDir, 's1.jsonl', shared)
+    await putIn(work, 's1.jsonl', shared + line({ input: 5 }))
+    const result = await service().summarizeFolders([own(claudeDir), own(work)], ['/p/proj'])
+    expect(of(result.all)).toMatchObject({ input: 15, messages: 2, sessions: 1, companyTokens: 0 })
+    expect(of(result.folders[claudeDir]).messages + of(result.folders[work]).messages).toBe(2)
+    const alone = await service().summarize(['/p/proj'])
+    expect(of(result.all).cost).toBeCloseTo(of(alone).cost * 1.5)
+  })
+
+  it('counts the earliest copy of a message, also when a company folder has it', async () => {
+    await putIn(claudeDir, 's1.jsonl', line({ id: 'm', req: 'r', ts: new Date(2026, 9, 18, 10).toISOString() }))
+    await putIn(work, 's1.jsonl', line({ id: 'm', req: 'r', ts: new Date(2026, 9, 18, 9).toISOString(), input: 3 }))
+    const result = await service().summarizeFolders([own(claudeDir), company(work)], ['/p/proj'])
+    expect(of(result.all)).toMatchObject({ input: 3, messages: 1, cost: 0, companyTokens: 3 })
+    expect(of(result.folders[claudeDir]).messages).toBe(0)
+  })
+
+  it('counts a company folder’s priced tokens as companyTokens, never as cost, and leaves unpriced ones unpriced', async () => {
+    await putIn(claudeDir, 's1.jsonl', line({ input: 4 }))
+    const s2 = { session: 's2' }
+    await putIn(work, 's2.jsonl', line({ ...s2, input: 10 }) + line({ ...s2, input: 7, model: 'claude-future-9' }))
+    const result = await service().summarizeFolders([own(claudeDir), company(work)], ['/p/proj'])
+    const all = of(result.all)
+    expect(all).toMatchObject({ input: 21, messages: 3, sessions: 2, companyTokens: 10, unpricedTokens: 7 })
+    expect(all.cost).toBe(of(result.folders[claudeDir]).cost)
+    expect(all.models.map((m) => [m.model, m.input, m.companyTokens, m.unpricedTokens, m.priced])).toEqual([
+      ['claude-opus-5-5', 14, 10, 0, true],
+      ['claude-future-9', 7, 0, 7, false],
+    ])
+    expect(result.all.groups).toEqual({})
+  })
+
+  it('moves a message to the other folder when their billing changes', async () => {
+    const shared = line({ input: 10 })
+    await putIn(claudeDir, 's1.jsonl', shared)
+    await putIn(work, 's1.jsonl', shared)
+    const svc = service()
+    const before = await svc.summarizeFolders([own(claudeDir), company(work)], ['/p/proj'])
+    expect([of(before.folders[claudeDir]).messages, of(before.folders[work]).messages]).toEqual([1, 0])
+    const after = await svc.summarizeFolders([company(claudeDir), own(work)], ['/p/proj'])
+    expect([of(after.folders[claudeDir]).messages, of(after.folders[work]).messages]).toEqual([0, 1])
+    expect(of(after.all)).toMatchObject({ messages: 1, companyTokens: 0 })
+  })
+
+  it('reads a folder named twice once, billed to the user when either says so', async () => {
+    await putIn(claudeDir, 's1.jsonl', line({ input: 10 }))
+    const result = await service().summarizeFolders([company(claudeDir), own(claudeDir)], ['/p/proj'])
+    expect(Object.keys(result.folders)).toEqual([claudeDir])
+    expect(of(result.all)).toMatchObject({ input: 10, messages: 1, companyTokens: 0 })
+    expect(result.all).toBe(result.folders[claudeDir])
+  })
+
+  it('reads the clock once per call, so every folder’s periods end on the same day', async () => {
+    await putIn(claudeDir, 's1.jsonl', line({ input: 1 }))
+    await putIn(work, 's2.jsonl', line({ input: 2 }))
+    const now = vi.fn(() => NOW)
+    const svc = new UsageService({ claudeDir, now, minRefreshMs: 0 })
+    await svc.summarizeFolders([own(claudeDir), company(work)], ['/p/proj'], { total: ['/p/proj'] })
+    expect(now).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('UsageService cache', () => {
   let cacheFile: string
   beforeEach(() => {
@@ -695,7 +788,11 @@ describe('UsageService cache', () => {
     const bad = [
       '{"v":',
       JSON.stringify({ ...good, v: USAGE_CACHE_VERSION + 1 }),
-      JSON.stringify({ ...good, dir: '/elsewhere' }),
+      // Another folder's transcripts: not read for this one, and dropped.
+      JSON.stringify({
+        ...good,
+        files: Object.fromEntries(Object.entries(good.files).map(([k, v]) => [k.replace(claudeDir, '/elsewhere'), v])),
+      }),
       JSON.stringify({ ...good, files: { x: { ...entry, r: ['k', -1] } } }),
       JSON.stringify({
         ...good,
@@ -710,6 +807,53 @@ describe('UsageService cache', () => {
       await fresh.saveCache()
       expect(JSON.parse(await readFile(cacheFile, 'utf8'))).toEqual(good)
     }
+  })
+
+  it('still uses a cache written while there was one folder, which names it', async () => {
+    await put('/p/proj', 's1.jsonl', line({ input: 5 }))
+    const svc = cached()
+    await usageOf(svc, '/p/proj')
+    await svc.saveCache()
+    const old = JSON.parse(await readFile(cacheFile, 'utf8'))
+    await writeFile(cacheFile, JSON.stringify({ v: old.v, dir: projects, files: old.files }))
+    const restarted = cached()
+    expect(await opened(() => usageOf(restarted, '/p/proj'))).toEqual([])
+    expect((await usageOf(restarted, '/p/proj')).all.input).toBe(5)
+  })
+
+  it('keeps every Claude folder’s transcripts in the one cache, and drops a folder’s once none reads it', async () => {
+    const work = await makeTempDir('mm-usage-work-')
+    const workFile = join(work, 'projects', encodeProjectPath('/p/proj'), 's2.jsonl')
+    await put('/p/proj', 's1.jsonl', line({ input: 1 }))
+    await mkdir(dirname(workFile), { recursive: true })
+    await writeFile(workFile, line({ input: 2 }))
+    const folders = [
+      { dir: claudeDir, billing: 'own' as const },
+      { dir: work, billing: 'company' as const },
+    ]
+    const svc = cached()
+    await svc.summarizeFolders(folders, ['/p/proj'])
+    await svc.saveCache()
+
+    const restarted = cached()
+    let result: Awaited<ReturnType<UsageService['summarizeFolders']>> | undefined
+    expect(await opened(async () => (result = await restarted.summarizeFolders(folders, ['/p/proj'])))).toEqual([])
+    expect(result!.all.roots['/p/proj'].all).toMatchObject({ input: 3, companyTokens: 2 })
+
+    // Its profile removed: the next scan drops the folder's transcripts from the cache.
+    await restarted.summarizeFolders(folders.slice(0, 1), ['/p/proj'])
+    await restarted.saveCache()
+    expect(Object.keys(JSON.parse(await readFile(cacheFile, 'utf8')).files)).toEqual([
+      join(projects, encodeProjectPath('/p/proj'), 's1.jsonl'),
+    ])
+    // Also when it was not read since the restart.
+    const third = cached()
+    await third.summarizeFolders(folders, ['/p/proj'])
+    await third.saveCache()
+    const fourth = cached()
+    await fourth.summarize(['/p/proj'])
+    await fourth.saveCache()
+    expect(Object.keys(JSON.parse(await readFile(cacheFile, 'utf8')).files)).toHaveLength(1)
   })
 
   it('keeps the cached transcripts of folders a call did not ask about', async () => {

@@ -72,7 +72,6 @@ import { RUN_WINDOW } from '../../shared/runCommand'
 import { findDevUrls, MAX_DEV_URLS } from '../../shared/devUrls'
 import { mapLimit } from '../concurrency'
 import type { AppService, CapturedTranscript, OrchestratorDeps, UsageSummaries, WindowActivity } from '../contracts'
-import { mergeProfileUsage } from '../usage/mergeUsage'
 import { baseBranchName } from '../git/gh'
 import { expandHome, taskWorktreePath } from '../paths'
 import { promptFromFile } from '../promptFiles'
@@ -1680,8 +1679,8 @@ export class Orchestrator implements AppService {
   }
 
   /**
-   * Usage of every target and theme, and the total, of every profile together (see mergeProfileUsage) and of each
-   * alone. getUsage asks for exactly this too, so the usage services' cached aggregations serve both instead of each
+   * Usage of every target and theme, and the total, of every profile together (see UsageApi.summarizeFolders) and of
+   * each alone. getUsage asks for exactly this too, so the usage services' cached aggregations serve both instead of each
    * evicting the other's. Every known root is passed along, so a message is counted for the most specific one only.
    */
   private async allUsage(): Promise<{
@@ -1693,7 +1692,8 @@ export class Orchestrator implements AppService {
     const groups: Record<string, string[]> = { total: targets.map((t) => t.path) }
     for (const theme of this.state.themes) groups[themeGroup(theme.id)] = []
     for (const t of targets) groups[themeGroup(t.target.themeId)].push(t.path)
-    return { targets, ...mergeProfileUsage(await this.deps.usage.summarize(groups.total, groups)) }
+    const { usage, profiles } = await this.deps.usage.summarize(groups.total, groups)
+    return { targets, usage, profiles }
   }
 
   async getUsage(target: Target): Promise<UsageSummary> {
@@ -1747,7 +1747,7 @@ export class Orchestrator implements AppService {
         id: profile.id,
         name: profile.name,
         billing: profile.billing,
-        // A single own-billed profile's usage is the total itself: its report too (sent once over IPC).
+        // A single folder's usage is the total itself: its report too (sent once over IPC).
         report: u === usage ? total : reportOf(u),
       })),
     }

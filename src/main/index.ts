@@ -26,6 +26,7 @@ import {
   tmuxConfFile,
   TMUX_SOCKET,
   uiStateFile,
+  usageCacheFile,
   worktreesRoot,
 } from './paths'
 import { ProfileFolders } from './profileFolders'
@@ -38,7 +39,7 @@ import { SettingsService, SettingsStore } from './store/settings'
 import { UiStateStore } from './store/uiState'
 import { TmuxService } from './tmux/tmuxService'
 import { ProfileUsage } from './usage/profileUsage'
-import { claudeConfigDir } from './usage/usageService'
+import { claudeConfigDir, UsageService } from './usage/usageService'
 import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
@@ -49,9 +50,9 @@ let started: Orchestrator | null = null
 let quitReady = false
 /** How long quitting waits for changes still running (a task being created or removed), so none is left half done. */
 const QUIT_WAIT_MS = 15_000
-/** The usage services once started, so quitting writes their caches (see UsageService.saveCache). */
-let profileUsage: ProfileUsage | null = null
-/** How long quitting waits for the usage caches to be written; past it, the next start reads a little more. */
+/** The usage service once started, so quitting writes its cache (see UsageService.saveCache). */
+let usageService: UsageService | null = null
+/** How long quitting waits for the usage cache to be written; past it, the next start reads a little more. */
 const CACHE_SAVE_WAIT_MS = 3_000
 let notificationWatcher: NotificationWatcher | null = null
 let budgetWatcher: BudgetWatcher | null = null
@@ -153,7 +154,10 @@ async function bootstrap(): Promise<void> {
     ui: new UiStateStore(uiStateFile()),
     launcher: createLauncher(systemLaunchDeps((path) => shell.openPath(path))),
     // Reads each Claude profile's folder ($CLAUDE_CONFIG_DIR or ~/.claude for Default), never writes there.
-    usage: (profileUsage = new ProfileUsage({ profiles: () => allProfiles(settings.get(), claudeConfigDir()) })),
+    usage: new ProfileUsage({
+      profiles: () => allProfiles(settings.get(), claudeConfigDir()),
+      usage: (usageService = new UsageService({ cacheFile: usageCacheFile() })),
+    }),
     promptFiles,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
@@ -226,9 +230,9 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitReady = true
   started.cancelClones()
-  // The usage caches are written at most every few minutes; what was read since would be read again at the next start.
+  // The usage cache is written at most every few minutes; what was read since would be read again at the next start.
   const cacheSaved = Promise.race([
-    profileUsage?.saveCache() ?? Promise.resolve(),
+    usageService?.saveCache() ?? Promise.resolve(),
     new Promise((resolve) => setTimeout(resolve, CACHE_SAVE_WAIT_MS)),
   ])
   void Promise.all([started.busy() ? started.whenIdle(QUIT_WAIT_MS) : undefined, cacheSaved]).finally(() => app.quit())

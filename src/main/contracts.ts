@@ -7,6 +7,7 @@ import type {
   FileContent,
   FileList,
   MeManagerApi,
+  ProfileBilling,
   ProfileLogin,
   PullRequestResult,
   SearchOptions,
@@ -297,9 +298,24 @@ export interface UsageSummaries {
   groups: Record<string, UsageSummary>
 }
 
-/** Claude Code usage from its transcripts. Read-only: never writes to the Claude config folder. */
+/** A Claude config folder to read usage from, and who pays for what is used through it. */
+export interface UsageFolderSpec {
+  /** Transcripts are read from its `projects`. */
+  dir: string
+  billing: ProfileBilling
+}
+
+/** Usage of several Claude folders (see UsageApi.summarizeFolders). */
+export interface FolderUsageSummaries {
+  /** Every folder's together: tokens of all, cost of own-billed ones only (see UsageTotals.companyTokens). */
+  all: UsageSummaries
+  /** Each folder's alone, by UsageFolderSpec.dir: the messages whose counting copy is in it. */
+  folders: Record<string, UsageSummaries>
+}
+
+/** Claude Code usage from its transcripts. Read-only: never writes to a Claude config folder. */
 export interface UsageApi {
-  /** The folder the transcripts are read from (`<Claude config folder>/projects`). */
+  /** The folder summarize reads the transcripts from (`<Claude config folder>/projects`). */
   readonly projectsDir: string
   /**
    * Usage per root (a task worktree or folder path) and per named group of roots. A message counts for the most
@@ -307,27 +323,34 @@ export interface UsageApi {
    * known root so a task inside a folder isn't also counted for the folder.
    */
   summarize(roots: readonly string[], groups?: Readonly<Record<string, readonly string[]>>): Promise<UsageSummaries>
+  /**
+   * summarize over several Claude folders, each message once whichever folders have a copy of it (a folder copied
+   * from another has them all): the earliest copy counts, an own-billed folder's before a company-billed one's when
+   * they are equally early.
+   */
+  summarizeFolders(
+    folders: readonly UsageFolderSpec[],
+    roots: readonly string[],
+    groups?: Readonly<Record<string, readonly string[]>>,
+  ): Promise<FolderUsageSummaries>
 }
 
 /** One Claude profile's usage (see ProfileUsageApi). */
 export interface ProfileUsageSummaries {
   profile: ClaudeProfile
-  /**
-   * The profile's folder with every link resolved. Profiles on one folder share one reading of it, and these
-   * summaries: a merge counts the folder once.
-   */
+  /** The folder read for it (UsageFolderSpec.dir): profiles on one folder (a link) share it, and these summaries. */
   folder: string
-  /** As read: priced tokens are in `cost`, whatever the profile's billing. */
+  /** FolderUsageSummaries.folders' entry: billed as its folder is. */
   usage: UsageSummaries
 }
 
-/** Claude Code usage of every Claude profile, each folder read by its own UsageApi. Read-only, as UsageApi. */
+/** Claude Code usage of every Claude profile. Read-only, as UsageApi. */
 export interface ProfileUsageApi {
-  /** UsageApi.summarize for each current profile, Default first. */
+  /** UsageApi.summarizeFolders over the current profiles' folders: all of them together, and each profile's. */
   summarize(
     roots: readonly string[],
     groups?: Readonly<Record<string, readonly string[]>>,
-  ): Promise<ProfileUsageSummaries[]>
+  ): Promise<{ usage: UsageSummaries; profiles: ProfileUsageSummaries[] }>
 }
 
 /** A tab's transcript and the file name saveTranscript suggests for it. */

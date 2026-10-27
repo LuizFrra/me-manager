@@ -32,11 +32,12 @@ import type {
   TmuxApi,
   ProfileUsageApi,
   ProfileUsageSummaries,
+  UsageSummaries,
   WindowActivity,
 } from '../contracts'
 import { GH_INSTALL_HINT } from '../../shared/git'
 import { emptyUsageSummary } from '../../shared/usage'
-import { allProfiles, DEFAULT_PROFILE_ID } from '../../shared/profiles'
+import { allProfiles } from '../../shared/profiles'
 import { emptyState } from '../store/mutations'
 import { SettingsService, type SettingsStoreApi } from '../store/settings'
 import type { UiStateStoreApi } from '../store/uiState'
@@ -568,33 +569,41 @@ export class FakeProfileFolders implements ProfileFoldersApi {
 }
 
 /**
- * Each current profile's usage (`profiles`, which makeDeps points at the settings), as read: Default's is
- * `byRoot[root]` for each root and `byGroup[name]` for each group, another's that of `byProfile[id]` (empty usage
- * otherwise). Each profile's folder is its own, or `folders[id]` when set.
+ * All the current profiles' usage (`profiles`, which makeDeps points at the settings) as `byRoot[root]` for each root
+ * and `byGroup[name]` for each group, and each profile's as that of `byProfile[id]`; empty usage otherwise. With a
+ * single profile, its usage is the total itself (as UsageService gives it).
  */
 export class FakeUsage implements ProfileUsageApi {
   calls: { roots: string[]; groups: Record<string, string[]> }[] = []
   byRoot: Record<string, UsageSummary> = {}
   byGroup: Record<string, UsageSummary> = {}
   byProfile: Record<string, { byRoot?: Record<string, UsageSummary>; byGroup?: Record<string, UsageSummary> }> = {}
-  folders: Record<string, string> = {}
   profiles: () => readonly ClaudeProfile[] = () => []
   async summarize(
     roots: readonly string[],
     groups: Readonly<Record<string, readonly string[]>> = {},
-  ): Promise<ProfileUsageSummaries[]> {
+  ): Promise<{ usage: UsageSummaries; profiles: ProfileUsageSummaries[] }> {
     this.calls.push({
       roots: [...roots],
       groups: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, [...v]])),
     })
-    return this.profiles().map((profile) => {
-      const data = profile.id === DEFAULT_PROFILE_ID ? this : (this.byProfile[profile.id] ?? {})
-      const usage = {
-        roots: Object.fromEntries(roots.map((r) => [r, data.byRoot?.[r] ?? emptyUsageSummary()])),
-        groups: Object.fromEntries(Object.keys(groups).map((g) => [g, data.byGroup?.[g] ?? emptyUsageSummary()])),
-      }
-      return { profile, folder: this.folders[profile.id] ?? profile.configDir, usage }
+    const summaries = (data: {
+      byRoot?: Record<string, UsageSummary>
+      byGroup?: Record<string, UsageSummary>
+    }): UsageSummaries => ({
+      roots: Object.fromEntries(roots.map((r) => [r, data.byRoot?.[r] ?? emptyUsageSummary()])),
+      groups: Object.fromEntries(Object.keys(groups).map((g) => [g, data.byGroup?.[g] ?? emptyUsageSummary()])),
     })
+    const usage = summaries(this)
+    const profiles = this.profiles()
+    return {
+      usage,
+      profiles: profiles.map((profile) => ({
+        profile,
+        folder: profile.configDir,
+        usage: profiles.length === 1 ? usage : summaries(this.byProfile[profile.id] ?? {}),
+      })),
+    }
   }
 }
 
