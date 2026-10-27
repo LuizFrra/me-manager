@@ -241,6 +241,13 @@ describe.each([
     expect(shifted('/', { code: 'Digit7' })).toEqual({ id: 'help' })
   })
 
+  it('finds the help key by its place on layouts where it types neither "/" nor "?" (Russian, Ukrainian)', () => {
+    expect(shifted(',', { code: 'Slash' })).toEqual({ id: 'help' }) // Russian: Shift+. on the / key
+    expect(press('.', { code: 'Slash' })).toEqual(mac ? { id: 'help' } : null)
+    // A key that types something an app shortcut uses still means that shortcut.
+    expect(press('-', { code: 'Slash' })).toEqual({ id: 'zoomOut' }) // German: - on the / key
+  })
+
   it('opens the palette with Mod+Shift+P, toggles the panel and focuses the sidebar filter', () => {
     expect(shifted('P')).toEqual({ id: 'palette' })
     expect(shifted('E')).toEqual({ id: 'panel' })

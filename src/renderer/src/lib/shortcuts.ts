@@ -84,7 +84,8 @@ const letter = (shift: boolean, display: string): Chord => ({
 
 // Digits and brackets also match on `code`, for layouts where those keys type something else (AZERTY digits,
 // brackets behind Shift on US: '{'); see matchShortcut for when `code` counts. Mod+Shift+/ matches both '/' and
-// '?': with Shift, US layouts report '?', and layouts where '/' itself needs Shift (German: Shift+7) report '/'.
+// '?': with Shift, US layouts report '?', and layouts where '/' itself needs Shift (German: Shift+7) report '/';
+// on layouts where the key types neither (Russian: '.' and ','), its place counts.
 const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'palette',
@@ -95,8 +96,8 @@ const SHORTCUTS: ShortcutDef[] = [
     id: 'help',
     description: 'Keyboard shortcuts',
     chords: [
-      { shift: false, keys: ['/'], display: '/', macOnly: true },
-      { shift: true, keys: ['/', '?'], display: '/' },
+      { shift: false, keys: ['/'], codes: ['Slash'], display: '/', macOnly: true },
+      { shift: true, keys: ['/', '?'], codes: ['Slash'], display: '/' },
     ],
   },
   // Mod+, is the usual "preferences" chord on both platforms; Ctrl+, means nothing to a terminal.
