@@ -309,8 +309,10 @@ export function Home(
                       <span className={`dot ${dot}`} aria-hidden="true">
                         {SESSION_STATE_INFO[session].glyph}
                       </span>
-                      <span className="home-recent-name">{task.name}</span>
-                      <span className="home-recent-where">
+                      <span className="home-recent-name" title={task.name}>
+                        {task.name}
+                      </span>
+                      <span className="home-recent-where" title={`${theme.name} › ${repoName}`}>
                         {theme.icon && <span aria-hidden="true">{theme.icon} </span>}
                         {theme.name} › {repoName}
                       </span>

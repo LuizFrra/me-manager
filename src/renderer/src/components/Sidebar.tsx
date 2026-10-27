@@ -159,6 +159,9 @@ function themeStripe(color: unknown): React.CSSProperties | undefined {
   return css ? ({ '--theme-color': css } as React.CSSProperties) : undefined
 }
 
+/** A row's tooltip: its full name (a narrow sidebar cuts it short), then what else there is to say. */
+const rowTitle = (name: string, more?: string): string => (more ? `${name}\n${more}` : name)
+
 /**
  * A repo's archived tasks, under a "▶ Archived (N)" toggle; nothing when it has none. They have no session, so no
  * status dot or git badges: a click selects one (the main area offers Restore), and its row has Restore and Delete.
@@ -194,7 +197,7 @@ function ArchivedTasks(props: {
           <div key={task.id} className={`row archived-row${props.selectedTaskId === task.id ? ' selected' : ''}`}>
             <button
               className="row-label"
-              title={task.notes}
+              title={rowTitle(task.name, task.notes)}
               onClick={(e) => props.onSelect(task.id, e)}
               {...props.nav(`task:${task.id}`, 4)}
             >
@@ -620,6 +623,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                 <button
                   className="row-label"
                   aria-expanded={expanded(theme.id)}
+                  title={theme.name}
                   onClick={() => toggle(theme.id)}
                   {...rowNav(`theme:${theme.id}`, 1)}
                 >
@@ -691,6 +695,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                       >
                         <button
                           className="row-label"
+                          title={rowTitle(item.name, `${item.path}${missing.has(item.id) ? ' (missing)' : ''}`)}
                           onClick={(e) =>
                             clickOther(e, { themeId: theme.id, itemId: item.id }, 'Only tasks can be selected')
                           }
@@ -720,10 +725,11 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                           <button
                             className="row-label"
                             aria-expanded={expanded(item.id)}
+                            title={rowTitle(item.name, `${item.path}${missing.has(item.id) ? ' (missing)' : ''}`)}
                             onClick={() => toggle(item.id)}
                             {...rowNav(`item:${item.id}`, 2)}
                           >
-                            {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}
+                            {arrow(item.id)} {missing.has(item.id) && <span title="Path missing">⚠ </span>}
                             <FolderGit2 {...ICON} className="item-icon" /> <span className="row-name">{item.name}</span>
                           </button>
                           <span className="row-actions">
@@ -762,7 +768,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                               >
                                 <button
                                   className="row-label"
-                                  title={task.notes}
+                                  title={rowTitle(task.name, task.notes)}
                                   onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
                                   {...rowNav(`task:${task.id}`, 3)}
                                 >

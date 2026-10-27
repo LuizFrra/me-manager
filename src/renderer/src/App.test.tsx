@@ -1094,7 +1094,7 @@ describe('App task notes', () => {
     expect(notes).toHaveAttribute('aria-expanded', 'false')
     await user.click(notes)
     expect(notes).toHaveAttribute('aria-expanded', 'true')
-    expect(taskButton('fix login bug')).toHaveAttribute('title', 'Waiting on the API team\nthen ship')
+    expect(taskButton('fix login bug')).toHaveAttribute('title', 'fix login bug\nWaiting on the API team\nthen ship')
   })
 
   it('edits and clears existing notes, and Cancel keeps them', async () => {
@@ -1117,7 +1117,7 @@ describe('App task notes', () => {
     await user.clear(notesBox())
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(within(header()).queryByRole('button', { name: 'first' })).not.toBeInTheDocument())
-    expect(taskButton('fix login bug')).not.toHaveAttribute('title')
+    expect(taskButton('fix login bug')).toHaveAttribute('title', 'fix login bug') // its name alone
   })
 
   it('renders notes as plain text, never HTML', async () => {

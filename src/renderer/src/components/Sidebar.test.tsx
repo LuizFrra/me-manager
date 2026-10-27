@@ -82,6 +82,23 @@ describe('Sidebar header and tree', () => {
     expect(screen.getByRole('button', { name: '○ docs' })).toBeInTheDocument()
   })
 
+  it("shows the full names, cut short in a narrow sidebar, in the rows' tooltips, with paths and notes", () => {
+    const noted = { ...task('fix'), notes: 'Ask about the token refresh' }
+    const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z', notes: 'Shipped' }
+    renderSidebar({
+      state: appState(theme('Client', [repo('api', [noted, task('docs'), archived]), folder('notes')])),
+      archivedOpen: new Set(['api']),
+      status: { running: [], missing: ['api'], activity: {} },
+    })
+    expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('title', 'Client')
+    expect(screen.getByRole('button', { name: '⚠ api' })).toHaveAttribute('title', 'api\n/code/api (missing)')
+    expect(screen.getByRole('button', { name: '○ notes' })).toHaveAttribute('title', 'notes\n/f/notes')
+    expect(screen.getByRole('button', { name: '○ fix' })).toHaveAttribute('title', 'fix\nAsk about the token refresh')
+    expect(screen.getByRole('button', { name: '○ docs' })).toHaveAttribute('title', 'docs')
+    expect(screen.getByRole('button', { name: 'old' })).toHaveAttribute('title', 'old\nShipped')
+    expect(screen.getByTitle('Path missing')).toHaveTextContent('⚠')
+  })
+
   it('says whether each theme and repository is expanded', () => {
     renderSidebar({ collapsed: new Set(['api']) })
     expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('aria-expanded', 'true')
