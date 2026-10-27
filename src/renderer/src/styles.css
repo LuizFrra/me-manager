@@ -734,6 +734,35 @@ button:disabled {
   position: absolute;
   inset: 8px 6px 6px 14px;
 }
+/* "Ctrl+click to open link", next to the pointer over a link in the terminal. */
+.terminal-hint {
+  position: fixed;
+  z-index: 15;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--popover-shadow);
+  pointer-events: none;
+  white-space: nowrap;
+}
+/* "Copied", or what Ctrl+C will do with a tmux selection: bottom right, over the terminal. */
+.terminal-notice {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  z-index: 5;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--popover-shadow);
+  pointer-events: none;
+}
 .session-ended {
   position: absolute;
   inset: 0;

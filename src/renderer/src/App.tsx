@@ -31,6 +31,7 @@ import { GH_INSTALL_HINT } from '../../shared/git'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
+import type { LinkFiles } from './lib/terminalLinkProvider'
 import { Splitter } from './components/Splitter'
 import {
   ArchiveTaskDialog,
@@ -1805,6 +1806,16 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     (path: string) => updatePanel({ open: true, tab: 'files', selected: path, history: [] }),
     [updatePanel],
   )
+  // Paths in the terminal's output that name a file of the shown task (or folder) become links to the files panel.
+  const linkTarget = selected ? resolveTarget(state, selected) : null
+  const linkRoot = linkTarget?.task?.worktreePath ?? (linkTarget?.item.kind === 'folder' ? linkTarget.item.path : null)
+  const loadLinkFiles = useMemo(
+    () =>
+      selected && linkRoot
+        ? async (): Promise<LinkFiles> => ({ root: linkRoot, files: new Set((await api.listFiles(selected)).paths) })
+        : undefined,
+    [api, selected, linkRoot],
+  )
   // Stable while the selection is, so the palette lists the files once per opening.
   const loadPaletteFiles = useMemo(
     () => (selected ? (): Promise<PaletteFiles> => api.listFiles(selected) : undefined),
@@ -2128,6 +2139,10 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
                   modalOpen={modalOpen}
                   focusSeq={terminalFocus}
                   appearance={appearance}
+                  claudeTab={tabs.some((t) => t.active && t.name === 'claude')}
+                  onOpenUrl={openUrl}
+                  onOpenFile={openFileInPanel}
+                  loadLinkFiles={loadLinkFiles}
                 />
                 {sessionEnded && (
                   <div className="session-ended">
