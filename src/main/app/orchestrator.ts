@@ -203,6 +203,15 @@ export function claudeMessage(text: unknown): string {
   return clean
 }
 
+/**
+ * A tab index from the renderer: tmux reads a target that isn't a window index (`=session:x`) as a window name or
+ * pattern, so anything but a non-negative whole number is refused.
+ */
+function tabIndex(index: unknown): number {
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) throw new Error('Invalid tab')
+  return index
+}
+
 /** The usage group of a theme's targets. */
 const themeGroup = (themeId: string): string => `theme:${themeId}`
 
@@ -924,13 +933,13 @@ export class Orchestrator implements AppService {
 
   async selectTab(target: Target, index: number): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
-    await this.deps.tmux.selectWindow(session, index)
+    await this.deps.tmux.selectWindow(session, tabIndex(index))
     return this.deps.tmux.listWindows(session)
   }
 
   async closeTab(target: Target, index: number): Promise<TabInfo[]> {
     const { session } = this.resolve(target)
-    await this.deps.tmux.killWindow(session, index)
+    await this.deps.tmux.killWindow(session, tabIndex(index))
     return this.listTabs(target)
   }
 

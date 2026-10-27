@@ -1102,6 +1102,19 @@ describe('Orchestrator: sessions and tabs', () => {
     expect(tabs.map((t) => t.name)).toEqual(['shell', 'claude'])
   })
 
+  it('refuses a tab index that is not a whole number, before tmux reads it as a window name', async () => {
+    const { orch, target } = await withTask()
+    await orch.newTab(target)
+    for (const index of [-1, 1.5, Number.NaN, '1' as unknown as number, 'claude' as unknown as number, null]) {
+      await expect(orch.selectTab(target, index as number)).rejects.toThrow('Invalid tab')
+      await expect(orch.closeTab(target, index as number)).rejects.toThrow('Invalid tab')
+    }
+    expect((await orch.listTabs(target)).map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['shell', true],
+    ])
+  })
+
   it('returns no tabs after the last window closes', async () => {
     const { orch, target } = await withTask()
     await expect(orch.closeTab(target, 0)).resolves.toEqual([])
