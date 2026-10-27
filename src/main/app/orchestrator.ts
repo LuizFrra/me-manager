@@ -667,20 +667,31 @@ export class Orchestrator implements AppService {
     return chosen
   }
 
+  /** The theme, repo and slug of a new task, checking that the repo takes the name. */
+  private newTaskPlace(themeId: string, repoId: string, name: string): { theme: Theme; repo: Repo; slug: string } {
+    const theme = m.getTheme(this.state, themeId)
+    const repo = m.getRepo(this.state, themeId, repoId)
+    const slug = m.requireSlug(name, 'Task')
+    m.assertTaskSlugFree(repo, slug)
+    m.assertTaskNameFree(repo, name)
+    return { theme, repo, slug }
+  }
+
+  /**
+   * The fetch runs before the task's turn in the state queue, so a slow network (up to fetchTimeoutMs) doesn't hold
+   * up every other change. The name and options are checked before it, so a taken name fails at once, and the
+   * task again after it, against the state as it is then.
+   */
   async createTask(themeId: string, repoId: string, name: string, options?: NewTaskOptions): Promise<AppState> {
+    const { baseRef: chosenBase, prompt } = normalizeTaskOptions(options)
+    await this.fetchWithTimeout(this.newTaskPlace(themeId, repoId, name).repo.path)
     return this.exclusive(async () => {
       const { git, tmux } = this.deps
-      const theme = m.getTheme(this.state, themeId)
-      const repo = m.getRepo(this.state, themeId, repoId)
-      const slug = m.requireSlug(name, 'Task')
-      m.assertTaskSlugFree(repo, slug)
-      m.assertTaskNameFree(repo, name)
-      const { baseRef: chosenBase, prompt } = normalizeTaskOptions(options)
+      const { theme, repo, slug } = this.newTaskPlace(themeId, repoId, name)
       const branch = branchName(theme.slug, slug)
       const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
       const session = sessionName(theme.slug, repo.slug, slug)
 
-      await this.fetchWithTimeout(repo.path)
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {

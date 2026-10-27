@@ -1334,6 +1334,40 @@ describe('Orchestrator: fetch timeout', () => {
     expect(done).toBe(true)
   })
 
+  it('fetches outside the state queue, so a slow fetch holds up no other change', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    git.fetch = async (repo: string): Promise<void> => {
+      git.calls.push(`fetch ${repo}`)
+      await gate
+    }
+    let created = false
+    const creating = orch.createTask(themeId, repoId, 'fix').finally(() => (created = true))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.calls).toEqual(['fetch /code/my-api'])
+    await orch.renameTheme(themeId, 'Client Y') // not queued behind the fetch
+    await orch.createTheme('Other')
+    expect(created).toBe(false)
+    release()
+    const task = taskOf(await creating)
+    expect(task.branch).toBe('claude/client-x/fix') // the theme's slug stays as it was
+    expect((await orch.getState()).themes.map((t) => t.name)).toEqual(['Client Y', 'Other'])
+  })
+
+  it('checks the task again after the fetch, against the state as it is then', async () => {
+    const { orch, git, themeId, repoId } = await setup()
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => (release = r))
+    git.fetch = (): Promise<void> => gate
+    const creating = orch.createTask(themeId, repoId, 'fix')
+    await new Promise((r) => setTimeout(r, 0))
+    await orch.removeItem(themeId, repoId)
+    release()
+    await expect(creating).rejects.toThrow(`Item not found: ${repoId}`)
+    expect(git.calls.some((c) => c.startsWith('addWorktree'))).toBe(false)
+  })
+
   it('clears the timer once fetch settles', async () => {
     vi.useFakeTimers()
     const { orch, themeId, repoId } = await setup()
