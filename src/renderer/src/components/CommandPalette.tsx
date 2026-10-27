@@ -78,18 +78,27 @@ export function CommandPalette<C extends PaletteCommand>(props: {
 }): React.JSX.Element {
   const { commands, loadFiles, onRun, onOpenFile, onClose } = props
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
+  // The highlighted result, by id: when the results change under it (the files arrive), it stays the same result.
+  // Null: the first one.
+  const [activeId, setActiveId] = useState<string | null>(null)
   const [files, setFiles] = useState<PaletteFiles | null>(null)
   const [filesFailed, setFilesFailed] = useState(false)
   const listRef = useRef<HTMLUListElement>(null)
   const listId = useId()
+  // The result highlighted on screen, for when the files arrive: see loadFiles below.
+  const shownActive = useRef<string | null>(null)
   useRestoreFocus()
 
   useEffect(() => {
     if (!loadFiles) return
     let alive = true
     loadFiles().then(
-      (list) => alive && setFiles(list),
+      (list) => {
+        if (!alive) return
+        // Files may rank above what is highlighted: keep that highlighted, so Enter opens what the user saw.
+        setActiveId((id) => id ?? shownActive.current)
+        setFiles(list)
+      },
       () => alive && setFilesFailed(true),
     )
     return () => {
@@ -112,9 +121,16 @@ export function CommandPalette<C extends PaletteCommand>(props: {
       ),
     [commands, fileEntries, query],
   )
-  const current = Math.min(active, results.length - 1)
+  const current =
+    results.length === 0
+      ? -1
+      : Math.max(
+          0,
+          results.findIndex((r) => r.item.id === activeId),
+        )
 
   useEffect(() => {
+    shownActive.current = results[current]?.item.id ?? null
     const el = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [current, results])
@@ -131,7 +147,7 @@ export function CommandPalette<C extends PaletteCommand>(props: {
       e.preventDefault()
       if (results.length === 0) return
       const step = e.key === 'ArrowDown' ? 1 : -1
-      setActive((current + step + results.length) % results.length)
+      setActiveId(results[(current + step + results.length) % results.length].item.id)
     } else if (e.key === 'Enter') {
       e.preventDefault()
       run(results[current]?.item)
@@ -161,7 +177,7 @@ export function CommandPalette<C extends PaletteCommand>(props: {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
-            setActive(0)
+            setActiveId(null)
           }}
           onKeyDown={onKeyDown}
         />
@@ -174,7 +190,7 @@ export function CommandPalette<C extends PaletteCommand>(props: {
               aria-selected={i === current}
               aria-label={item.label}
               className="palette-option"
-              onMouseMove={() => i !== current && setActive(i)}
+              onMouseMove={() => i !== current && setActiveId(item.id)}
               onMouseDown={(e) => e.preventDefault()} // keep focus in the input
               onClick={() => run(item)}
             >

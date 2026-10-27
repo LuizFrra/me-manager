@@ -1,7 +1,7 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { CommandPalette, MAX_PALETTE_RESULTS, type PaletteCommand } from './CommandPalette'
+import { CommandPalette, MAX_PALETTE_RESULTS, type PaletteCommand, type PaletteFiles } from './CommandPalette'
 
 const command = (label: string): PaletteCommand => ({ id: label, kind: 'action', label })
 
@@ -85,5 +85,68 @@ describe('CommandPalette', () => {
     expect(screen.queryByRole('option')).not.toBeInTheDocument()
     expect(screen.getByText('No results')).toBeInTheDocument()
     expect(within(screen.getByRole('dialog', { name: 'Command palette' })).getByRole('listbox')).toBeInTheDocument()
+  })
+
+  describe('when the files arrive while the user types', () => {
+    const selected = (): string | null =>
+      screen
+        .getAllByRole('option')
+        .find((o) => o.getAttribute('aria-selected') === 'true')
+        ?.getAttribute('aria-label') ?? null
+
+    async function setup(): Promise<{
+      resolve: (files: PaletteFiles) => void
+      onRun: ReturnType<typeof vi.fn>
+      onOpenFile: ReturnType<typeof vi.fn>
+      user: ReturnType<typeof userEvent.setup>
+    }> {
+      let resolve: (files: PaletteFiles) => void = () => {}
+      const loading = new Promise<PaletteFiles>((r) => (resolve = r))
+      const onRun = vi.fn()
+      const onOpenFile = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <CommandPalette
+          commands={[command('Open app settings'), command('Close the app')]}
+          loadFiles={() => loading}
+          onRun={onRun}
+          onOpenFile={onOpenFile}
+          onClose={vi.fn()}
+        />,
+      )
+      await user.type(screen.getByRole('combobox'), 'app')
+      return { resolve, onRun, onOpenFile, user }
+    }
+
+    it('keeps the result the user moved to highlighted, wherever it lands', async () => {
+      const { resolve, onRun, user } = await setup()
+      await user.keyboard('{ArrowDown}')
+      const chosen = selected()
+      expect(chosen).not.toBeNull()
+      await act(async () => resolve({ paths: ['app.ts', 'src/app.tsx'], truncated: false }))
+      expect(screen.getByRole('option', { name: 'app.ts' })).toBeInTheDocument()
+      expect(selected()).toBe(chosen)
+      await user.keyboard('{Enter}')
+      expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ label: chosen }))
+    })
+
+    it('keeps the first result highlighted, so Enter opens what was shown', async () => {
+      const { resolve, onRun, onOpenFile, user } = await setup()
+      const shown = selected()
+      await act(async () => resolve({ paths: ['app.ts'], truncated: false }))
+      expect(screen.getAllByRole('option')[0]).toHaveAccessibleName('app.ts') // ranked first now
+      expect(selected()).toBe(shown)
+      await user.keyboard('{Enter}')
+      expect(onOpenFile).not.toHaveBeenCalled()
+      expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ label: shown }))
+    })
+
+    it('starts again from the first result on a new query', async () => {
+      const { resolve, user } = await setup()
+      await act(async () => resolve({ paths: ['app.ts'], truncated: false }))
+      await user.keyboard('{ArrowDown}')
+      await user.type(screen.getByRole('combobox'), '.ts')
+      expect(selected()).toBe('app.ts')
+    })
   })
 })
