@@ -176,6 +176,55 @@ describe('StatusBar', () => {
   })
 })
 
+describe('StatusBar dev-server links that do not fit', () => {
+  const urls = ['http://localhost:3000/', 'http://localhost:5173/', 'http://localhost:8080/']
+  const box = (top: number, left: number, right: number): DOMRect =>
+    ({ top, bottom: top + 26, left, right, width: right - left, height: 26, x: left, y: top }) as DOMRect
+
+  it('takes the links wrapped out of sight out of the Tab order, and gives them back once they fit', () => {
+    const observers: (() => void)[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb)
+        }
+        observe(): void {
+          // called by hand below
+        }
+        disconnect(): void {
+          observers.length = 0
+        }
+      },
+    )
+    // The bar is 26px high: a link at top 26 wrapped to the second line, which the bar hides.
+    let width = 200
+    const place: Record<string, DOMRect> = {}
+    const rects = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.classList.contains('status-urls')) return box(0, 0, width)
+      return place[this.getAttribute('href') ?? ''] ?? box(0, 0, 0)
+    })
+    try {
+      place[urls[0]] = box(0, 0, 90)
+      place[urls[1]] = box(0, 98, 190)
+      place[urls[2]] = box(26, 0, 90)
+      renderBar({ devUrls: urls.map((url, i) => ({ url, tab: 'dev', index: i })), onOpenUrl: vi.fn() })
+      const links = within(bar()).getAllByRole('link', { hidden: true })
+      expect(links.map((l) => l.hasAttribute('inert'))).toEqual([false, false, true])
+
+      width = 300
+      place[urls[2]] = box(0, 198, 290)
+      for (const cb of observers) cb()
+      expect(links.map((l) => l.hasAttribute('inert'))).toEqual([false, false, false])
+    } finally {
+      rects.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
 describe('StatusBar daily budget', () => {
   const cost = (): HTMLElement => screen.getByRole('button', { name: /^Today's cost/ })
 
@@ -226,6 +275,8 @@ describe('StatusBar on a narrow window', () => {
       expect(shrink(seg('.status-commit'))).toBeGreaterThan(shrink(seg('.status-urls')) * 1000)
       expect(shrink(seg('.status-urls'))).toBeGreaterThan(shrink(seg('.status-branch')) * 1000)
       expect(shrink(seg('.status-branch'))).toBeGreaterThan(0)
+      // Never scrolled, not even by focusing a link that wrapped out of sight.
+      expect(getComputedStyle(seg('.status-urls')).overflow).toBe('clip')
       for (const kept of ['.status-claude', '.status-cost', '.status-right > .status-warn'])
         expect(shrink(seg(kept))).toBe(0)
     } finally {

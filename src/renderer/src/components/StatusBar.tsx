@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react'
 import { Folder, GitBranch } from 'lucide-react'
 import { ICON } from '../lib/icon'
 import { budgetPercent, budgetSummary } from '../../../shared/budget'
@@ -106,9 +107,28 @@ function Links({
   urls?: readonly DevUrl[]
   onOpen?: (url: string) => void
 }): React.JSX.Element | null {
+  const ref = useRef<HTMLSpanElement>(null)
+  // Links that don't fit wrap to a second line the bar hides (see .status-urls): those are made inert, so Tab never
+  // lands on a link nobody can see. The task header lists them all.
+  useLayoutEffect(() => {
+    const box = ref.current
+    if (!box) return
+    const mark = (): void => {
+      const shown = box.getBoundingClientRect()
+      for (const link of box.querySelectorAll<HTMLElement>('a')) {
+        const at = link.getBoundingClientRect()
+        link.toggleAttribute('inert', at.top >= shown.bottom || at.left >= shown.right)
+      }
+    }
+    mark()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(mark)
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [urls])
   if (!urls?.length || !onOpen) return null
   return (
-    <span className="status-seg status-urls">
+    <span ref={ref} className="status-seg status-urls">
       <DevUrlLinks urls={urls} onOpen={onOpen} className="dev-url" />
     </span>
   )
