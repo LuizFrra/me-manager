@@ -1,7 +1,7 @@
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import { App, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
+import { App, GIT_QUIET_POLL_MS, UI_SAVE_MS, ZOOM_SAVE_MS } from './App'
 import { createMockApi } from './api/mockApi'
 import { budgetStatus } from '../../shared/budget'
 import type {
@@ -2035,12 +2035,54 @@ describe('App git status', () => {
     api.getGitStatus = getGitStatus
     render(<App api={api} />)
     await createRepoAndTask(user, 'one', 'two') // "two" is selected (opened after creation)
-    await waitFor(() => expect(getGitStatus.mock.lastCall?.[0]).toHaveLength(2))
+    await waitFor(() => expect(getGitStatus.mock.calls.some(([targets]) => targets.length === 2)).toBe(true))
     await user.click(screen.getByRole('button', { name: /^my-api$/ }))
     await waitFor(() => expect(getGitStatus.mock.lastCall?.[0]).toHaveLength(1))
     const state = await api.getState()
     const repo = state.themes[0].items[0]
     expect(getGitStatus.mock.lastCall?.[0][0].taskId).toBe(repo.kind === 'repo' ? repo.tasks[1].id : '')
+  })
+})
+
+describe('App git status polling', () => {
+  it('reads the selected and busy tasks at every poll, other visible ones every 30 s, keeping their badges', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const api = repoApi()
+      let busy: string | null = null
+      api.getStatus = async () => ({ running: [], missing: [], activity: busy ? { [busy]: 'busy' } : {} })
+      const getGitStatus = vi
+        .spyOn(api, 'getGitStatus')
+        .mockImplementation(async (targets) =>
+          Object.fromEntries(
+            targets.map((t) => [t.taskId!, { ahead: 0, behind: 0, uncommitted: 1, branch: 'b' } as TaskGitStatus]),
+          ),
+        )
+      render(<App api={api} />)
+      await createRepoAndTask(user, 'one', 'two', 'three') // "three" is selected
+      const repo = (await api.getState()).themes[0].items[0]
+      const [one, two, three] = repo.kind === 'repo' ? repo.tasks.map((t) => t.id) : []
+      busy = one
+      const asked = async (ms: number): Promise<string[][]> => {
+        getGitStatus.mockClear()
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ms)
+        })
+        return getGitStatus.mock.calls.map(([targets]) => targets.map((t) => t.taskId!).sort())
+      }
+      await asked(GIT_QUIET_POLL_MS) // settles into the schedule
+
+      const calls = await asked(GIT_QUIET_POLL_MS)
+      expect(calls.length).toBeGreaterThanOrEqual(9) // a poll every 3 s
+      expect(calls.filter((c) => c.length === 3)).toEqual([[one, two, three].sort()])
+      for (const c of calls.filter((c) => c.length !== 3)) expect(c).toEqual([one, three].sort())
+      // Partial answers update their own badges and keep the others'.
+      const sidebar = within(screen.getByRole('navigation'))
+      expect(sidebar.getAllByTitle('1 uncommitted file')).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -3815,14 +3857,17 @@ describe('App archiving tasks', () => {
     const detachTerminal = vi.spyOn(api, 'detachTerminal')
     render(<App api={api} />)
     await createRepoAndTask(user, 'task A', 'task B', 'task C') // task C is selected
+    getGitStatus.mockClear()
     await user.click(screen.getByRole('button', { name: 'Archive task task A' }))
     await screen.findByRole('button', { name: 'Archived (1)' })
     const archivedId = await idOf(api, 'task A')
-    for (const spy of [getGitStatus, openTarget, listTabs, getUsage]) spy.mockClear() // it was opened when created
+    // The visible tasks changed: they are all read again, without the archived one.
+    await waitFor(() => expect(getGitStatus.mock.calls.some(([targets]) => targets.length === 2)).toBe(true))
+    for (const spy of [openTarget, listTabs, getUsage]) spy.mockClear() // it was opened when created
     fireEvent.keyDown(window, { key: '1', altKey: true })
     expect(await screen.findByText('my-api › task B')).toBeInTheDocument()
-    await waitFor(() => expect(getGitStatus.mock.lastCall?.[0].map((t) => t.taskId)).toHaveLength(2))
-    expect(getGitStatus.mock.lastCall?.[0].map((t) => t.taskId)).not.toContain(archivedId)
+    const taskB = await idOf(api, 'task B')
+    await waitFor(() => expect(getGitStatus.mock.lastCall?.[0].map((t) => t.taskId)).toContain(taskB))
 
     await user.click(screen.getByRole('button', { name: 'Archived (1)' }))
     await user.click(screen.getByRole('button', { name: 'task A' }))
