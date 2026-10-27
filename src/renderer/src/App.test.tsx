@@ -410,7 +410,8 @@ describe('App side panel', () => {
     fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
     expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true })
-    await user.click(within(panel()).getByRole('button', { name: 'Close files panel' }))
+    // The panel's contents load lazily: on a cold start (this test alone) "Loading…" shows first.
+    await user.click(await within(panel()).findByRole('button', { name: 'Close files panel' }))
     expect(screen.queryByRole('complementary', { name: 'Files panel' })).not.toBeInTheDocument()
   })
 
