@@ -1532,7 +1532,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const openPullRequest = async (): Promise<void> => {
     const found = taskOfSelection()
     if (!found) return
-    if (!gitTools.gh) return showError(GH_INSTALL_HINT)
+    if (!gitTools.gh) {
+      const tools = await attempt(() => api.getGitTools()) // gh may have been installed since the app started
+      if (tools) setGitTools(tools)
+      if (!tools?.gh) return showError(GH_INSTALL_HINT)
+    }
     const result = await gitAction(found.target, 'pr', () => api.createPullRequest(found.target))
     if (!result) return
     if (await attempt(async () => (await api.openExternal(result.url), true)))

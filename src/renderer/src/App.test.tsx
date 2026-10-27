@@ -2473,6 +2473,22 @@ describe('App git actions', () => {
     expect(createPullRequest).not.toHaveBeenCalled()
   })
 
+  it('opens the pull request when gh was installed after the app started', async () => {
+    const user = userEvent.setup()
+    let installed = false
+    const api = repoApi({ getGitTools: async () => ({ gh: installed }) })
+    const createPullRequest = vi.spyOn(api, 'createPullRequest')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const pr = git().getByRole('button', { name: 'Open pull request' })
+    expect(pr).toHaveAttribute('aria-disabled', 'true')
+    installed = true
+    await user.click(pr)
+    await waitFor(() => expect(createPullRequest).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(pr).not.toHaveAttribute('aria-disabled')
+  })
+
   it('runs the git actions from the palette, for tasks only', async () => {
     const user = userEvent.setup()
     const api = repoApi()

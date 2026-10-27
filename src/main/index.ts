@@ -133,7 +133,7 @@ async function bootstrap(): Promise<void> {
   const orchestrator = new Orchestrator({
     store: new FileStore(stateFile()),
     git: new GitService(),
-    gh: new GhService(), // looks gh up on PATH once, on first use (after loadLoginShellPath)
+    gh: new GhService(), // looks gh up on PATH when asked (after loadLoginShellPath), until found
     tmux,
     pty: ptyService,
     files: new FilesService(),
