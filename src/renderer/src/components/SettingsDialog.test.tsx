@@ -483,6 +483,22 @@ describe('SettingsDialog: Claude accounts', () => {
     expect(section()).toHaveTextContent('Open a task or folder first, the login runs in its terminal')
   })
 
+  it('reads the login states again when the window gets the focus back', async () => {
+    const api = createMockApi()
+    await api.addProfile({ name: 'Work', configDir: '/w', billing: 'own' })
+    const listProfiles = api.listProfiles
+    const { onChange } = await setup(api)
+    const work = (): HTMLElement => within(section()).getByRole('listitem', { name: 'Work' })
+    expect(work()).toHaveTextContent('Not signed in')
+    // A /login in a terminal meanwhile.
+    api.listProfiles = async () =>
+      (await listProfiles()).map((p) => (p.name === 'Work' ? { ...p, login: 'signedIn' as const } : p))
+    fireEvent.focus(window)
+    await waitFor(() => expect(work()).toHaveTextContent('Signed in'))
+    expect(work()).not.toHaveTextContent('Not signed in')
+    expect(onChange).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ login: 'signedIn' })]))
+  })
+
   it("keeps Esc and Enter in the accounts' fields to themselves", async () => {
     const api = createMockApi()
     const onCancel = vi.fn()

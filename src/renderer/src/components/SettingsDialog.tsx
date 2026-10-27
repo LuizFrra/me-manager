@@ -497,23 +497,38 @@ function ClaudeAccountsSection({ api, target, ...props }: AccountsProps): React.
   const addErrorId = useId()
   const onChange = useLatestCallback(props.onChange)
 
+  // Counts reads of the list and changes to it: a read answers only if nothing was read or changed since it began.
+  const readSeq = useRef(0)
+
+  // Read when shown, and again whenever the window gets the focus back: a /login run in a terminal meanwhile (the
+  // app's or another) changes an account's login state. Not while a change is under way: it returns the list.
   useEffect(() => {
     let live = true
-    api.listProfiles().then(
-      (list) => {
-        if (!live) return
-        setProfiles(list)
-        onChange(list)
-      },
-      (err: unknown) => live && setLoadError(cleanError(err)),
-    )
+    const read = (): void => {
+      if (busyRef.current) return
+      const seq = ++readSeq.current
+      const current = (): boolean => live && seq === readSeq.current
+      api.listProfiles().then(
+        (list) => {
+          if (!current()) return
+          setProfiles(list)
+          setLoadError(null)
+          onChange(list)
+        },
+        (err: unknown) => current() && setLoadError(cleanError(err)),
+      )
+    }
+    read()
+    window.addEventListener('focus', read)
     return () => {
       live = false
+      window.removeEventListener('focus', read)
     }
   }, [api, onChange])
 
   const change: Change = async (op) => {
     if (busyRef.current) return null
+    readSeq.current++ // a read under way may predate the change
     busyRef.current = true
     setBusy(true)
     try {
