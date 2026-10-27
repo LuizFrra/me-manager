@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -506,6 +508,20 @@ describe('SettingsDialog: Claude accounts', () => {
     await waitFor(() => expect(work()).toHaveTextContent('Signed in'))
     expect(work()).not.toHaveTextContent('Not signed in')
     expect(onChange).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ login: 'signedIn' })]))
+  })
+
+  it('lets the list grow with the dialog, which scrolls, instead of scrolling inside it', async () => {
+    const style = document.createElement('style')
+    style.textContent = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+    document.head.append(style)
+    try {
+      await setup()
+      const list = within(section()).getByRole('list')
+      expect(getComputedStyle(list).maxHeight).toBe('none')
+      expect(getComputedStyle(list).overflowY).not.toBe('auto')
+    } finally {
+      style.remove()
+    }
   })
 
   it("keeps Esc and Enter in the accounts' fields to themselves", async () => {

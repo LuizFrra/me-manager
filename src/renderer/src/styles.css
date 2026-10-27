@@ -1197,6 +1197,14 @@ button:disabled {
   gap: 10px;
 }
 /* Settings' Claude accounts: one card per account, name and login state over its folder, billing and buttons. */
+/* Over `.dialog ul` (a capped, scrolling monospace list): it grows with the dialog, which scrolls. */
+.dialog ul.account-list {
+  margin: 0;
+  padding: 0;
+  max-height: none;
+  overflow-y: visible;
+  font-family: inherit;
+}
 .account-list {
   display: flex;
   flex-direction: column;
