@@ -334,6 +334,17 @@ describe('Orchestrator: createTask', () => {
     await expect(orch.createTask(themeId, repoId, 'FIX')).rejects.toThrow(/already exists/)
     expect(git.calls).toEqual([])
   })
+  it("replaces a leftover session with the new task's name (from a crash), starting Claude in the new worktree", async () => {
+    const { orch, tmux, themeId, repoId } = await setup()
+    await tmux.newSession('mmt_client-x_my-api_fix', '/wt/client-x/my-api/fix', 'claude', 'claude --continue')
+    tmux.calls = []
+    await orch.createTask(themeId, repoId, 'fix')
+    expect(tmux.calls).toEqual([
+      'killSession mmt_client-x_my-api_fix',
+      `newSession mmt_client-x_my-api_fix ${CLAUDE_CMD}`,
+    ])
+    expect(tmux.sessions.get('mmt_client-x_my-api_fix')?.windows).toEqual([{ name: 'claude', command: CLAUDE_CMD }])
+  })
   it('rolls back the worktree and branch when tmux fails', async () => {
     const { orch, git, tmux, store, themeId, repoId } = await setup()
     tmux.failNewSession = true

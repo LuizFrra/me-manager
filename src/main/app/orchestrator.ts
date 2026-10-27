@@ -702,6 +702,9 @@ export class Orchestrator implements AppService {
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
       try {
+        // No task has this slug, so a session by its name is left from one that is gone (the app quit or crashed
+        // before saving it): tmux would refuse a second one, and its Claude runs in a folder deleted since.
+        if (await tmux.hasSession(session)) await tmux.killSession(session)
         const args = this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)
         await this.withPromptFile(prompt, (file) =>
           tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file)),
