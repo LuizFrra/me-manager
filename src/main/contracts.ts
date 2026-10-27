@@ -30,7 +30,10 @@ export interface GitApi {
   repoRoot(path: string): Promise<string | null>
   /** `git fetch origin --prune`; no-op when there is no origin remote. */
   fetch(repoPath: string): Promise<void>
-  /** e.g. "origin/main"; falls back to local main/master/current branch. */
+  /**
+   * e.g. "origin/main" (origin/HEAD, else origin/main or origin/master); falls back to local main/master, then the
+   * current branch (origin's copy when it has one).
+   */
   resolveBaseRef(repoPath: string): Promise<string>
   /**
    * origin's branches as `origin/<name>` (without `origin/HEAD`), then the local branches, each sorted by name.

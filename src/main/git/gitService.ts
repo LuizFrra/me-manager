@@ -209,7 +209,8 @@ export class GitService implements GitApi {
   }
 
   async resolveBaseRef(repoPath: string): Promise<string> {
-    if (await this.hasOrigin(repoPath)) {
+    const origin = await this.hasOrigin(repoPath)
+    if (origin) {
       try {
         const head = (await this.git(repoPath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim()
         // origin/HEAD can dangle (e.g. the default branch was renamed and older git kept the link).
@@ -224,8 +225,12 @@ export class GitService implements GitApi {
     for (const name of ['main', 'master']) {
       if (await this.refExists(repoPath, `refs/heads/${name}`)) return name
     }
-    // The checked-out branch, when it has a commit (a new repo's HEAD is on a branch that has none yet).
+    // The checked-out branch: origin's copy when it has one (origin/HEAD is only set by a clone, or a fetch by git
+    // 2.48+, and the local branch may be behind), else the local one when it has a commit (a new repo's HEAD is on
+    // a branch that has none yet).
     const current = (await this.git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')).trim()
+    if (current && origin && (await this.refExists(repoPath, `refs/remotes/origin/${current}`)))
+      return `origin/${current}`
     if (current && (await this.refExists(repoPath, `refs/heads/${current}`))) return current
     if ((await this.git(repoPath, ['rev-list', '-n', '1', '--all'])).trim() === '') {
       throw new Error(`${repoPath} has no commits yet: commit something first, then create the task`)

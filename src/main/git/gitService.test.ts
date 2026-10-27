@@ -54,6 +54,17 @@ describe('resolveBaseRef', () => {
     const { repo } = await makeLocalRepo()
     await expect(svc.resolveBaseRef(repo)).resolves.toBe('main')
   })
+  it("prefers origin's copy of the current branch to the local one when origin/HEAD isn't set", async () => {
+    const { root, clone } = await makeClonedRepo()
+    await git(clone, 'branch', '-m', 'main', 'develop')
+    await git(clone, 'push', 'origin', 'develop')
+    await git(join(root, 'origin.git'), 'symbolic-ref', 'HEAD', 'refs/heads/develop')
+    await git(clone, 'push', 'origin', '--delete', 'main')
+    await git(clone, 'fetch', 'origin', '--prune')
+    // As in a repo that was pushed, never cloned (git before 2.48 doesn't set origin/HEAD on fetch).
+    await git(clone, 'remote', 'set-head', 'origin', '-d')
+    await expect(svc.resolveBaseRef(clone)).resolves.toBe('origin/develop')
+  })
   it('uses the current branch when there is no main or master', async () => {
     const { repo } = await makeLocalRepo()
     await git(repo, 'branch', '-m', 'main', 'trunk')
