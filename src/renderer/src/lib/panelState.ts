@@ -1,4 +1,5 @@
 import type { PanelTabName } from '../../../shared/types'
+import type { SelectedLines } from './review'
 
 export type PanelTab = PanelTabName
 
@@ -11,12 +12,20 @@ export interface SearchState {
 
 export const DEFAULT_SEARCH: SearchState = { query: '', caseSensitive: false, regex: false }
 
+/**
+ * Lines to scroll to and mark (a search result's line, a review comment's lines), in the file `path`: shown only
+ * while that file is. Each request is a new object, so opening the same lines again scrolls back to them.
+ */
+export interface PanelReveal extends SelectedLines {
+  path: string
+}
+
 /** What the side panel shows for one target. */
 export interface PanelState {
   tab: PanelTab
   selected?: string
-  /** A line of the selected file to scroll to and highlight (a search result); cleared when another file opens. */
-  line?: number
+  /** Lines to scroll to and mark in the Files tab; cleared when another file is picked. */
+  reveal?: PanelReveal
   search: SearchState
   mdMode: 'view' | 'raw'
   /** Files visited before following Markdown links, most recent last. */

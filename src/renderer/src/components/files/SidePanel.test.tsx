@@ -677,6 +677,37 @@ describe('SidePanel', () => {
       )
     })
 
+    it("marks all of a comment's lines, and scrolls back to them when it is opened again", async () => {
+      const user = userEvent.setup()
+      const scroll = vi.fn()
+      const original = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scroll
+      try {
+        render(<Harness api={createMockApi()} review={review({ comments: [COMMENT] })} />)
+        await user.click(screen.getByRole('button', { name: 'src/app.ts:9-10' }))
+        await vi.waitFor(() => expect(document.querySelector('.code-line-mark')).not.toBeNull())
+        const mark = document.querySelector('.code-line-mark') as HTMLElement
+        expect(mark.style.getPropertyValue('--mark-lines')).toBe('2')
+        const scrolls = scroll.mock.calls.length
+        expect(scrolls).toBeGreaterThan(0)
+        await user.click(screen.getByRole('button', { name: 'src/app.ts:9-10' }))
+        expect(scroll.mock.calls.length).toBeGreaterThan(scrolls)
+      } finally {
+        HTMLElement.prototype.scrollIntoView = original
+      }
+    })
+
+    it('shows the lines to reveal only on their own file (not one opened from elsewhere)', async () => {
+      render(
+        <Harness
+          api={createMockApi()}
+          initial={{ selected: 'src/util/format.ts', reveal: { path: 'src/app.ts', lines: { start: 2, end: 2 } } }}
+        />,
+      )
+      await vi.waitFor(() => expect(codeText()).toContain('formatName'))
+      expect(document.querySelector('.code-line-mark')).toBeNull()
+    })
+
     it('moves focus to the Files tab when the last comment is deleted', async () => {
       const user = userEvent.setup()
       const api = createMockApi()

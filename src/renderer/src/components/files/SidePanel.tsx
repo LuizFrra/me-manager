@@ -19,7 +19,7 @@ import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { ReviewTray } from './ReviewTray'
 import { SearchView } from './SearchView'
-import type { ReviewComment, ReviewDraft } from '../../lib/review'
+import type { LineRange, ReviewComment, ReviewDraft } from '../../lib/review'
 import { cleanError } from '../../lib/toasts'
 import { startVisibleInterval } from '../../lib/visibleInterval'
 import { useLatestCallback } from '../../lib/useLatestCallback'
@@ -236,20 +236,20 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
   )
 
   const select = (nextTab: PanelTab, path: string): void =>
-    onState({ ...state, tab: nextTab, selected: path, line: undefined, history: [] })
+    onState({ ...state, tab: nextTab, selected: path, reveal: undefined, history: [] })
   // Stable identities for the viewer: a re-render here must not make MarkdownView remount its content.
   const openLink = useLatestCallback((path: string): void =>
     onState({
       ...state,
       tab: 'files',
       selected: path,
-      line: undefined,
+      reveal: undefined,
       history: state.selected ? [...state.history, state.selected] : state.history,
     }),
   )
   const back = useLatestCallback((): void => {
     const history = state.history.slice(0, -1)
-    onState({ ...state, tab: 'files', selected: state.history.at(-1), line: undefined, history })
+    onState({ ...state, tab: 'files', selected: state.history.at(-1), reveal: undefined, history })
   })
   // A search result opens in Files at its line; Markdown and SVG as their text, where lines can be shown.
   const openMatch = useLatestCallback((m: SearchMatch): void => {
@@ -258,7 +258,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       ...state,
       tab: 'files',
       selected: m.path,
-      line: m.line,
+      reveal: { path: m.path, lines: { start: m.line, end: m.line } },
       history: [],
       mdMode: isMarkdown(m.path) || isSvgPath(m.path) ? 'raw' : state.mdMode,
     })
@@ -270,7 +270,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
       ...state,
       tab: inFiles ? 'files' : 'changes',
       selected: c.path,
-      line: inFiles ? (c.lines?.start ?? c.removed?.start) : undefined,
+      reveal: inFiles ? { path: c.path, lines: { ...(c.lines ?? c.removed) } as LineRange } : undefined,
       history: [],
       mdMode: inFiles && (isMarkdown(c.path) || isSvgPath(c.path)) ? 'raw' : state.mdMode,
     })
@@ -444,7 +444,7 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
             mdMode={state.mdMode}
             diffLayout={diffLayout}
             onDiffLayout={pickLayout}
-            highlightLine={tab === 'files' ? state.line : undefined}
+            markLines={tab === 'files' && state.reveal?.path === shownPath ? state.reveal?.lines : undefined}
             canGoBack={state.history.length > 0}
             onBack={back}
             onMdMode={setMdMode}

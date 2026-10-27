@@ -2134,13 +2134,14 @@ body.resizing .side-panel {
   min-height: 100%;
   font: 12px/18px var(--mono);
 }
-/* A search result's line: over both the gutter and the text, 8px (the pre padding) + 18px per line down. */
+/* A search result's line or a comment's lines: over the gutter and the text, 8px (the pre padding) + 18px
+   per line down. */
 .code-line-mark {
   position: absolute;
   left: 0;
   right: 0;
   top: calc(8px + var(--mark-line, 0) * 18px);
-  height: 18px;
+  height: calc(var(--mark-lines, 1) * 18px);
   background: color-mix(in srgb, var(--waiting) 12%, transparent);
   box-shadow:
     inset 2px 0 0 var(--waiting),

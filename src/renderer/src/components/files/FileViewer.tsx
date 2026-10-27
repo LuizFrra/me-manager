@@ -10,7 +10,7 @@ import { ImageView } from './ImageView'
 import { MarkdownView } from './MarkdownView'
 import { useLatestCallback } from '../../lib/useLatestCallback'
 import type { LineSelection, LineSelectProps } from '../../lib/lineSelection'
-import { selectedLinesLabel, type ReviewDraft, type SelectedLines } from '../../lib/review'
+import { selectedLinesLabel, type LineRange, type ReviewDraft, type SelectedLines } from '../../lib/review'
 
 export interface FileViewerProps {
   api: Pick<MeManagerApi, 'readImage' | 'openExternal'>
@@ -30,8 +30,8 @@ export interface FileViewerProps {
   diffLayout?: DiffLayout
   /** Changes tab: the user picked a layout with the header's Unified / Split toggle. */
   onDiffLayout?: (layout: DiffLayout) => void
-  /** Files tab: a line to scroll to and highlight (a search result). */
-  highlightLine?: number
+  /** Files tab: lines to scroll to and mark (see CodeView). */
+  markLines?: LineRange
   canGoBack: boolean
   onBack: () => void
   onMdMode: (mode: PanelState['mdMode']) => void
@@ -161,7 +161,7 @@ export function FileViewer(p: FileViewerProps): React.JSX.Element {
             />
           </div>
         ) : (
-          <CodeView path={path} content={text.content} highlightLine={p.highlightLine} select={select} />
+          <CodeView path={path} content={text.content} markLines={p.markLines} select={select} />
         )}
       </>
     )
