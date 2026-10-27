@@ -26,6 +26,15 @@ describe('filterSidebar', () => {
     expect(shown('LAY')).toEqual({ themes: ['Personal'], items: ['blog'], tasks: ['new layout'] })
   })
 
+  it('ignores accents, in the names and in the query', () => {
+    const accented = appState(theme('Gestão', [repo('api', [task('Revisão do login'), task('cafe')])]))
+    const names = (q: string): string[] => [...(filterSidebar(accented, q)?.tasks ?? [])]
+    expect(names('revisao')).toEqual(['Revisão do login'])
+    expect(names('REVISÃO')).toEqual(['Revisão do login'])
+    expect(names('café')).toEqual(['cafe'])
+    expect(filterSidebar(accented, 'gestao')?.themes).toEqual(new Set(['Gestão']))
+  })
+
   it('keeps everything inside a matching repo or theme', () => {
     expect(shown('api')).toEqual({ themes: ['Client X'], items: ['api'], tasks: ['fix login', 'add tests'] })
     expect(shown('personal')).toEqual({ themes: ['Personal'], items: ['blog', 'Recipes'], tasks: ['new layout'] })

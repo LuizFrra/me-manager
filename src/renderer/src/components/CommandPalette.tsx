@@ -65,6 +65,28 @@ function Highlighted({ text, positions }: { text: string; positions: number[] })
 }
 
 /**
+ * A file's path as its name, then its folder, dimmed: a long path cut at its end would hide the name. The matched
+ * characters are highlighted in both.
+ */
+function FileLabel({ path, positions }: { path: string; positions: number[] }): React.JSX.Element {
+  const start = path.lastIndexOf('/') + 1
+  const name = path.slice(start)
+  const folder = path.slice(0, Math.max(0, start - 1))
+  return (
+    <>
+      <span className="palette-file-name">
+        <Highlighted text={name} positions={positions.filter((p) => p >= start).map((p) => p - start)} />
+      </span>
+      {folder && (
+        <span className="palette-file-dir">
+          <Highlighted text={folder} positions={positions.filter((p) => p < folder.length)} />
+        </span>
+      )}
+    </>
+  )
+}
+
+/**
  * Fuzzy "go to anything": tasks, folders and actions, plus the selected target's files, which are fetched when
  * the palette opens and kept while it stays open. Enter or a click runs the active result; Esc closes.
  */
@@ -78,18 +100,30 @@ export function CommandPalette<C extends PaletteCommand>(props: {
 }): React.JSX.Element {
   const { commands, loadFiles, onRun, onOpenFile, onClose } = props
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
+  // The highlighted result, by id: when the results change under it (the files arrive), it stays the same result.
+  // Null: the first one.
+  const [activeId, setActiveId] = useState<string | null>(null)
   const [files, setFiles] = useState<PaletteFiles | null>(null)
   const [filesFailed, setFilesFailed] = useState(false)
   const listRef = useRef<HTMLUListElement>(null)
   const listId = useId()
+  // The result highlighted on screen, for when the files arrive: see loadFiles below.
+  const shownActive = useRef<string | null>(null)
+  // Whether the next change of highlight scrolls it into view: not when the pointer made it, as a row half out of
+  // view would scroll from under the pointer, leaving it over another row.
+  const scrollToActive = useRef(true)
   useRestoreFocus()
 
   useEffect(() => {
     if (!loadFiles) return
     let alive = true
     loadFiles().then(
-      (list) => alive && setFiles(list),
+      (list) => {
+        if (!alive) return
+        // Files may rank above what is highlighted: keep that highlighted, so Enter opens what the user saw.
+        setActiveId((id) => id ?? shownActive.current)
+        setFiles(list)
+      },
       () => alive && setFilesFailed(true),
     )
     return () => {
@@ -112,11 +146,21 @@ export function CommandPalette<C extends PaletteCommand>(props: {
       ),
     [commands, fileEntries, query],
   )
-  const current = Math.min(active, results.length - 1)
+  const current =
+    results.length === 0
+      ? -1
+      : Math.max(
+          0,
+          results.findIndex((r) => r.item.id === activeId),
+        )
 
   useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
-    el?.scrollIntoView?.({ block: 'nearest' })
+    shownActive.current = results[current]?.item.id ?? null
+    if (scrollToActive.current) {
+      const el = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+      el?.scrollIntoView?.({ block: 'nearest' })
+    }
+    scrollToActive.current = true
   }, [current, results])
 
   const run = (entry: C | FileEntry | undefined): void => {
@@ -127,17 +171,21 @@ export function CommandPalette<C extends PaletteCommand>(props: {
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
+    // An input method (Japanese, Chinese…) uses these keys to pick, confirm or cancel what it composes.
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
       if (results.length === 0) return
       const step = e.key === 'ArrowDown' ? 1 : -1
-      setActive((current + step + results.length) % results.length)
+      setActiveId(results[(current + step + results.length) % results.length].item.id)
     } else if (e.key === 'Enter') {
       e.preventDefault()
       run(results[current]?.item)
     } else if (e.key === 'Escape') {
       e.preventDefault()
       onClose()
+    } else if (e.key === 'Tab') {
+      e.preventDefault() // the input is the palette's one control: the focus has nowhere to go
     }
   }
 
@@ -146,7 +194,14 @@ export function CommandPalette<C extends PaletteCommand>(props: {
 
   return (
     <div className="overlay palette-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div
+        className="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        // A click anywhere in it (a result, the footer) keeps the focus in the input, where the palette's keys work.
+        onMouseDown={(e) => !(e.target instanceof HTMLInputElement) && e.preventDefault()}
+      >
         <input
           className="palette-input"
           autoFocus
@@ -161,7 +216,7 @@ export function CommandPalette<C extends PaletteCommand>(props: {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
-            setActive(0)
+            setActiveId(null)
           }}
           onKeyDown={onKeyDown}
         />
@@ -173,9 +228,13 @@ export function CommandPalette<C extends PaletteCommand>(props: {
               role="option"
               aria-selected={i === current}
               aria-label={item.label}
+              title={item.label}
               className="palette-option"
-              onMouseMove={() => i !== current && setActive(i)}
-              onMouseDown={(e) => e.preventDefault()} // keep focus in the input
+              onMouseMove={() => {
+                if (i === current) return
+                scrollToActive.current = false
+                setActiveId(item.id)
+              }}
               onClick={() => run(item)}
             >
               <span
@@ -185,26 +244,33 @@ export function CommandPalette<C extends PaletteCommand>(props: {
                 <KindIcon kind={item.kind} emoji={item.icon} />
               </span>
               <span className="palette-label">
-                <Highlighted text={item.label} positions={positions} />
+                {isFile(item) ? (
+                  <FileLabel path={item.label} positions={positions} />
+                ) : (
+                  <Highlighted text={item.label} positions={positions} />
+                )}
               </span>
               {item.shortcut && <kbd>{item.shortcut}</kbd>}
               <span className="palette-kind">{KIND_LABEL[item.kind]}</span>
             </li>
           ))}
         </ul>
-        {results.length === 0 && <div className="palette-empty">No results</div>}
-        <div className="palette-footer" aria-hidden="true">
-          <span>
+        {/* Status regions, there before what they say, so screen readers hear it from the combobox. */}
+        <div className="palette-empty" role="status">
+          {results.length === 0 ? 'No results' : ''}
+        </div>
+        <div className="palette-footer">
+          <span aria-hidden="true">
             <kbd>↑</kbd>
             <kbd>↓</kbd> move
           </span>
-          <span>
+          <span aria-hidden="true">
             <kbd>Enter</kbd> open
           </span>
-          <span>
+          <span aria-hidden="true">
             <kbd>Esc</kbd> close
           </span>
-          <span className="palette-footer-status">
+          <span className="palette-footer-status" role="status">
             {loadingFiles
               ? 'Loading files…'
               : filesFailed

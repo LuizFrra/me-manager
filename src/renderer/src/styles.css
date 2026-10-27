@@ -180,6 +180,34 @@ button:disabled {
 .sidebar-rail-spacer {
   flex: 1;
 }
+/* On the rail's toggle: sessions waiting for the user (their count), or finished unseen (a dot). */
+.sidebar-rail button {
+  position: relative;
+}
+.rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.rail-badge.waiting {
+  top: 1px;
+  right: 1px;
+  width: auto;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  background: var(--waiting);
+}
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -317,11 +345,14 @@ button:disabled {
   color: var(--muted);
   padding: 0 16px;
 }
+.sidebar-filter-box {
+  position: relative;
+  margin: 0 10px 10px;
+}
 .sidebar-filter {
   display: block;
-  width: calc(100% - 20px);
-  margin: 0 10px 10px;
-  padding: 7px 10px;
+  width: 100%;
+  padding: 7px 28px 7px 10px;
   font: inherit;
   color: var(--text);
   background: var(--raised);
@@ -338,6 +369,18 @@ button:disabled {
 .sidebar-filter:focus {
   border-color: var(--border-strong);
   box-shadow: 0 0 0 3px var(--hover-strong);
+}
+.sidebar-filter-clear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: flex;
+  padding: 3px;
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+.sidebar-filter-clear:hover {
+  color: var(--text-strong);
 }
 .row {
   display: flex;
@@ -685,12 +728,31 @@ button:disabled {
   border-bottom: 1px solid var(--divider);
   background: var(--bg);
 }
+/* Many tabs scroll sideways; the padding keeps the focus ring inside the scrolling box. */
+.tabbar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin: -3px;
+  padding: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
 .tab {
+  flex: none;
   display: flex;
   align-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--muted);
+}
+/* A long command's name is cut; its tooltip has all of it. */
+.tab [role='tab'] {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tab:hover {
   background: var(--hover);
@@ -2900,6 +2962,12 @@ kbd {
   background: none;
   font-weight: 600;
 }
+/* A file: its name, then its folder (cut first when the row is too narrow). */
+.palette-file-dir {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .palette-kind {
   flex: none;
   min-width: 42px;
@@ -2911,6 +2979,9 @@ kbd {
   padding: 18px;
   text-align: center;
   color: var(--muted);
+}
+.palette-empty:empty {
+  display: none;
 }
 .palette-footer {
   flex: none;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  actsOnRepeat,
   clickSelectMode,
   isEditableTarget,
   isModEnter,
@@ -112,6 +113,8 @@ describe('shortcut labels', () => {
       { keys: ['Ctrl+=', 'Ctrl++'], description: 'Terminal: larger font' },
       { keys: ['Ctrl+-'], description: 'Terminal: smaller font' },
       { keys: ['Ctrl+0'], description: 'Terminal: reset the font size' },
+      { keys: ['↑ ↓', 'Home End'], description: 'Sidebar: go to the row above or below, the first or the last' },
+      { keys: ['← →'], description: 'Sidebar: collapse or expand the focused row, go up or in' },
       { keys: ['Alt+Shift+↑ ↓'], description: 'Sidebar: move the focused row up or down' },
       { keys: ['Ctrl+click', 'Shift+click'], description: 'Sidebar: select several tasks, or a range in a repo' },
       { keys: ['Space', 'Shift+↑ ↓'], description: 'Sidebar: add the focused task to the selection, or extend it' },
@@ -137,6 +140,8 @@ describe('shortcut labels', () => {
       ['⌘=', '⌘+'],
       ['⌘-'],
       ['⌘0'],
+      ['↑ ↓', 'Home End'],
+      ['← →'],
       ['⌥⇧↑ ↓'],
       ['⌘-click', '⇧-click'],
       ['Space', '⇧↑ ↓'],
@@ -236,6 +241,13 @@ describe.each([
     expect(shifted('/', { code: 'Digit7' })).toEqual({ id: 'help' })
   })
 
+  it('finds the help key by its place on layouts where it types neither "/" nor "?" (Russian, Ukrainian)', () => {
+    expect(shifted(',', { code: 'Slash' })).toEqual({ id: 'help' }) // Russian: Shift+. on the / key
+    expect(press('.', { code: 'Slash' })).toEqual(mac ? { id: 'help' } : null)
+    // A key that types something an app shortcut uses still means that shortcut.
+    expect(press('-', { code: 'Slash' })).toEqual({ id: 'zoomOut' }) // German: - on the / key
+  })
+
   it('opens the palette with Mod+Shift+P, toggles the panel and focuses the sidebar filter', () => {
     expect(shifted('P')).toEqual({ id: 'palette' })
     expect(shifted('E')).toEqual({ id: 'panel' })
@@ -305,6 +317,14 @@ describe('worksWhileTyping', () => {
     expect(worksWhileTyping('usage')).toBe(true)
     for (const id of ['filterSidebar', 'target', 'newTab', 'closeTab', 'prevTab', 'nextTab'] as const)
       expect(worksWhileTyping(id)).toBe(false)
+  })
+})
+
+describe('actsOnRepeat', () => {
+  it('lets only zoom steps and tab cycling act again while their keys are held', () => {
+    for (const id of ['zoomIn', 'zoomOut', 'prevTab', 'nextTab'] as const) expect(actsOnRepeat(id)).toBe(true)
+    for (const id of ['palette', 'help', 'panel', 'sidebar', 'closeTab', 'newTab', 'newTask', 'zoomReset'] as const)
+      expect(actsOnRepeat(id)).toBe(false)
   })
 })
 

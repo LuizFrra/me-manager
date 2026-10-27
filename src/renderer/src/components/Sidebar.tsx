@@ -27,6 +27,7 @@ import {
   type TaskGitStatus,
 } from '../../../shared/types'
 import type { BulkAction } from '../lib/bulk'
+import { waitingTargets } from '../lib/attention'
 import { gitBadges, plural } from '../lib/gitStatus'
 import { SESSION_STATE_INFO, sessionState } from '../lib/sessionState'
 import { filterSidebar } from '../lib/sidebarFilter'
@@ -120,6 +121,13 @@ const DRAG_TYPE = 'application/x-me-manager-row'
 /** A row's or block's props, with its `data-*` attributes. */
 type DivProps = React.HTMLAttributes<HTMLDivElement> & { [data: `data-${string}`]: string }
 
+/** A row label's place in the keyboard navigation: in the Tab order or not, its key and its depth in the tree. */
+interface RowNavProps {
+  tabIndex: 0 | -1
+  'data-key': string
+  'data-level': number
+}
+
 /** ↑ ahead, ↓ behind, ● uncommitted; one accessible label for the group, a tooltip on each badge. */
 function GitBadges({ status, baseRef }: { status: TaskGitStatus; baseRef: string }): React.JSX.Element | null {
   const badges = gitBadges(status, baseRef)
@@ -152,14 +160,20 @@ function themeStripe(color: unknown): React.CSSProperties | undefined {
   return css ? ({ '--theme-color': css } as React.CSSProperties) : undefined
 }
 
+/** A row's tooltip: its full name (a narrow sidebar cuts it short), then what else there is to say. */
+const rowTitle = (name: string, more?: string): string => (more ? `${name}\n${more}` : name)
+
 /**
  * A repo's archived tasks, under a "▶ Archived (N)" toggle; nothing when it has none. They have no session, so no
  * status dot or git badges: a click selects one (the main area offers Restore), and its row has Restore and Delete.
  */
 function ArchivedTasks(props: {
+  repoId: string
   tasks: Task[]
   open: boolean
   selectedTaskId?: string
+  /** The row labels' props for keyboard navigation (see Sidebar's rowNav). */
+  nav: (key: string, level: number) => RowNavProps
   onToggle: () => void
   onSelect: (taskId: string, e: React.MouseEvent) => void
   onRestore: (task: Task) => void
@@ -174,6 +188,7 @@ function ArchivedTasks(props: {
           aria-expanded={props.open}
           title="Tasks whose worktree was removed; their branches are kept"
           onClick={props.onToggle}
+          {...props.nav(`archived:${props.repoId}`, 3)}
         >
           <Chevron open={props.open} /> <span className="row-name">Archived ({props.tasks.length})</span>
         </button>
@@ -181,7 +196,13 @@ function ArchivedTasks(props: {
       {props.open &&
         props.tasks.map((task) => (
           <div key={task.id} className={`row archived-row${props.selectedTaskId === task.id ? ' selected' : ''}`}>
-            <button className="row-label" title={task.notes} onClick={(e) => props.onSelect(task.id, e)}>
+            <button
+              className="row-label"
+              title={rowTitle(task.name, task.notes)}
+              aria-current={props.selectedTaskId === task.id ? 'true' : undefined}
+              onClick={(e) => props.onSelect(task.id, e)}
+              {...props.nav(`task:${task.id}`, 4)}
+            >
               <span className="row-name">{task.name}</span>
             </button>
             <span className="row-actions">
@@ -278,6 +299,75 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     if (id === null || (document.activeElement !== null && document.activeElement !== document.body)) return
     focusRow(id)
   }, [p.state])
+
+  // Keyboard navigation, as in a tree: one row label is in the Tab order, and the arrows move between them (see
+  // navigate). That one is the label focused last, unless the selection changed since; then the selected row's, or
+  // the first row's when that one isn't shown.
+  const selectedKey = p.selected
+    ? p.selected.taskId
+      ? `task:${p.selected.taskId}`
+      : `item:${p.selected.itemId}`
+    : null
+  const [lastFocused, setLastFocused] = useState<{ key: string; selectedKey: string | null } | null>(null)
+  const shownKeys = new Set<string>()
+  for (const theme of p.state.themes) {
+    if (!shown('themes', theme.id)) continue
+    shownKeys.add(`theme:${theme.id}`)
+    if (!expanded(theme.id)) continue
+    for (const item of theme.items) {
+      if (!shown('items', item.id)) continue
+      shownKeys.add(`item:${item.id}`)
+      if (item.kind !== 'repo' || !expanded(item.id)) continue
+      for (const task of item.tasks) {
+        if (!shown('tasks', task.id)) continue
+        if (isArchived(task)) shownKeys.add(`archived:${item.id}`)
+        if (!isArchived(task) || archivedExpanded(item.id)) shownKeys.add(`task:${task.id}`)
+      }
+    }
+  }
+  const tabStop =
+    [lastFocused?.selectedKey === selectedKey ? lastFocused.key : null, selectedKey].find(
+      (key) => key !== null && shownKeys.has(key),
+    ) ?? shownKeys.values().next().value
+  const rowNav = (key: string, level: number): RowNavProps => ({
+    tabIndex: key === tabStop ? 0 : -1,
+    'data-key': key,
+    'data-level': level,
+  })
+  /**
+   * The tree's keys on a focused row label: ↑ and ↓ go to the row above or below, Home and End to the first and last;
+   * → expands a theme, repo or Archived group, or goes to its first row; ← collapses it, or goes to the row it is in.
+   * ↓ in the filter goes to the first row, ↑ on the first row back to the filter. Enter opens, as a click does.
+   */
+  const navigate = (e: React.KeyboardEvent): void => {
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.nativeEvent.isComposing) return
+    const labels = [...(navRef.current?.querySelectorAll<HTMLElement>('.row-label[data-key]') ?? [])]
+    const filterBox = navRef.current?.querySelector<HTMLElement>('.sidebar-filter')
+    if (e.target === filterBox && e.key === 'ArrowDown' && labels.length > 0) {
+      e.preventDefault()
+      return labels[0].focus()
+    }
+    const at = labels.indexOf(e.target as HTMLElement)
+    if (at === -1) return
+    const label = labels[at]
+    const level = (el: HTMLElement): number => Number(el.dataset.level)
+    const open = label.getAttribute('aria-expanded')
+    let next: HTMLElement | null | undefined
+    if (e.key === 'ArrowDown') next = labels[at + 1]
+    else if (e.key === 'ArrowUp') next = at === 0 ? filterBox : labels[at - 1]
+    else if (e.key === 'Home') next = labels[0]
+    else if (e.key === 'End') next = labels.at(-1)
+    else if (e.key === 'ArrowRight') {
+      if (open === 'false') label.click()
+      else if (open === 'true' && labels[at + 1] && level(labels[at + 1]) > level(label)) next = labels[at + 1]
+    } else if (e.key === 'ArrowLeft') {
+      // While filtering every group stays open: ← goes up instead.
+      if (open === 'true' && !filter) label.click()
+      else next = labels.slice(0, at).findLast((l) => level(l) < level(label))
+    } else return
+    e.preventDefault()
+    next?.focus()
+  }
 
   // The multi-selection. `anchor` is where a Shift range starts: the task last clicked or toggled here, else the
   // current task.
@@ -412,16 +502,27 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
     }
   }
 
-  if (p.rail)
+  if (p.rail) {
+    // The rows' marks are hidden in the rail: its toggle says what waits for the user and what finished unseen.
+    const waiting = waitingTargets(p.state, p.status).length
+    const finished = p.unread?.size ?? 0
+    const notes = [waiting > 0 && `${waiting} waiting for you`, finished > 0 && `${finished} finished`].filter(Boolean)
     return (
       <nav className="sidebar sidebar-rail" aria-label="Sidebar" inert={p.inert}>
         {p.onToggleSidebar && (
           <button
-            aria-label="Show sidebar"
-            title={`Show sidebar (${shortcutLabel('sidebar')})`}
+            aria-label={['Show sidebar', ...notes].join(', ')}
+            title={`Show sidebar (${shortcutLabel('sidebar')})${notes.length > 0 ? `: ${notes.join(', ')}` : ''}`}
             onClick={p.onToggleSidebar}
           >
             <PanelLeft {...ICON} size={18} />
+            {waiting > 0 ? (
+              <span className="rail-badge waiting" aria-hidden="true">
+                {waiting}
+              </span>
+            ) : (
+              finished > 0 && <span className="rail-badge" aria-hidden="true" />
+            )}
           </button>
         )}
         {p.onNewTask && (
@@ -447,15 +548,18 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
         </button>
       </nav>
     )
+  }
 
   return (
     <nav
       ref={navRef}
       className="sidebar"
+      aria-label="Sidebar"
       inert={p.inert}
       onKeyDown={(e) => {
         // Esc anywhere in the sidebar clears the selection; the filter's Esc clears the filter only.
-        if (e.key !== 'Escape' || e.isDefaultPrevented() || p.multiSelection.size === 0) return
+        if (e.key !== 'Escape' || e.isDefaultPrevented() || e.nativeEvent.isComposing || p.multiSelection.size === 0)
+          return
         e.preventDefault()
         choose(new Set())
       }}
@@ -488,6 +592,12 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
       )}
       <div
         className="sidebar-scroll"
+        onKeyDown={navigate}
+        onFocus={(e) => {
+          const key = e.target instanceof HTMLElement ? e.target.dataset.key : undefined
+          if (key && (key !== lastFocused?.key || selectedKey !== lastFocused.selectedKey))
+            setLastFocused({ key, selectedKey })
+        }}
         onDragOver={dragOver}
         onDrop={drop}
         onDragEnd={endDrag}
@@ -495,20 +605,36 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
           if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setDropAt(null)
         }}
       >
-        <input
-          ref={filterRef}
-          className="sidebar-filter"
-          aria-label="Filter sidebar"
-          placeholder={`Filter (${shortcutLabel('filterSidebar')})`}
-          spellCheck={false}
-          value={p.filter}
-          onChange={(e) => p.onFilterChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== 'Escape') return
-            e.preventDefault()
-            p.onFilterChange('')
-          }}
-        />
+        <div className="sidebar-filter-box">
+          <input
+            ref={filterRef}
+            className="sidebar-filter"
+            aria-label="Filter sidebar"
+            placeholder={`Filter (${shortcutLabel('filterSidebar')})`}
+            spellCheck={false}
+            value={p.filter}
+            onChange={(e) => p.onFilterChange(e.target.value)}
+            onKeyDown={(e) => {
+              // An input method's Esc cancels what it composes.
+              if (e.key !== 'Escape' || e.nativeEvent.isComposing) return
+              e.preventDefault()
+              p.onFilterChange('')
+            }}
+          />
+          {p.filter && (
+            <button
+              className="sidebar-filter-clear"
+              aria-label="Clear filter"
+              title="Clear filter (Esc)"
+              onClick={() => {
+                p.onFilterChange('')
+                navRef.current?.querySelector<HTMLElement>('.sidebar-filter')?.focus()
+              }}
+            >
+              <X {...ICON} />
+            </button>
+          )}
+        </div>
         <div className="sidebar-header">
           <span>Themes</span>
           <button aria-label="New theme" title="New theme" onClick={p.onAddTheme}>
@@ -526,7 +652,13 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                 style={themeStripe(theme.color)}
                 {...movable({ kind: 'theme', themeId: theme.id })}
               >
-                <button className="row-label" aria-expanded={expanded(theme.id)} onClick={() => toggle(theme.id)}>
+                <button
+                  className="row-label"
+                  aria-expanded={expanded(theme.id)}
+                  title={theme.name}
+                  onClick={() => toggle(theme.id)}
+                  {...rowNav(`theme:${theme.id}`, 1)}
+                >
                   {arrow(theme.id)}{' '}
                   {theme.icon && (
                     <span className="theme-icon" aria-hidden="true">
@@ -595,9 +727,12 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                       >
                         <button
                           className="row-label"
+                          title={rowTitle(item.name, `${item.path}${missing.has(item.id) ? ' (missing)' : ''}`)}
+                          aria-current={isSelected(item.id) ? 'true' : undefined}
                           onClick={(e) =>
                             clickOther(e, { themeId: theme.id, itemId: item.id }, 'Only tasks can be selected')
                           }
+                          {...rowNav(`item:${item.id}`, 2)}
                         >
                           {dot(item.id)} <Folder {...ICON} className="item-icon" />{' '}
                           <span className="row-name">{item.name}</span>
@@ -623,9 +758,11 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                           <button
                             className="row-label"
                             aria-expanded={expanded(item.id)}
+                            title={rowTitle(item.name, `${item.path}${missing.has(item.id) ? ' (missing)' : ''}`)}
                             onClick={() => toggle(item.id)}
+                            {...rowNav(`item:${item.id}`, 2)}
                           >
-                            {arrow(item.id)} {missing.has(item.id) ? '⚠ ' : ''}
+                            {arrow(item.id)} {missing.has(item.id) && <span title="Path missing">⚠ </span>}
                             <FolderGit2 {...ICON} className="item-icon" /> <span className="row-name">{item.name}</span>
                           </button>
                           <span className="row-actions">
@@ -664,8 +801,10 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                               >
                                 <button
                                   className="row-label"
-                                  title={task.notes}
+                                  title={rowTitle(task.name, task.notes)}
+                                  aria-current={isSelected(item.id, task.id) ? 'true' : undefined}
                                   onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
+                                  {...rowNav(`task:${task.id}`, 3)}
                                 >
                                   {dot(task.id)} <span className="row-name">{task.name}</span>
                                   {p.unread?.has(task.id) && <UnreadMark />}
@@ -701,6 +840,8 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                             ))}
                         {expanded(item.id) && (
                           <ArchivedTasks
+                            repoId={item.id}
+                            nav={rowNav}
                             tasks={item.tasks.filter((task) => isArchived(task) && shown('tasks', task.id))}
                             open={archivedExpanded(item.id)}
                             selectedTaskId={p.selected?.itemId === item.id ? p.selected.taskId : undefined}

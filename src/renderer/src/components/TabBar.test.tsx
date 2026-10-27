@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { TabInfo } from '../../../shared/types'
@@ -148,5 +148,99 @@ describe('TabBar run tab', () => {
     renderRun(false)
     fireEvent.contextMenu(screen.getByRole('tab', { name: 'claude' }))
     expect(screen.queryByRole('menuitem', { name: 'Restart' })).not.toBeInTheDocument()
+  })
+})
+
+describe('TabBar keys and pointer', () => {
+  const tabs: TabInfo[] = [
+    { index: 0, name: 'claude', active: false },
+    { index: 3, name: 'shell', active: true },
+    { index: 5, name: 'npm run dev -- --host 0.0.0.0 --port 5173', active: false },
+  ]
+  function renderTabs(): { onSelect: ReturnType<typeof vi.fn>; onClose: ReturnType<typeof vi.fn> } {
+    const handlers = { onSelect: vi.fn(), onClose: vi.fn() }
+    render(
+      <TabBar
+        tabs={tabs}
+        onNew={() => {}}
+        onRestartClaude={() => {}}
+        onCopyTranscript={() => {}}
+        onSaveTranscript={() => {}}
+        panelOpen={false}
+        onTogglePanel={() => {}}
+        {...handlers}
+      />,
+    )
+    return handlers
+  }
+  const tab = (name: string | RegExp): HTMLElement => screen.getByRole('tab', { name })
+
+  it('is a named tab list with only the active tab in the Tab order, and no close buttons', () => {
+    renderTabs()
+    expect(screen.getByRole('tablist', { name: 'Terminal tabs' })).toBeInTheDocument()
+    expect(screen.getAllByRole('tab').map((t) => t.tabIndex)).toEqual([-1, 0, -1])
+    for (const close of screen.getAllByRole('button', { name: /^Close tab / })) expect(close.tabIndex).toBe(-1)
+  })
+
+  it('moves to and shows the next or previous tab with → and ←, wrapping around, and the first or last with Home and End', async () => {
+    const user = userEvent.setup()
+    const { onSelect } = renderTabs()
+    act(() => tab('shell').focus())
+    await user.keyboard('{ArrowRight}')
+    expect(tab(/^npm run dev/)).toHaveFocus()
+    expect(onSelect).toHaveBeenLastCalledWith(5)
+    await user.keyboard('{ArrowRight}')
+    expect(tab('claude')).toHaveFocus()
+    expect(onSelect).toHaveBeenLastCalledWith(0)
+    await user.keyboard('{ArrowLeft}')
+    expect(tab(/^npm run dev/)).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(tab('claude')).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(tab(/^npm run dev/)).toHaveFocus()
+    expect(onSelect).toHaveBeenCalledTimes(5)
+  })
+
+  it('scrolls the active tab into view when the tabs overflow', () => {
+    const scrolled: Element[] = []
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+    try {
+      const props = {
+        onSelect: () => {},
+        onClose: () => {},
+        onNew: () => {},
+        onRestartClaude: () => {},
+        onCopyTranscript: () => {},
+        onSaveTranscript: () => {},
+        panelOpen: false,
+        onTogglePanel: () => {},
+      }
+      const { rerender } = render(<TabBar tabs={tabs} {...props} />)
+      expect(scrolled.at(-1)).toBe(tab('shell'))
+      rerender(<TabBar tabs={tabs.map((t) => ({ ...t, active: t.index === 5 }))} {...props} />)
+      expect(scrolled.at(-1)).toBe(tab(/^npm run dev/))
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
+  })
+
+  it('closes a tab on a middle click', () => {
+    const { onClose, onSelect } = renderTabs()
+    expect(fireEvent.mouseDown(tab('claude'), { button: 1 })).toBe(false) // no autoscroll or paste
+    fireEvent(tab('claude'), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }))
+    expect(onClose).toHaveBeenCalledWith(0)
+    fireEvent(tab('shell'), new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('shows each full tab name in its tooltip, and the close shortcut on the active tab', () => {
+    renderTabs()
+    expect(tab(/^npm run dev/)).toHaveAttribute('title', 'npm run dev -- --host 0.0.0.0 --port 5173')
+    expect(screen.getByRole('button', { name: 'Close tab shell' })).toHaveAttribute('title', 'Close tab (Ctrl+Shift+W)')
+    expect(screen.getByRole('button', { name: 'Close tab claude' })).toHaveAttribute('title', 'Close tab')
   })
 })

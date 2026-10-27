@@ -84,7 +84,8 @@ const letter = (shift: boolean, display: string): Chord => ({
 
 // Digits and brackets also match on `code`, for layouts where those keys type something else (AZERTY digits,
 // brackets behind Shift on US: '{'); see matchShortcut for when `code` counts. Mod+Shift+/ matches both '/' and
-// '?': with Shift, US layouts report '?', and layouts where '/' itself needs Shift (German: Shift+7) report '/'.
+// '?': with Shift, US layouts report '?', and layouts where '/' itself needs Shift (German: Shift+7) report '/';
+// on layouts where the key types neither (Russian: '.' and ','), its place counts.
 const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'palette',
@@ -95,8 +96,8 @@ const SHORTCUTS: ShortcutDef[] = [
     id: 'help',
     description: 'Keyboard shortcuts',
     chords: [
-      { shift: false, keys: ['/'], display: '/', macOnly: true },
-      { shift: true, keys: ['/', '?'], display: '/' },
+      { shift: false, keys: ['/'], codes: ['Slash'], display: '/', macOnly: true },
+      { shift: true, keys: ['/', '?'], codes: ['Slash'], display: '/' },
     ],
   },
   // Mod+, is the usual "preferences" chord on both platforms; Ctrl+, means nothing to a terminal.
@@ -159,6 +160,14 @@ const chordsFor = (def: ShortcutDef, mac: boolean): Chord[] => def.chords.filter
 const WHILE_TYPING: ReadonlySet<ShortcutId> = new Set(['palette', 'help', 'usage', 'panel', 'searchFiles'])
 
 export const worksWhileTyping = (id: ShortcutId): boolean => WHILE_TYPING.has(id)
+
+/**
+ * Shortcuts that act again on the keydowns a held chord repeats: zoom steps and tab cycling. The others act once
+ * per press, so a held toggle doesn't flicker and a held Close tab doesn't close one tab after another.
+ */
+const ON_REPEAT: ReadonlySet<ShortcutId> = new Set(['zoomIn', 'zoomOut', 'prevTab', 'nextTab'])
+
+export const actsOnRepeat = (id: ShortcutId): boolean => ON_REPEAT.has(id)
 
 const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'])
 
@@ -273,6 +282,12 @@ export function rowMoveStep(e: KeyLike): -1 | 0 | 1 {
   return e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
 }
 
+/** The sidebar tree's own keys on a focused row (see Sidebar's navigate), for the help overlay. */
+const SIDEBAR_NAV_HELP: readonly ShortcutHelpEntry[] = [
+  { keys: ['↑ ↓', 'Home End'], description: 'Sidebar: go to the row above or below, the first or the last' },
+  { keys: ['← →'], description: 'Sidebar: collapse or expand the focused row, go up or in' },
+]
+
 /** rowMoveStep's keys, for the help overlay. */
 const rowMoveHelp = (mac: boolean): ShortcutHelpEntry => ({
   keys: [mac ? '⌥⇧↑ ↓' : 'Alt+Shift+↑ ↓'],
@@ -326,7 +341,7 @@ export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
     keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
-  return [...app, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
+  return [...app, ...SIDEBAR_NAV_HELP, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
 }
 
 /** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */

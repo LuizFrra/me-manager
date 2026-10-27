@@ -96,18 +96,32 @@ export function Welcome(p: StartActions & { onShowShortcuts: () => void }): Reac
   )
 }
 
-/** A tip line that changes every TIP_ROTATE_MS, or on "Next tip". */
+/**
+ * A tip line that changes every TIP_ROTATE_MS, or on "Next tip". It holds still while hovered or focused, so it
+ * can be read, and only then is it a live region: a screen reader hears the tips the user asks for, not every
+ * automatic change.
+ */
 function TipLine(): React.JSX.Element {
   const tips = useMemo(() => homeTips(), [])
   const [index, setIndex] = useState(0)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const paused = hovered || focused
   useEffect(() => {
+    if (paused) return
     const timer = setInterval(() => setIndex((i) => (i + 1) % tips.length), TIP_ROTATE_MS)
     return () => clearInterval(timer)
-  }, [tips.length])
+  }, [tips.length, paused])
   return (
-    <p className="home-tip">
+    <p
+      className="home-tip"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => setFocused(e.currentTarget.contains(e.relatedTarget))}
+    >
       <span className="home-tip-label">Tip</span>
-      <span className="home-tip-text" aria-live="polite">
+      <span className="home-tip-text" aria-live={focused ? 'polite' : 'off'}>
         {tips[index]}
       </span>
       <button
@@ -309,8 +323,10 @@ export function Home(
                       <span className={`dot ${dot}`} aria-hidden="true">
                         {SESSION_STATE_INFO[session].glyph}
                       </span>
-                      <span className="home-recent-name">{task.name}</span>
-                      <span className="home-recent-where">
+                      <span className="home-recent-name" title={task.name}>
+                        {task.name}
+                      </span>
+                      <span className="home-recent-where" title={`${theme.name} › ${repoName}`}>
                         {theme.icon && <span aria-hidden="true">{theme.icon} </span>}
                         {theme.name} › {repoName}
                       </span>

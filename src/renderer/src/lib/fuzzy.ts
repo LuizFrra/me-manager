@@ -1,7 +1,8 @@
 /**
  * Fuzzy subsequence matching for the command palette.
  *
- * Every query character must appear in the text, in order (case-insensitive; whitespace in the query is ignored).
+ * Every query character must appear in the text, in order (ignoring case and accents, so "acao" finds "ação";
+ * whitespace in the query is ignored).
  * Among all the ways to place the query in the text, the best-scoring one wins: matches at word starts
  * (after a separator or at a camelCase hump) and runs of consecutive matches score higher, gaps cost a little.
  */
@@ -41,10 +42,56 @@ function boundaryBonus(text: string, i: number): number {
   return isLower(prev) && isUpper(text[i]) ? BONUS_CAMEL : 0
 }
 
-/** The query's characters, lowercased one UTF-16 unit at a time so indexes line up with the text. */
-function queryChars(query: string): string[] {
-  const chars: string[] = []
-  for (const c of query) if (!/\s/.test(c)) chars.push(...c.toLowerCase().split(''))
+/** Below this, code units fold through a table (ASCII, Latin-1 and Latin Extended, where accents live). */
+const TABLE_END = 0x250
+let foldTable: Uint16Array | undefined
+const foldedBeyond = new Map<number, number>()
+
+function foldSlow(code: number): number {
+  // Its first character once decomposed is the letter without its accent: "ç" is "c" + U+0327.
+  const base = String.fromCharCode(code).normalize('NFD')[0].toLowerCase()
+  return base.length === 1 ? base.charCodeAt(0) : code
+}
+
+/**
+ * A UTF-16 code unit as matching compares it: lowercased, without its accent. One unit in, one out, so positions
+ * in the folded text are positions in the text.
+ */
+function fold(code: number): number {
+  if (code < 0x80) return code >= 0x41 && code <= 0x5a ? code + 0x20 : code
+  if (code < TABLE_END) {
+    if (!foldTable) {
+      foldTable = new Uint16Array(TABLE_END)
+      for (let c = 0; c < TABLE_END; c++) foldTable[c] = foldSlow(c)
+    }
+    return foldTable[code]
+  }
+  let folded = foldedBeyond.get(code)
+  if (folded === undefined) {
+    folded = foldSlow(code)
+    foldedBeyond.set(code, folded)
+  }
+  return folded
+}
+
+/** `text` as searches compare it: lowercased and without accents ("Ação" is "acao"). */
+export function foldText(text: string): string {
+  let out = ''
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    // A decomposed accent (a combining mark on its own) is dropped.
+    if (code < 0x300 || code > 0x36f) out += String.fromCharCode(fold(code))
+  }
+  return out
+}
+
+/** The query's code units, folded; whitespace and combining accents (U+0300–U+036F) left out. */
+function queryChars(query: string): number[] {
+  const chars: number[] = []
+  for (let i = 0; i < query.length; i++) {
+    const code = query.charCodeAt(i)
+    if ((code < 0x300 || code > 0x36f) && !/\s/.test(query[i])) chars.push(fold(code))
+  }
   return chars
 }
 
@@ -53,18 +100,26 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
   return matchChars(queryChars(query), text)
 }
 
-function matchChars(q: string[], text: string): FuzzyMatch | null {
+/** The folded text being matched; one buffer for every call, as most texts are short and most are rejected. */
+let foldedText = new Uint16Array(256)
+
+function matchChars(q: number[], text: string): FuzzyMatch | null {
   const n = q.length
   const m = text.length
   if (n === 0) return { score: 0, positions: [] }
   if (n > m) return null
-  const lower: string[] = new Array(m)
-  for (let j = 0; j < m; j++) lower[j] = text[j].toLowerCase()
+  if (foldedText.length < m) foldedText = new Uint16Array(m * 2)
+  const lower = foldedText
 
-  // Cheap rejection first: most candidates are not subsequence matches at all.
+  // Cheap rejection first, while folding: most candidates are not subsequence matches at all.
   let qi = 0
-  for (let j = 0; j < m && qi < n; j++) if (lower[j] === q[qi]) qi++
+  let at = 0
+  for (; at < m && qi < n; at++) {
+    lower[at] = fold(text.charCodeAt(at))
+    if (lower[at] === q[qi]) qi++
+  }
   if (qi < n) return null
+  for (; at < m; at++) lower[at] = fold(text.charCodeAt(at))
 
   // score[i * m + j]: best score with query char i matched at text position j; from[] remembers where i-1 went.
   // A consecutive run carries the bonus of its first character, so all of "app" in "src/app.ts" counts as a

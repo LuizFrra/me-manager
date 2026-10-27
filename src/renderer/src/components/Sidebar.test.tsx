@@ -82,10 +82,224 @@ describe('Sidebar header and tree', () => {
     expect(screen.getByRole('button', { name: '○ docs' })).toBeInTheDocument()
   })
 
+  it("shows the full names, cut short in a narrow sidebar, in the rows' tooltips, with paths and notes", () => {
+    const noted = { ...task('fix'), notes: 'Ask about the token refresh' }
+    const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z', notes: 'Shipped' }
+    renderSidebar({
+      state: appState(theme('Client', [repo('api', [noted, task('docs'), archived]), folder('notes')])),
+      archivedOpen: new Set(['api']),
+      status: { running: [], missing: ['api'], activity: {} },
+    })
+    expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('title', 'Client')
+    expect(screen.getByRole('button', { name: '⚠ api' })).toHaveAttribute('title', 'api\n/code/api (missing)')
+    expect(screen.getByRole('button', { name: '○ notes' })).toHaveAttribute('title', 'notes\n/f/notes')
+    expect(screen.getByRole('button', { name: '○ fix' })).toHaveAttribute('title', 'fix\nAsk about the token refresh')
+    expect(screen.getByRole('button', { name: '○ docs' })).toHaveAttribute('title', 'docs')
+    expect(screen.getByRole('button', { name: 'old' })).toHaveAttribute('title', 'old\nShipped')
+    expect(screen.getByTitle('Path missing')).toHaveTextContent('⚠')
+  })
+
+  it('tells screen readers which task or folder is open', () => {
+    const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
+    const withArchived = appState(
+      theme('Client', [repo('api', [task('fix'), task('docs'), archived]), folder('notes')]),
+    )
+    const current = (): string[] =>
+      [...document.querySelectorAll('[aria-current]')].map((el) => `${el.textContent?.trim()}=${el.ariaCurrent}`)
+    const { rerender } = renderSidebar({ selected: { themeId: 'Client', itemId: 'api', taskId: 'fix' } })
+    expect(current()).toEqual(['○ fix=true'])
+    rerender(<Sidebar {...sidebarProps({ selected: { themeId: 'Client', itemId: 'notes' } })} />)
+    expect(screen.getByRole('button', { name: '○ notes' })).toHaveAttribute('aria-current', 'true')
+    expect(document.querySelectorAll('[aria-current]')).toHaveLength(1)
+    rerender(
+      <Sidebar
+        {...sidebarProps({
+          state: withArchived,
+          archivedOpen: new Set(['api']),
+          selected: { themeId: 'Client', itemId: 'api', taskId: 'old' },
+        })}
+      />,
+    )
+    expect(current()).toEqual(['old=true'])
+    rerender(<Sidebar {...sidebarProps()} />)
+    expect(current()).toEqual([])
+  })
+
+  it('clears the filter from a button in it, while it holds text, keeping the focus in it', async () => {
+    const user = userEvent.setup()
+    function Filtered(): React.JSX.Element {
+      const [filter, setFilter] = useState('fix')
+      return <Sidebar {...sidebarProps({ filter, onFilterChange: setFilter })} />
+    }
+    render(<Filtered />)
+    expect(screen.queryByRole('button', { name: '○ docs' })).not.toBeInTheDocument()
+    const clear = screen.getByRole('button', { name: 'Clear filter' })
+    expect(clear).toHaveAttribute('title', 'Clear filter (Esc)')
+    await user.click(clear)
+    const box = screen.getByRole('textbox', { name: 'Filter sidebar' })
+    expect(box).toHaveValue('')
+    expect(box).toHaveFocus()
+    expect(screen.getByRole('button', { name: '○ docs' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clear filter' })).not.toBeInTheDocument()
+  })
+
   it('says whether each theme and repository is expanded', () => {
     renderSidebar({ collapsed: new Set(['api']) })
     expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('button', { name: 'api' })).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+describe('Sidebar rail', () => {
+  const rail = (patch: Partial<SidebarProps>): RenderResult =>
+    renderSidebar({ rail: true, onToggleSidebar: vi.fn(), ...patch })
+
+  it('says on its Show sidebar button how many sessions wait for the user, and how many finished unseen', () => {
+    const status: LiveStatus = {
+      running: ['fix', 'docs', 'notes'],
+      missing: [],
+      activity: { fix: 'waiting', docs: 'waiting', notes: 'idle' },
+    }
+    rail({ status, unread: new Set(['notes']) })
+    const toggle = screen.getByRole('button', { name: 'Show sidebar, 2 waiting for you, 1 finished' })
+    expect(toggle.querySelector('.rail-badge')).toHaveTextContent('2')
+    expect(toggle).toHaveAttribute('title', 'Show sidebar (Ctrl+Shift+B): 2 waiting for you, 1 finished')
+  })
+
+  it('marks finished sessions alone with a dot, and nothing when all is quiet', () => {
+    const { unmount } = rail({ unread: new Set(['fix']) })
+    const toggle = screen.getByRole('button', { name: 'Show sidebar, 1 finished' })
+    expect(toggle.querySelector('.rail-badge')).toHaveTextContent('')
+    unmount()
+    rail({})
+    expect(screen.getByRole('button', { name: 'Show sidebar' }).querySelector('.rail-badge')).toBeNull()
+  })
+
+  it('is the same Sidebar landmark as the full sidebar', () => {
+    const { unmount } = rail({})
+    expect(screen.getByRole('navigation', { name: 'Sidebar' })).toHaveClass('sidebar-rail')
+    unmount()
+    renderSidebar()
+    expect(screen.getByRole('navigation', { name: 'Sidebar' })).not.toHaveClass('sidebar-rail')
+  })
+})
+
+describe('Sidebar keyboard navigation', () => {
+  const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
+  const navState = appState(theme('Client', [repo('api', [task('fix'), task('docs'), archived]), folder('notes')]))
+
+  /** The Sidebar with App's part played for collapsing: themes, repos and the Archived group. */
+  function Harness(props: { patch?: Partial<SidebarProps> }): React.JSX.Element {
+    const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+    const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+    const flip = (set: ReadonlySet<string>, id: string): Set<string> => {
+      const next = new Set(set)
+      if (!next.delete(id)) next.add(id)
+      return next
+    }
+    return (
+      <Sidebar
+        {...sidebarProps({ state: navState, ...props.patch })}
+        collapsed={collapsed}
+        onToggleCollapsed={(id) => setCollapsed((c) => flip(c, id))}
+        archivedOpen={archivedOpen}
+        onToggleArchived={(id) => setArchivedOpen((o) => flip(o, id))}
+      />
+    )
+  }
+  const labelOf = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}( \\(\\d+\\))?$`, 'u') })
+  /** The row labels in the Tab order: one at a time. */
+  const tabStops = (): string[] =>
+    [...document.querySelectorAll<HTMLElement>('.row-label')]
+      .filter((l) => l.tabIndex === 0)
+      .map((l) => l.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+
+  it('keeps one row in the Tab order: the selected one, else the first, then the one last focused', () => {
+    const { unmount } = render(<Harness />)
+    expect(tabStops()).toEqual(['Client'])
+    unmount()
+    render(<Harness patch={{ selected: { themeId: 'Client', itemId: 'api', taskId: 'docs' } }} />)
+    expect(tabStops()).toEqual(['○ docs'])
+    act(() => labelOf('notes').focus())
+    expect(tabStops()).toEqual(['○ notes'])
+  })
+
+  it('moves between the rows with ↑ and ↓, Home and End, and between the filter and the first row', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    act(() => labelOf('Client').focus())
+    await user.keyboard('{ArrowDown}')
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}')
+    expect(labelOf('Archived')).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(labelOf('notes')).toHaveFocus()
+    await user.keyboard('{ArrowDown}') // the last row: stays
+    expect(labelOf('notes')).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(labelOf('Client')).toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expect(screen.getByRole('textbox', { name: 'Filter sidebar' })).toHaveFocus()
+    await user.keyboard('{ArrowDown}')
+    expect(labelOf('Client')).toHaveFocus()
+    expect(tabStops()).toEqual(['Client'])
+  })
+
+  it('collapses and expands with ← and →, or goes to the row above in the tree and the first row inside', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    act(() => labelOf('docs').focus())
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('api')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: '○ fix' })).not.toBeInTheDocument()
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('Client')).toHaveFocus()
+    await user.keyboard('{ArrowRight}') // already expanded: into it
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(labelOf('api')).toHaveAttribute('aria-expanded', 'true')
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(labelOf('fix')).toHaveFocus()
+    await user.keyboard('{ArrowRight}') // a task: nothing inside
+    expect(labelOf('fix')).toHaveFocus()
+
+    // The Archived group opens and closes the same way, and its tasks lead back to it.
+    act(() => labelOf('Archived').focus())
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+    expect(screen.getByRole('button', { name: 'old' })).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('Archived')).toHaveFocus()
+  })
+
+  it("leaves the filter's ↓ and Esc to an input method while it composes", () => {
+    const onFilterChange = vi.fn()
+    const onMultiSelect = vi.fn()
+    render(<Harness patch={{ onFilterChange, onMultiSelect, multiSelection: new Set(['fix', 'docs']) }} />)
+    const box = screen.getByRole('textbox', { name: 'Filter sidebar' })
+    act(() => box.focus())
+    expect(fireEvent.keyDown(box, { key: 'ArrowDown', isComposing: true })).toBe(true)
+    expect(fireEvent.keyDown(box, { key: 'Escape', isComposing: true })).toBe(true)
+    expect(box).toHaveFocus()
+    expect(onFilterChange).not.toHaveBeenCalled()
+    expect(onMultiSelect).not.toHaveBeenCalled() // nor the sidebar's Esc, which clears the selection
+  })
+
+  it('leaves the arrows with modifiers to their own keys, and the row buttons alone', async () => {
+    const onMultiSelect = vi.fn()
+    render(<Harness patch={{ onMultiSelect }} />)
+    act(() => labelOf('fix').focus())
+    fireEvent.keyDown(labelOf('fix'), { key: 'ArrowDown', shiftKey: true }) // extends the selection
+    expect(onMultiSelect).toHaveBeenCalled()
+    fireEvent.keyDown(labelOf('docs'), { key: 'ArrowDown', ctrlKey: true })
+    expect(labelOf('docs')).toHaveFocus()
+    const rename = screen.getByRole('button', { name: 'Rename task docs' })
+    act(() => rename.focus())
+    fireEvent.keyDown(rename, { key: 'ArrowDown' })
+    expect(rename).toHaveFocus()
   })
 })
 

@@ -67,7 +67,7 @@ import { archiveSkipReason, bulkSummary, runLimited, type BulkAction, type BulkO
 import { pruneSelection, selectedTasks, type SelectedTask } from './lib/taskSelection'
 import { plural } from './lib/gitStatus'
 import { clampFraction, DEFAULT_PANEL, loadPanelFraction, savePanelFraction, type PanelEntry } from './lib/panelState'
-import { isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
+import { actsOnRepeat, isEditableTarget, matchShortcut, shortcutLabel, worksWhileTyping } from './lib/shortcuts'
 import { allTargets, visibleTargets } from './lib/targets'
 import { repoChoices, taskNameFromPrompt } from './lib/composer'
 import { finishedIds, windowTitle } from './lib/attention'
@@ -1815,8 +1815,11 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
   const onShortcutKey = useLatestCallback((e: KeyboardEvent): void => {
     const shortcut = matchShortcut(e)
     if (!shortcut || dialog) return
+    // A held chord's repeated keydowns are still the app's (never the terminal's), but most act only once.
+    const repeated = e.repeat && !actsOnRepeat(shortcut.id)
     if (shortcut.id === 'palette' || shortcut.id === 'help' || shortcut.id === 'usage') {
       e.preventDefault()
+      if (repeated) return
       setPaletteOpen((o) => shortcut.id === 'palette' && !o)
       setHelpOpen((o) => shortcut.id === 'help' && !o)
       setUsageOpen((o) => shortcut.id === 'usage' && !o)
@@ -1827,6 +1830,7 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     const inComposer = e.target instanceof Element && e.target.closest('.composer') !== null
     if (!worksWhileTyping(shortcut.id) && isEditableTarget(e.target) && !inComposer) return
     e.preventDefault()
+    if (repeated) return
     switch (shortcut.id) {
       case 'settings':
         return openSettings()
