@@ -312,16 +312,27 @@ export class GitService implements GitApi {
       )
     }
     const base = await this.fullRef(repoPath, baseRef)
+    const taken = existsSync(worktreePath)
     await mkdir(dirname(worktreePath), { recursive: true })
     try {
       // --no-track: otherwise the branch would track origin/main and `git push` would be confusing.
       await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, worktreePath, base])
     } catch (err) {
+      if (!taken) await this.removeFailedWorktree(repoPath, worktreePath)
       // git makes the branch before the checkout and keeps it when the checkout fails (a filter like git-lfs
       // missing, a full disk), which would refuse the task's name from then on. It didn't exist (checked above).
       await this.git(repoPath, ['branch', '-D', branch]).catch(() => {})
       throw commandFailure('git worktree add', err)
     }
+  }
+
+  /**
+   * After a failed `worktree add`: git cleans up after a failed checkout, but keeps the whole worktree when only its
+   * post-checkout hook failed (git-lfs or husky not on the app's PATH), which would hold the path from then on.
+   */
+  private async removeFailedWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    if (!existsSync(worktreePath)) return
+    await this.git(repoPath, ['worktree', 'remove', '--force', worktreePath]).catch(() => {})
   }
 
   async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
@@ -369,7 +380,8 @@ export class GitService implements GitApi {
     // A worktree folder deleted by hand leaves an entry that would make `worktree add` refuse the path.
     await this.git(repoPath, ['worktree', 'prune'])
     await mkdir(dirname(worktreePath), { recursive: true })
-    await this.git(repoPath, ['worktree', 'add', worktreePath, branch]).catch((err) => {
+    await this.git(repoPath, ['worktree', 'add', worktreePath, branch]).catch(async (err) => {
+      await this.removeFailedWorktree(repoPath, worktreePath) // the path was free (checked above)
       throw commandFailure('git worktree add', err)
     })
   }

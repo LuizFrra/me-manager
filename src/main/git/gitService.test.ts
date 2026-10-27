@@ -227,6 +227,14 @@ describe('addWorktree with a kept branch', () => {
   })
 })
 
+/** A post-checkout hook that fails, like a git-lfs or husky one whose tool isn't on the app's PATH. */
+async function failingPostCheckout(repo: string): Promise<void> {
+  const hooks = join(repo, '..', 'hooks')
+  await mkdir(hooks, { recursive: true })
+  await writeFile(join(hooks, 'post-checkout'), '#!/bin/sh\necho "hook: tool not found" >&2\nexit 1\n', { mode: 0o755 })
+  await git(repo, 'config', 'core.hooksPath', hooks)
+}
+
 describe('addWorktree whose checkout fails', () => {
   it('deletes the branch it created, so the same task can be created once the cause is fixed', async () => {
     const { root, repo } = await makeLocalRepo()
@@ -246,6 +254,17 @@ describe('addWorktree whose checkout fails', () => {
     await git(repo, 'config', '--unset', 'filter.lfs-like.required')
     await svc.addWorktree(repo, wt, 'claude/t/x', 'main')
     expect(existsSync(join(wt, 'a.dat'))).toBe(true)
+  })
+  it('removes the worktree a failing post-checkout hook left behind, and its branch', async () => {
+    const { root, repo } = await makeLocalRepo()
+    await failingPostCheckout(repo)
+    const wt = join(root, 'wt')
+    await expect(svc.addWorktree(repo, wt, 'claude/t/x', 'main')).rejects.toThrow(
+      /^git worktree add failed: .*hook: tool not found/,
+    )
+    expect(existsSync(wt)).toBe(false)
+    expect((await git(repo, 'branch', '--list', 'claude/t/x')).trim()).toBe('')
+    expect(await git(repo, 'worktree', 'list')).not.toContain(wt)
   })
   it('leaves a folder already at the path, and the branches, as they were', async () => {
     const { root, repo } = await makeLocalRepo()
@@ -463,6 +482,20 @@ describe('restoreWorktree (archived tasks)', () => {
     await svc.removeWorktree(clone, wt)
     await git(clone, 'checkout', branch)
     await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(/^git worktree add failed: fatal: /)
+  })
+  it('removes the worktree a failing post-checkout hook left behind, keeping the branch', async () => {
+    const { clone, wt, branch } = await withTask()
+    await svc.removeWorktree(clone, wt)
+    await failingPostCheckout(clone)
+    await expect(svc.restoreWorktree(clone, wt, branch)).rejects.toThrow(
+      /^git worktree add failed: .*hook: tool not found/,
+    )
+    expect(existsSync(wt)).toBe(false)
+    expect(await git(clone, 'worktree', 'list')).not.toContain(wt)
+    expect((await git(clone, 'branch', '--list', branch)).trim()).not.toBe('')
+    await git(clone, 'config', '--unset', 'core.hooksPath')
+    await svc.restoreWorktree(clone, wt, branch) // once the cause is fixed
+    expect(existsSync(join(wt, 'README.md'))).toBe(true)
   })
   it('refuses an option-like branch', async () => {
     const { clone, wt } = await withTask()
