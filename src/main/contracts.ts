@@ -326,4 +326,6 @@ export interface OrchestratorDeps {
   promptFiles: PromptFilesApi
   worktreesRoot: string
   pathExists: (path: string) => boolean
+  /** The Default Claude profile's folder: $CLAUDE_CONFIG_DIR or ~/.claude (see shared/profiles.ts). */
+  defaultClaudeDir: string
 }

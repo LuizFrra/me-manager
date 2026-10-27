@@ -36,7 +36,8 @@ import {
   type TaskGitStatus,
 } from '../../shared/types'
 import { emptyUsageSummary } from '../../shared/usage'
-import { makeDeps } from './fakes'
+import { makeDeps, MemoryStore } from './fakes'
+import * as m from '../store/mutations'
 
 type Ctx = ReturnType<typeof makeDeps> & { orch: Orchestrator; themeId: string; repoId: string }
 
@@ -1195,6 +1196,120 @@ describe('Orchestrator: sessions and tabs', () => {
     ctx.deps.pathExists = (p) => p !== '/wt/client-x/my-api/fix'
     status = await ctx.orch.getStatus()
     expect(status).toEqual({ running: [], missing: [ctx.task.id], activity: {} })
+  })
+})
+
+describe('Orchestrator: Claude profiles', () => {
+  const SESSION = 'mmt_client-x_my-api_fix'
+  const work = { id: 'p-work', name: 'Work', configDir: '/home/me/.claude-work', billing: 'company' as const }
+  const home = { id: 'p-home', name: 'Home', configDir: '/home/me/.claude-home', billing: 'own' as const }
+  const fixTask: Task = {
+    id: 'task-fix',
+    name: 'fix',
+    slug: 'fix',
+    branch: 'claude/client-x/fix',
+    worktreePath: '/wt/client-x/my-api/fix',
+    baseRef: 'origin/main',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }
+
+  /**
+   * A theme with the profile `themeProfile` (none when omitted), holding a repo with the task `fix` (its own
+   * profile `taskProfile`, if given) and a folder; Work and Home in the settings. Folders in `missing` don't exist.
+   */
+  async function withProfiles(
+    options: { themeProfile?: string; taskProfile?: string; missing?: string[] } = {},
+  ): Promise<Ctx & { folderId: string; target: Target }> {
+    let s = m.addTheme(m.emptyState(), 'Client X')
+    const themeId = s.themes[0].id
+    s = m.addFolder(m.addRepo(s, themeId, '/code/my-api'), themeId, '/docs/site')
+    const [repoId, folderId] = s.themes[0].items.map((i) => i.id)
+    s = m.addTask(s, themeId, repoId, fixTask)
+    if (options.themeProfile) s = m.setThemeProfile(s, themeId, options.themeProfile)
+    if (options.taskProfile) s = m.setTaskProfile(s, themeId, repoId, fixTask.id, options.taskProfile)
+    const missing = options.missing ?? []
+    const ctx = makeDeps({
+      store: new MemoryStore(s),
+      defaultClaudeDir: '/home/me/.claude',
+      pathExists: (path) => !missing.includes(path),
+    })
+    await ctx.settings.update({ profiles: [work, home] })
+    const orch = new Orchestrator(ctx.deps, { runGraceMs: 0 })
+    await orch.init()
+    return { ...ctx, orch, themeId, repoId, folderId, target: { themeId, itemId: repoId, taskId: fixTask.id } }
+  }
+  const envOf = (ctx: Ctx, session: string, window?: string): Record<string, string> | undefined => {
+    const s = ctx.tmux.sessions.get(session)
+    return window === undefined ? s?.env : s?.windows.find((w) => w.name === window)?.env
+  }
+
+  it("starts a new task's session in its theme's profile", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')
+    expect(envOf(ctx, 'mmt_client-x_my-api_new-one')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    expect(ctx.tmux.calls.at(-1)).toMatch(
+      /^newSession mmt_client-x_my-api_new-one .* env CLAUDE_CONFIG_DIR=\/home\/me\/\.claude-work$/,
+    )
+  })
+
+  it("opens a task in its own profile over its theme's, and a folder in its theme's", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', taskProfile: 'p-home' })
+    await ctx.orch.openTarget(ctx.target)
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    await ctx.orch.openTarget({ themeId: ctx.themeId, itemId: ctx.folderId })
+    expect(envOf(ctx, 'mmf_client-x_site')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+  })
+
+  it('starts sessions without CLAUDE_CONFIG_DIR at all in the Default profile, chosen or by default', async () => {
+    // Set, even to Default's own folder, it would make Claude look for its login elsewhere (~/.claude.json).
+    const ctx = await withProfiles()
+    await ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')
+    await ctx.orch.openTarget(ctx.target)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newSession'))).toEqual([
+      expect.not.stringContaining('env'),
+      expect.not.stringContaining('env'),
+    ])
+    expect([...ctx.tmux.sessions.values()].map((s) => s.env)).toEqual([undefined, undefined])
+
+    const chosen = await withProfiles({ themeProfile: 'p-work', taskProfile: 'default' })
+    await chosen.orch.openTarget(chosen.target)
+    expect(envOf(chosen, SESSION)).toBeUndefined()
+  })
+
+  it('starts a profile no longer there (a hand edit) in Default', async () => {
+    const ctx = await withProfiles({ themeProfile: 'gone' })
+    await ctx.orch.openTarget(ctx.target)
+    expect(ctx.tmux.sessions.has(SESSION)).toBe(true)
+    expect(envOf(ctx, SESSION)).toBeUndefined()
+  })
+
+  it("gives Claude started again, a shell tab, the run tab and Claude asked to resolve the task's profile", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const env = { CLAUDE_CONFIG_DIR: '/home/me/.claude-work' }
+    await ctx.orch.openTarget(ctx.target)
+    await ctx.orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION, 'shell')).toEqual(env)
+    await ctx.orch.closeTab(ctx.target, 0) // Claude's
+    await ctx.orch.restartClaude(ctx.target)
+    expect(envOf(ctx, SESSION, 'claude')).toEqual(env)
+    await ctx.orch.closeTab(ctx.target, 1) // Claude's again
+    await ctx.orch.askClaudeToResolve(ctx.target, 'rebase', ['a.ts'])
+    expect(envOf(ctx, SESSION, 'claude')).toEqual(env)
+    await ctx.orch.setRunCommand(ctx.themeId, ctx.repoId, 'npm run dev')
+    await ctx.orch.startRun(ctx.target)
+    expect(envOf(ctx, SESSION, 'run')).toEqual(env)
+  })
+
+  it("refuses to start anything when the profile's folder is gone, never falling back to another account", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work', missing: ['/home/me/.claude-work'] })
+    const refusal = 'Claude account “Work”: folder not found (/home/me/.claude-work)'
+    await expect(ctx.orch.openTarget(ctx.target)).rejects.toThrow(refusal)
+    await expect(ctx.orch.createTask(ctx.themeId, ctx.repoId, 'new one')).rejects.toThrow(refusal)
+    expect(ctx.tmux.sessions.size).toBe(0)
+    expect(ctx.tmux.calls.filter((c) => c.startsWith('newSession'))).toEqual([])
+    expect(ctx.pty.attached).toBeNull()
+    expect(ctx.git.calls.filter((c) => c.startsWith('addWorktree'))).toEqual([])
+    expect((await ctx.orch.getState()).themes[0].items[0]).toMatchObject({ tasks: [fixTask] }) // no new task
   })
 })
 

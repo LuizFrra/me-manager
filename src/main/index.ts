@@ -36,7 +36,7 @@ import { BudgetAlertStore } from './store/budgetAlerts'
 import { SettingsService, SettingsStore } from './store/settings'
 import { UiStateStore } from './store/uiState'
 import { TmuxService } from './tmux/tmuxService'
-import { UsageService } from './usage/usageService'
+import { claudeConfigDir, UsageService } from './usage/usageService'
 import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
@@ -154,6 +154,7 @@ async function bootstrap(): Promise<void> {
     promptFiles,
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
+    defaultClaudeDir: claudeConfigDir(),
   })
   await orchestrator.init()
   started = orchestrator

@@ -574,6 +574,7 @@ export function makeDeps(overrides: Partial<OrchestratorDeps> = {}): {
     promptFiles,
     worktreesRoot: '/wt',
     pathExists: () => true,
+    defaultClaudeDir: '/home/me/.claude',
     ...overrides,
   }
   return { deps, store, git, gh, tmux, pty, files, settings, ui, launcher, usage, promptFiles }

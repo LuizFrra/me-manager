@@ -17,6 +17,7 @@ import type {
   ChangeList,
   ChangeScope,
   ClaudeActivity,
+  ClaudeProfile,
   CommitResult,
   GitTools,
   FileContent,
@@ -48,6 +49,7 @@ import type {
   UsageTargetReport,
 } from '../../shared/types'
 import { budgetStatus, effectiveTaskBudget } from '../../shared/budget'
+import { allProfiles, DEFAULT_PROFILE_ID, effectiveProfileId } from '../../shared/profiles'
 import { builtInClaudeFlags, effectiveClaudeFlags } from '../../shared/settings'
 import { emptyUsageSummary } from '../../shared/usage'
 import { normalizeUiState } from '../../shared/uiState'
@@ -437,6 +439,35 @@ export class Orchestrator implements AppService {
   }
 
   /**
+   * The Claude profile the target's sessions start in: the task's, else its theme's, else Default (see
+   * effectiveProfileId; an id no profile has gives Default). Read at each start, like claudeArgs. For a repo
+   * without `taskId` (a task about to be created), its theme's.
+   */
+  private profileFor(target: Target): ClaudeProfile {
+    const theme = m.getTheme(this.state, target.themeId)
+    const task = target.taskId ? m.getTask(this.state, target.themeId, target.itemId, target.taskId) : undefined
+    const profiles = allProfiles(this.deps.settings.get(), this.deps.defaultClaudeDir)
+    const { id } = effectiveProfileId(profiles, theme, task)
+    return profiles.find((p) => p.id === id)!
+  }
+
+  /**
+   * The environment for a new session or window of the target (see profileFor): CLAUDE_CONFIG_DIR for a profile
+   * the user added, nothing for Default. Default's folder is never set, not even as it is: without the variable,
+   * Claude Code keeps its login in ~/.claude.json and the default macOS Keychain item, and with it set, even to
+   * ~/.claude, it looks elsewhere and the user would appear logged out. Throws when the profile's folder is gone,
+   * rather than starting Claude in another account.
+   */
+  private sessionEnv(target: Target): Record<string, string> {
+    const profile = this.profileFor(target)
+    if (profile.id === DEFAULT_PROFILE_ID) return {}
+    if (!this.deps.pathExists(profile.configDir)) {
+      throw new Error(`Claude account “${profile.name}”: folder not found (${profile.configDir})`)
+    }
+    return { CLAUDE_CONFIG_DIR: profile.configDir }
+  }
+
+  /**
    * Runs `start` (a tmux call starting `claude`) with `prompt` in a private file (see claudePromptCommand), or
    * without a file when there is no prompt. The file is removed once the command had time to read it, or right
    * away when `start` fails.
@@ -785,6 +816,7 @@ export class Orchestrator implements AppService {
       const branch = branchName(theme.slug, slug)
       const worktreePath = taskWorktreePath(theme.slug, repo.slug, slug, this.deps.worktreesRoot)
       const session = sessionName(theme.slug, repo.slug, slug)
+      const env = this.sessionEnv({ themeId, itemId: repoId }) // before any git work it would have to undo
 
       const baseRef = await this.chooseBaseRef(repo.path, chosenBase)
       await git.addWorktree(repo.path, worktreePath, branch, baseRef)
@@ -794,7 +826,7 @@ export class Orchestrator implements AppService {
         if (await tmux.hasSession(session)) await tmux.killSession(session)
         const args = this.claudeArgs(`${theme.slug}/${repo.slug}/${slug}`)
         await this.withPromptFile(prompt, (file) =>
-          tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file)),
+          tmux.newSession(session, worktreePath, CLAUDE_WINDOW, claudePromptCommand(args, file), env),
         )
         const task: Task = {
           id: randomUUID(),
@@ -949,8 +981,10 @@ export class Orchestrator implements AppService {
     if (!this.deps.pathExists(cwd)) throw new Error(`Folder not found: ${cwd}`)
     let started = false
     if (!(await this.deps.tmux.hasSession(session))) {
+      const env = this.sessionEnv(target)
       try {
-        await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+        const command = claudeContinueCommand(this.claudeArgs(label))
+        await this.deps.tmux.newSession(session, cwd, CLAUDE_WINDOW, command, env)
         started = true
       } catch (err) {
         // Another open of the same target (a double click) started it meanwhile, and tmux refused this one.
@@ -1003,7 +1037,7 @@ export class Orchestrator implements AppService {
     const names = new Set((await this.deps.tmux.listWindows(session)).map((t) => t.name))
     let name = 'shell'
     for (let n = 2; names.has(name); n++) name = `shell ${n}`
-    await this.deps.tmux.newWindow(session, cwd, name)
+    await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: this.sessionEnv(target) })
     return this.deps.tmux.listWindows(session)
   }
 
@@ -1025,7 +1059,10 @@ export class Orchestrator implements AppService {
     if (!(await this.deps.tmux.hasSession(session))) return this.openTarget(target)
     const existing = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
     if (existing) await this.deps.tmux.selectWindow(session, existing.index)
-    else await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(this.claudeArgs(label)))
+    else {
+      const command = claudeContinueCommand(this.claudeArgs(label))
+      await this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, command, { env: this.sessionEnv(target) })
+    }
     return this.deps.tmux.listWindows(session)
   }
 
@@ -1063,8 +1100,9 @@ export class Orchestrator implements AppService {
     )
   }
 
-  private newRunWindow(session: string, cwd: string, command: string): Promise<void> {
-    return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true })
+  private newRunWindow(target: Target, session: string, cwd: string, command: string): Promise<void> {
+    const env = this.sessionEnv(target)
+    return this.deps.tmux.newWindow(session, cwd, RUN_WINDOW, runWindowCommand(command), { remainOnExit: true, env })
   }
 
   /** Shows the run tab when there is one, running or stopped (Restart runs it again); otherwise opens one. */
@@ -1072,7 +1110,7 @@ export class Orchestrator implements AppService {
     return this.withRunCommand(target, async ({ session, cwd, command, tabs }) => {
       const run = tabs.find((t) => t.name === RUN_WINDOW)
       if (run) await this.deps.tmux.selectWindow(session, run.index)
-      else await this.newRunWindow(session, cwd, command)
+      else await this.newRunWindow(target, session, cwd, command)
     })
   }
 
@@ -1091,7 +1129,7 @@ export class Orchestrator implements AppService {
         // A run tab without remain-on-exit (made outside the app) closes when its command exits.
         run = (await tmux.listWindows(session)).find((t) => t.name === RUN_WINDOW)
       }
-      if (!run) return this.newRunWindow(session, cwd, command)
+      if (!run) return this.newRunWindow(target, session, cwd, command)
       await tmux.respawnWindow(session, RUN_WINDOW, cwd, runWindowCommand(command))
       await tmux.selectWindow(session, run.index)
     })
@@ -1250,8 +1288,9 @@ export class Orchestrator implements AppService {
     } else {
       // Claude's window was closed: start it again, continuing its conversation, with the request as the prompt.
       const args = this.claudeArgs(label)
+      const env = this.sessionEnv(target)
       await this.withPromptFile(text, (file) =>
-        this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file)),
+        this.deps.tmux.newWindow(session, cwd, CLAUDE_WINDOW, claudeContinueCommand(args, file), { env }),
       )
     }
     return this.deps.tmux.listWindows(session)
