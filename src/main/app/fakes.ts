@@ -217,19 +217,28 @@ export class FakeGh implements GhApi {
 }
 
 /**
- * A FakeTmux window. `remainOnExit` and `dead` are only there when set, so tests can compare windows as
+ * A FakeTmux window. `remainOnExit`, `env` and `dead` are only there when set, so tests can compare windows as
  * `{ name, command }`.
  */
 export interface FakeWindow {
   name: string
   command?: string
   remainOnExit?: true
+  /** The window's own environment (NewWindowOptions.env), when it has one. */
+  env?: Record<string, string>
   /** Its command exited and remain-on-exit kept it: listWindows reports it `dead`. */
   dead?: true
 }
 
+/** ` env A=1 B=2` for a non-empty environment, '' otherwise: how FakeTmux.calls show one. */
+function envNote(env: Record<string, string> = {}): string {
+  const vars = Object.entries(env).map(([k, v]) => `${k}=${v}`)
+  return vars.length > 0 ? ` env ${vars.join(' ')}` : ''
+}
+
 export class FakeTmux implements TmuxApi {
-  sessions = new Map<string, { cwd: string; windows: FakeWindow[]; active: number }>()
+  /** `env` is the session's environment (newSession's), only there when it has one. */
+  sessions = new Map<string, { cwd: string; windows: FakeWindow[]; active: number; env?: Record<string, string> }>()
   calls: string[] = []
   failNewSession = false
   async hasSession(name: string): Promise<boolean> {
@@ -238,11 +247,18 @@ export class FakeTmux implements TmuxApi {
   async listSessions(): Promise<string[]> {
     return [...this.sessions.keys()]
   }
-  async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
-    this.calls.push(`newSession ${name} ${command}`)
+  async newSession(
+    name: string,
+    cwd: string,
+    windowName: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void> {
+    this.calls.push(`newSession ${name} ${command}${envNote(env)}`)
     if (this.failNewSession) throw new Error('tmux failed')
     if (this.sessions.has(name)) throw new Error(`duplicate session: ${name}`) // as tmux refuses it
-    this.sessions.set(name, { cwd, windows: [{ name: windowName, command }], active: 0 })
+    const own = env && Object.keys(env).length > 0 ? { env: { ...env } } : {}
+    this.sessions.set(name, { cwd, windows: [{ name: windowName, command }], active: 0, ...own })
   }
   async killSession(name: string): Promise<void> {
     this.calls.push(`killSession ${name}`)
@@ -269,10 +285,15 @@ export class FakeTmux implements TmuxApi {
     options: NewWindowOptions = {},
   ): Promise<void> {
     const s = this.sessions.get(session)!
+    const env = envNote(options.env)
+    const own = env ? { env: { ...options.env } } : {}
     if (options.remainOnExit) {
-      this.calls.push(`newWindow ${session} ${windowName} [remain-on-exit] in ${cwd}: ${command}`)
-      s.windows.push({ name: windowName, command, remainOnExit: true })
-    } else s.windows.push({ name: windowName, command })
+      this.calls.push(`newWindow ${session} ${windowName} [remain-on-exit] in ${cwd}: ${command}${env}`)
+      s.windows.push({ name: windowName, command, remainOnExit: true, ...own })
+    } else {
+      if (env) this.calls.push(`newWindow ${session} ${windowName} in ${cwd}: ${command}${env}`)
+      s.windows.push({ name: windowName, command, ...own })
+    }
     s.active = s.windows.length - 1
   }
   /** The window named `windowName` exactly, like a `=session:=name` target; throws like tmux when there is none. */

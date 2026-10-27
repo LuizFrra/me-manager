@@ -472,6 +472,40 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await expect(svc.listWindowActivity(session)).resolves.toEqual([])
   })
 
+  it('starts sessions and windows with the given environment, taken literally', async () => {
+    const session = 'mmt_env_x_y'
+    const show = `printf '[%s] [%s]\\n' "$CLAUDE_CONFIG_DIR" "$MM_HASH"; exec cat`
+    // `#` and `#{}` are no tmux formats in -e values: they reach the process as typed.
+    const env = { CLAUDE_CONFIG_DIR: '/x y/z', MM_HASH: 'a ## #{session_name} #S' }
+    await svc.newSession(session, cwd, 'claude', show, env)
+    const shown = (name: string, text: string): Promise<string | null> =>
+      until(
+        () => tailOf(session, name),
+        (t) => t?.includes(text) ?? false,
+      )
+    expect(await shown('claude', '[/x y/z]')).toContain('[/x y/z] [a ## #{session_name} #S]')
+    // A window of its own environment, over the session's; one without any gets the session's.
+    await svc.newWindow(session, cwd, 'other', show, { env: { CLAUDE_CONFIG_DIR: '/other' } })
+    expect(await shown('other', '[/other]')).toContain('[/other] [a ## #{session_name} #S]')
+    await svc.newWindow(session, cwd, 'run', show, { env: { CLAUDE_CONFIG_DIR: '/run' }, remainOnExit: true })
+    expect(await shown('run', '[/run]')).toContain('[/run]')
+    await svc.newWindow(session, cwd, 'plain', show)
+    expect(await shown('plain', '[/x y/z]')).toContain('[/x y/z]')
+    await svc.killSession(session)
+  })
+
+  it('refuses an environment variable name that is not one', async () => {
+    for (const key of ['A=B', 'lower', '1ST', '', 'A B']) {
+      await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { [key]: 'x' })).rejects.toThrow(
+        /environment variable/i,
+      )
+      await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { [key]: 'x' } })).rejects.toThrow(
+        /environment variable/i,
+      )
+    }
+    await expect(svc.hasSession('mmt_envbad_x_y')).resolves.toBe(false)
+  })
+
   it('kills sessions and ignores missing ones', async () => {
     await svc.killSession('mmt_a_b_c')
     await expect(svc.hasSession('mmt_a_b_c')).resolves.toBe(false)

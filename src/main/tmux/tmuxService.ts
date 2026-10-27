@@ -22,6 +22,19 @@ export function escapeFormat(value: string): string {
  */
 export const shellCommandArg = (command: string): string => (command.endsWith(';') ? `${command} ` : command)
 
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
+
+/**
+ * `-e NAME=value` per variable. The value is one execFile argument, never seen by a shell, and tmux expands no
+ * formats in it, so it needs no escaping. A name that isn't a shell variable name is refused.
+ */
+function envArgs(env: Record<string, string> = {}): string[] {
+  return Object.entries(env).flatMap(([name, value]) => {
+    if (!ENV_NAME.test(name)) throw new Error(`Invalid environment variable name: ${JSON.stringify(name)}`)
+    return ['-e', `${name}=${value}`]
+  })
+}
+
 const isNoServer = (err: unknown): boolean =>
   err instanceof CommandError && /no server running|error connecting/i.test(err.stderr)
 
@@ -217,7 +230,13 @@ export class TmuxService implements TmuxApi {
     await this.tmux(['send-keys', '-t', target, 'Enter'])
   }
 
-  async newSession(name: string, cwd: string, windowName: string, command: string): Promise<void> {
+  async newSession(
+    name: string,
+    cwd: string,
+    windowName: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void> {
     await this.tmux([
       'new-session',
       '-d',
@@ -227,6 +246,7 @@ export class TmuxService implements TmuxApi {
       escapeFormat(cwd),
       '-n',
       windowName,
+      ...envArgs(env),
       shellCommandArg(command),
     ])
   }
@@ -277,6 +297,7 @@ export class TmuxService implements TmuxApi {
       escapeFormat(cwd),
       '-n',
       windowName,
+      ...envArgs(options.env),
       ...(command ? [shellCommandArg(command)] : []),
       // In the same tmux call, so it is set before a command that exits at once is reaped: tmux runs a call's
       // commands in one go. The new window is the session's current one (`=session:`), as it was not made with -d.

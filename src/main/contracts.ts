@@ -104,8 +104,18 @@ export interface TmuxApi {
   hasSession(name: string): Promise<boolean>
   /** Session names on our socket; [] when the tmux server is not running. */
   listSessions(): Promise<string[]>
-  /** Detached session whose first window runs `command` (a shell string). */
-  newSession(name: string, cwd: string, windowName: string, command: string): Promise<void>
+  /**
+   * Detached session whose first window runs `command` (a shell string). `env` is the session's environment (tmux
+   * `-e`): its windows' processes get it, unless their own NewWindowOptions.env sets a variable again. Names must be
+   * shell variable names (A-Z, 0-9, _); values are passed as they are.
+   */
+  newSession(
+    name: string,
+    cwd: string,
+    windowName: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void>
   /** No-op if the session does not exist. */
   killSession(name: string): Promise<void>
   /** The session's windows; `dead` is set for one whose active pane has exited (see NewWindowOptions). */
@@ -174,6 +184,8 @@ export interface NewWindowOptions {
    * TabInfo is then `dead` until respawnWindow runs a command in it again.
    */
   remainOnExit?: boolean
+  /** Environment for the window's process only, over the session's (see TmuxApi.newSession for the rules). */
+  env?: Record<string, string>
 }
 
 /** A window as listWindowActivity reports it: a tab, with what getDevUrls needs too. */
