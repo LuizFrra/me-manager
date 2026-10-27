@@ -235,7 +235,7 @@ describe('createMockApi', () => {
     expect(taskOf(await api.setTaskProfile(themeId, repoId, taskId, null))).not.toHaveProperty('profileId')
   })
 
-  it('adds, edits and removes Claude profiles like main', async () => {
+  it('adds, edits, removes and logs in to Claude profiles like main', async () => {
     const api = createMockApi()
     expect(await api.listProfiles()).toEqual([
       {
@@ -269,8 +269,14 @@ describe('createMockApi', () => {
     await api.setThemeProfile(themeId, workId)
     await expect(api.removeProfile(workId)).rejects.toThrow('Used by Client X')
     await expect(api.removeProfile('default')).rejects.toThrow("Default can't be removed")
+    const target = { themeId, itemId: (await api.addFolder(themeId, '/docs')).themes[0].items[0].id }
+    expect((await api.loginProfile(workId, target)).map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['login', true],
+    ])
     await api.setThemeProfile(themeId, null)
     expect((await api.removeProfile(workId)).map((p) => p.id)).toEqual(['default'])
+    await expect(api.loginProfile(workId, target)).rejects.toThrow('Claude account not found')
   })
 
   it("runs a repo's command in a run tab like main, with a demo URL while it runs", async () => {

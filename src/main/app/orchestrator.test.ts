@@ -13,6 +13,7 @@ import {
   claudeCommand,
   claudeContinueCommand,
   claudePromptCommand,
+  claudeLoginCommand,
   claudeMessage,
   MAX_RESOLVE_FILES,
   normalizeTaskOptions,
@@ -890,6 +891,7 @@ describe('Orchestrator: archiving tasks', () => {
       await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(refusal)
       await expect(orch.startRun(target)).rejects.toThrow(refusal)
       await expect(orch.restartRun(target)).rejects.toThrow(refusal)
+      await expect(orch.loginProfile('default', target)).rejects.toThrow(refusal)
       expect(tmux.sessions.get(SESSION)!.windows.map((w) => w.name)).toEqual(['shell'])
       release()
       await closing
@@ -1532,6 +1534,79 @@ describe('Orchestrator: Claude profiles', () => {
     const after = new Orchestrator(ctx.deps)
     await after.init()
     await expect(after.removeProfile('p-home')).resolves.toHaveLength(2)
+  })
+
+  it("opens a login tab running claude in the profile's folder, for that tab only", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.openTarget(ctx.target)
+    const tabs = await ctx.orch.loginProfile('p-home', ctx.target)
+    expect(tabs.map((t) => [t.name, t.active])).toEqual([
+      ['claude', false],
+      ['login', true],
+    ])
+    // No extra flags, not even the built-in ones.
+    await ctx.settings.update({ remoteControl: true, skipPermissions: true, claudeArgs: ['--model', 'x'] })
+    await ctx.orch.loginProfile('p-home', ctx.target)
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} login in ${fixTask.worktreePath}: claude window env CLAUDE_CONFIG_DIR=/home/me/.claude-home`,
+    )
+    expect(envOf(ctx, SESSION, 'login')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    // The session keeps the target's profile, and so do the tabs opened next.
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    await ctx.orch.newTab(ctx.target)
+    expect(envOf(ctx, SESSION, 'shell')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+  })
+
+  it("starts the target's session first, in its own profile, when it isn't running", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    const tabs = await ctx.orch.loginProfile('p-home', ctx.target)
+    expect(tabs.map((t) => t.name)).toEqual(['claude', 'login'])
+    expect(envOf(ctx, SESSION)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    expect(envOf(ctx, SESSION, 'login')).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-home' })
+    expect(ctx.orch.currentTarget()).toEqual(ctx.target)
+  })
+
+  it("logs in to Default without the session's CLAUDE_CONFIG_DIR, or with the one the app was started with", async () => {
+    const ctx = await withProfiles({ themeProfile: 'p-work' })
+    await ctx.orch.loginProfile('default', ctx.target)
+    expect(ctx.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} login in ${fixTask.worktreePath}: ${claudeLoginCommand(true)}`,
+    )
+
+    const inherited = await withProfiles({ themeProfile: 'p-work' })
+    inherited.deps.inheritedClaudeDir = '/srv/claude'
+    await inherited.orch.loginProfile('default', inherited.target)
+    expect(inherited.tmux.calls.at(-1)).toBe(
+      `newWindow ${SESSION} login in ${fixTask.worktreePath}: claude window env CLAUDE_CONFIG_DIR=/srv/claude`,
+    )
+  })
+
+  it('runs claude without CLAUDE_CONFIG_DIR in a Default login tab, whatever the shell has', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mm-login-'))
+    try {
+      writeFileSync(join(dir, 'claude'), '#!/bin/sh\nprintf "[%s]" "${CLAUDE_CONFIG_DIR-unset}"\n', { mode: 0o755 })
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, CLAUDE_CONFIG_DIR: '/home/me/.claude-work' }
+      const out = (command: string): string => execFileSync('sh', ['-c', command], { encoding: 'utf8', env })
+      expect(out(claudeLoginCommand(true))).toBe('[unset]')
+      expect(out(claudeLoginCommand(false))).toBe('[/home/me/.claude-work]')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a login tab in a profile whose folder is gone, one that is not there, and an archived task', async () => {
+    const ctx = await withProfiles({ missing: ['/home/me/.claude-home'] })
+    await expect(ctx.orch.loginProfile('p-home', ctx.target)).rejects.toThrow(
+      'Claude account “Home”: folder not found (/home/me/.claude-home)',
+    )
+    await expect(ctx.orch.loginProfile('p-gone', ctx.target)).rejects.toThrow('Claude account not found')
+    expect(ctx.tmux.calls).toEqual([])
+    const when = '2026-02-01T00:00:00.000Z'
+    await ctx.store.save(m.archiveTask(await ctx.store.load(), ctx.themeId, ctx.repoId, fixTask.id, when))
+    const orch = new Orchestrator(ctx.deps)
+    await orch.init()
+    await expect(orch.loginProfile('p-work', ctx.target)).rejects.toThrow(/archived/)
+    expect(ctx.tmux.calls).toEqual([])
   })
 
   it('starts and lists profiles with a theme or task on a profile that is gone', async () => {

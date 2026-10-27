@@ -383,6 +383,14 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       settings = { ...settings, profiles: settings.profiles.filter((p) => p.id !== profileId) }
       return profiles()
     },
+    // A new active `login` tab, like main.
+    loginProfile: async (profileId) => {
+      if (!profiles().some((p) => p.id === profileId)) throw new Error('Claude account not found')
+      const index = Math.max(-1, ...tabs.map((t) => t.index)) + 1
+      tabs.push({ index, name: 'login', active: true })
+      activate(index)
+      return clone(tabs)
+    },
     checkTaskRemoval: async () => ({ uncommittedFiles: [], unpushedCommits: [] }),
     removeTask: async (themeId, repoId, taskId) => ({
       state: await edit(themeId, (t) => {

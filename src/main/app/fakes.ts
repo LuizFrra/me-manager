@@ -226,7 +226,7 @@ export interface FakeWindow {
   name: string
   command?: string
   remainOnExit?: true
-  /** The environment its process got from the session (see NewWindowOptions.env), when it got any. */
+  /** The environment its process got from the session and its own (see NewWindowOptions), when it got any. */
   env?: Record<string, string>
   /** Its command exited and remain-on-exit kept it: listWindows reports it `dead`. */
   dead?: true
@@ -237,9 +237,9 @@ const withEnv = (env: Record<string, string>): { env?: Record<string, string> } 
   Object.keys(env).length > 0 ? { env } : {}
 
 /** ` env A=1 -B` (B removed) for a non-empty environment, '' otherwise: how FakeTmux.calls show one. */
-function envNote(env: Record<string, string | null> = {}): string {
+function envNote(env: Record<string, string | null> = {}, label = 'env'): string {
   const vars = Object.entries(env).map(([k, v]) => (v === null ? `-${k}` : `${k}=${v}`))
-  return vars.length > 0 ? ` env ${vars.join(' ')}` : ''
+  return vars.length > 0 ? ` ${label} ${vars.join(' ')}` : ''
 }
 
 export class FakeTmux implements TmuxApi {
@@ -297,13 +297,14 @@ export class FakeTmux implements TmuxApi {
   ): Promise<void> {
     const s = this.sessions.get(session)!
     const remain = options.remainOnExit ? ' [remain-on-exit]' : ''
-    this.calls.push(`newWindow ${session} ${windowName}${remain} in ${cwd}: ${command}${envNote(options.env)}`)
+    const notes = `${envNote(options.env)}${envNote(options.windowEnv, 'window env')}`
+    this.calls.push(`newWindow ${session} ${windowName}${remain} in ${cwd}: ${command}${notes}`)
     this.setSessionEnv(session, options.env)
     s.windows.push({
       name: windowName,
       command,
       ...(options.remainOnExit ? { remainOnExit: true as const } : {}),
-      ...withEnv({ ...s.env }),
+      ...withEnv({ ...s.env, ...options.windowEnv }),
     })
     s.active = s.windows.length - 1
   }

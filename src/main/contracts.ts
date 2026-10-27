@@ -197,6 +197,11 @@ export interface NewWindowOptions {
    * running keep theirs. Same rules as TmuxApi.newSession's `env`.
    */
   env?: Record<string, string | null>
+  /**
+   * Variables for this window's process only (tmux `new-window -e`), over the session's, which stay as they are.
+   * They can only be set, not removed. Same rules as TmuxApi.newSession's `env`.
+   */
+  windowEnv?: Record<string, string>
 }
 
 /** A window as listWindowActivity reports it: a tab, with what getDevUrls needs too. */
@@ -347,5 +352,10 @@ export interface OrchestratorDeps {
   pathExists: (path: string) => boolean
   /** The Default Claude profile's folder: $CLAUDE_CONFIG_DIR or ~/.claude (see shared/profiles.ts). */
   defaultClaudeDir: string
+  /**
+   * $CLAUDE_CONFIG_DIR as the app was started with it, absent when it had none: the tmux server got it too, so
+   * it is what Default's sessions run with (see Orchestrator.loginProfile).
+   */
+  inheritedClaudeDir?: string
   profileFolders: ProfileFoldersApi
 }

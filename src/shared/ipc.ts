@@ -36,6 +36,7 @@ export const INVOKE_METHODS = [
   'addProfile',
   'updateProfile',
   'removeProfile',
+  'loginProfile',
   'checkTaskRemoval',
   'removeTask',
   'archiveTask',

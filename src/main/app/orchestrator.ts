@@ -105,9 +105,18 @@ export const claudePromptCommand = (args: readonly string[], promptFile: string 
 export const claudeContinueCommand = (args: readonly string[] = [], promptFile?: string): string =>
   `${claudePromptCommand([...args, '--continue'], promptFile)} || ${claudePromptCommand(args, promptFile)}`
 
+/**
+ * The command of a login tab (see loginProfile): `claude` without any argument, the user's or built-in. With
+ * `unsetConfigDir`, `env -u CLAUDE_CONFIG_DIR` runs it, so that it gets no CLAUDE_CONFIG_DIR at all, not even the
+ * session's: a window's own environment can set a variable, not remove one.
+ */
+export const claudeLoginCommand = (unsetConfigDir: boolean): string =>
+  unsetConfigDir ? ['env', '-u', 'CLAUDE_CONFIG_DIR', 'claude'].map(shellQuote).join(' ') : claudeCommand()
+
 export const CLAUDE_CMD = claudeCommand()
 export const CLAUDE_CONTINUE_CMD = claudeContinueCommand()
 const CLAUDE_WINDOW = 'claude'
+const LOGIN_WINDOW = 'login'
 /** How long createTask waits for `git fetch` before branching from the last fetched refs. */
 export const FETCH_TIMEOUT_MS = 20_000
 
@@ -479,11 +488,15 @@ export class Orchestrator implements AppService {
    */
   private sessionEnv(target: Target): Record<string, string> {
     const profile = this.profileFor(target)
-    if (profile.id === DEFAULT_PROFILE_ID) return {}
+    return profile.id === DEFAULT_PROFILE_ID ? {} : { CLAUDE_CONFIG_DIR: this.profileFolder(profile) }
+  }
+
+  /** The folder of a profile the user added, refusing one that is gone. */
+  private profileFolder(profile: ClaudeProfile): string {
     if (!this.deps.pathExists(profile.configDir)) {
       throw new Error(`Claude account “${profile.name}”: folder not found (${profile.configDir})`)
     }
-    return { CLAUDE_CONFIG_DIR: profile.configDir }
+    return profile.configDir
   }
 
   /**
@@ -1188,6 +1201,26 @@ export class Orchestrator implements AppService {
     let name = 'shell'
     for (let n = 2; names.has(name); n++) name = `shell ${n}`
     await this.deps.tmux.newWindow(session, cwd, name, undefined, { env: this.windowEnv(target) })
+    return this.deps.tmux.listWindows(session)
+  }
+
+  /**
+   * The login tab's command and its own environment, which leaves the session's alone (it is the target's
+   * profile's): CLAUDE_CONFIG_DIR for a profile the user added; for Default, what Default's sessions get, which is
+   * the variable as the app was started with it (the tmux server has it too), else none (see sessionEnv).
+   */
+  private loginWindow(profile: ClaudeProfile): { command: string; windowEnv: Record<string, string> } {
+    const dir = profile.id === DEFAULT_PROFILE_ID ? this.deps.inheritedClaudeDir : this.profileFolder(profile)
+    if (dir === undefined) return { command: claudeLoginCommand(true), windowEnv: {} }
+    return { command: claudeLoginCommand(false), windowEnv: { CLAUDE_CONFIG_DIR: dir } }
+  }
+
+  async loginProfile(profileId: string, target: Target): Promise<TabInfo[]> {
+    const { session, cwd } = this.resolveOpenable(target)
+    const { command, windowEnv } = this.loginWindow(this.getProfile(profileId))
+    if (!(await this.deps.tmux.hasSession(session))) await this.openTarget(target)
+    this.resolveOpenable(target) // archived or removed meanwhile, or on its way
+    await this.deps.tmux.newWindow(session, cwd, LOGIN_WINDOW, command, { windowEnv })
     return this.deps.tmux.listWindows(session)
   }
 

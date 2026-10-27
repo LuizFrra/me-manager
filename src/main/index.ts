@@ -156,6 +156,7 @@ async function bootstrap(): Promise<void> {
     worktreesRoot: worktreesRoot(),
     pathExists: existsSync,
     defaultClaudeDir: claudeConfigDir(),
+    inheritedClaudeDir: process.env.CLAUDE_CONFIG_DIR || undefined,
     profileFolders: new ProfileFolders(),
   })
   await orchestrator.init()

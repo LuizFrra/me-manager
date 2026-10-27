@@ -326,6 +326,7 @@ export class TmuxService implements TmuxApi {
       escapeFormat(cwd),
       '-n',
       windowName,
+      ...envArgs(options.windowEnv),
       ...(command ? [shellCommandArg(command)] : []),
       // In the same tmux call, so it is set before a command that exits at once is reaped: tmux runs a call's
       // commands in one go. The new window is the session's current one (`=session:`), as it was not made with -d.

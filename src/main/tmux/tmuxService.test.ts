@@ -531,6 +531,21 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
     await svc.killSession(session)
   })
 
+  it("gives one window its own variables, leaving the session's as they are", async () => {
+    const session = 'mmt_winenv_x_y'
+    const show = `printf '[%s]\\n' "\${CLAUDE_CONFIG_DIR-unset}"; exec cat`
+    await svc.newSession(session, cwd, 'claude', show, { CLAUDE_CONFIG_DIR: '/p' })
+    expect(await shownIn(session, 'claude', '[/p]')).toContain('[/p]')
+    await svc.newWindow(session, cwd, 'login', show, { windowEnv: { CLAUDE_CONFIG_DIR: '/q r/#{session_name} #S' } })
+    expect(await shownIn(session, 'login', '[/q r/')).toContain('[/q r/#{session_name} #S]')
+    // The next window gets the session's again.
+    await svc.newWindow(session, cwd, 'next', show)
+    expect(await shownIn(session, 'next', '[/p]')).toContain('[/p]')
+    const own = await run('tmux', ['-L', socket, 'show-environment', '-t', session, 'CLAUDE_CONFIG_DIR'])
+    expect(own).toBe('CLAUDE_CONFIG_DIR=/p\n')
+    await svc.killSession(session)
+  })
+
   it('refuses an environment variable name that is not one, and a value ending in ;', async () => {
     for (const key of ['A=B', 'lower', '1ST', '', 'A B']) {
       await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { [key]: 'x' })).rejects.toThrow(
@@ -542,10 +557,16 @@ describe.skipIf(!hasTmux)('TmuxService', () => {
       await expect(svc.respawnWindow('mmt_envbad_x_y', 'w', cwd, 'sh', { [key]: 'x' })).rejects.toThrow(
         /environment variable/i,
       )
+      await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { windowEnv: { [key]: 'x' } })).rejects.toThrow(
+        /environment variable/i,
+      )
     }
     // tmux would read the ; as the end of its command.
     await expect(svc.newSession('mmt_envbad_x_y', cwd, 'claude', 'sh', { A: '/x;' })).rejects.toThrow(/end in ;/)
     await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { env: { A: '/x;' } })).rejects.toThrow(/end in ;/)
+    await expect(svc.newWindow('mmt_envbad_x_y', cwd, 'w', 'sh', { windowEnv: { A: '/x;' } })).rejects.toThrow(
+      /end in ;/,
+    )
     await expect(svc.hasSession('mmt_envbad_x_y')).resolves.toBe(false)
   })
 

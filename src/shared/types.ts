@@ -536,6 +536,12 @@ export interface MeManagerApi {
    */
   removeProfile(id: string): Promise<ProfileStatus[]>
   /**
+   * Opens a `login` tab in the target's session (started first when it isn't running) that runs `claude` in the
+   * profile's folder, for the user to run /login in. The session's own profile is left as it is. Refused like
+   * openTarget, and for a profile whose folder is gone.
+   */
+  loginProfile(profileId: string, target: Target): Promise<TabInfo[]>
+  /**
    * What removing (or archiving) the task would lose: uncommitted and untracked files in its worktree (none for an
    * archived task, which has no worktree) and commits on its branch that neither its base nor a remote has.
    */
