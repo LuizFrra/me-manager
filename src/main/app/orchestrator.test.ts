@@ -1394,6 +1394,41 @@ describe('Orchestrator: quitting', () => {
     expect(store.saved.at(-1)?.themes[0].name).toBe('Client Y')
   })
 
+  it('counts a clone as busy, and cancels it for quitting, adding nothing', async () => {
+    const { orch, git, store, deps, themeId } = await setup()
+    deps.pathExists = (p) => p !== '/code/web'
+    git.cloneGate = new Promise(() => {}) // a big repository
+    const cloning = orch.cloneRepo(themeId, 'git@github.com:acme/web.git', '/code', 'web')
+    void cloning.catch(() => {})
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch.busy()).toBe(true)
+    let idle = false
+    const waiting = orch.whenIdle(60_000).then(() => (idle = true))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(idle).toBe(false)
+    const saves = store.saved.length
+    orch.cancelClones()
+    await expect(cloning).rejects.toThrow('The app is quitting')
+    await waiting
+    expect(orch.busy()).toBe(false)
+    expect(store.saved.length).toBe(saves)
+  })
+
+  it('waits for a finished clone to be added', async () => {
+    const { orch, git, deps, themeId } = await setup()
+    deps.pathExists = (p) => p !== '/code/web'
+    let release = (): void => {}
+    git.cloneGate = new Promise<void>((r) => (release = r))
+    const cloning = orch.cloneRepo(themeId, 'git@github.com:acme/web.git', '/code', 'web')
+    await new Promise((r) => setTimeout(r, 0))
+    const waiting = orch.whenIdle(60_000)
+    release()
+    await waiting
+    expect(orch.busy()).toBe(false)
+    expect((await orch.getState()).themes[0].items.map((i) => i.path)).toContain('/code/web')
+    await cloning
+  })
+
   it('gives up waiting after the time given', async () => {
     const { orch, store, themeId } = await setup()
     store.save = (): Promise<void> => new Promise(() => {}) // never finishes

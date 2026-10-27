@@ -45,9 +45,10 @@ export interface GitApi {
   /**
    * `git clone -- <url> <dest>`, non-interactive, with the ext and fd transports off, giving up after
    * CLONE_TIMEOUT_MS. The URL is checked with checkCloneUrl. `dest` (absolute) is created here first, so one that
-   * exists is refused; when the clone fails, `dest` (which this call created) is removed again.
+   * exists is refused; when the clone fails, or `signal` cancels it (stopping git), `dest` (which this call
+   * created) is removed again.
    */
-  clone(url: string, dest: string): Promise<void>
+  clone(url: string, dest: string, signal?: AbortSignal): Promise<void>
   /**
    * `git worktree add --no-track -b <branch> <worktreePath> <baseRef>`. Refuses a branch that exists already; when
    * the checkout fails, the branch it made is deleted again.

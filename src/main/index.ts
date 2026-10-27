@@ -198,8 +198,8 @@ app
   })
 
 // Detach only: tmux sessions (and Claude) keep running after the app closes. A change still running (a task being
-// created, archived or removed) is waited for, up to QUIT_WAIT_MS, so it isn't left half done; quitting again
-// doesn't wait.
+// created, archived or removed) is waited for, up to QUIT_WAIT_MS, so it isn't left half done; a clone is cancelled
+// (it may take minutes), and waited for until git has stopped. Quitting again doesn't wait.
 app.on('before-quit', (event) => {
   notificationWatcher?.stop()
   budgetWatcher?.stop()
@@ -207,6 +207,7 @@ app.on('before-quit', (event) => {
   if (quitReady || !started?.busy()) return
   event.preventDefault()
   quitReady = true
+  started.cancelClones()
   void started.whenIdle(QUIT_WAIT_MS).finally(() => app.quit())
 })
 

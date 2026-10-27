@@ -147,6 +147,14 @@ describe('clone', () => {
     return { url: `file://${join(root, 'origin.git')}`, parent }
   }
 
+  it('stops and removes the folder when the clone is cancelled', async () => {
+    const { url, parent } = await origin()
+    const dest = join(parent, 'my-api')
+    const cancelled = AbortSignal.abort(new Error('The app is quitting'))
+    await expect(svc.clone(url, dest, cancelled)).rejects.toThrow('The app is quitting')
+    expect(existsSync(dest)).toBe(false)
+  })
+
   it('clones a file:// repository into a new folder', async () => {
     const { url, parent } = await origin()
     const dest = join(parent, 'my-api')

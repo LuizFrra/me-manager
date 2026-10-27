@@ -116,9 +116,14 @@ export class FakeGit implements GitApi {
   failClone: string | null = null
   /** When set, clone waits for it, so tests can hold a clone in flight. */
   cloneGate: Promise<void> | null = null
-  async clone(url: string, dest: string): Promise<void> {
+  async clone(url: string, dest: string, signal?: AbortSignal): Promise<void> {
     this.calls.push(`clone ${url} ${dest}`)
-    if (this.cloneGate) await this.cloneGate
+    if (this.cloneGate) {
+      const cancelled = new Promise<never>((_, reject) =>
+        signal?.addEventListener('abort', () => reject(signal.reason as Error)),
+      )
+      await Promise.race([this.cloneGate, cancelled])
+    }
     if (this.failClone) throw new Error(this.failClone)
     this.roots.set(dest, dest)
   }
