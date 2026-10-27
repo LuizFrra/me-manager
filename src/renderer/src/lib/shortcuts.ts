@@ -281,6 +281,12 @@ export function rowMoveStep(e: KeyLike): -1 | 0 | 1 {
   return e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
 }
 
+/** The sidebar tree's own keys on a focused row (see Sidebar's navigate), for the help overlay. */
+const SIDEBAR_NAV_HELP: readonly ShortcutHelpEntry[] = [
+  { keys: ['↑ ↓', 'Home End'], description: 'Sidebar: go to the row above or below, the first or the last' },
+  { keys: ['← →'], description: 'Sidebar: collapse or expand the focused row, go up or in' },
+]
+
 /** rowMoveStep's keys, for the help overlay. */
 const rowMoveHelp = (mac: boolean): ShortcutHelpEntry => ({
   keys: [mac ? '⌥⇧↑ ↓' : 'Alt+Shift+↑ ↓'],
@@ -334,7 +340,7 @@ export function shortcutHelp(mac = isMac): ShortcutHelpEntry[] {
     keys: chordsFor(def, mac).map((c) => chordLabel(c, mac)),
     description: def.description,
   }))
-  return [...app, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
+  return [...app, ...SIDEBAR_NAV_HELP, rowMoveHelp(mac), ...selectionHelp(mac), ...REVIEW_HELP]
 }
 
 /** Mod+Enter (Ctrl+Enter on Linux, Cmd+Enter on macOS): submits a multi-line field. */

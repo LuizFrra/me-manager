@@ -89,6 +89,112 @@ describe('Sidebar header and tree', () => {
   })
 })
 
+describe('Sidebar keyboard navigation', () => {
+  const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
+  const navState = appState(theme('Client', [repo('api', [task('fix'), task('docs'), archived]), folder('notes')]))
+
+  /** The Sidebar with App's part played for collapsing: themes, repos and the Archived group. */
+  function Harness(props: { patch?: Partial<SidebarProps> }): React.JSX.Element {
+    const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+    const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<string>>(new Set())
+    const flip = (set: ReadonlySet<string>, id: string): Set<string> => {
+      const next = new Set(set)
+      if (!next.delete(id)) next.add(id)
+      return next
+    }
+    return (
+      <Sidebar
+        {...sidebarProps({ state: navState, ...props.patch })}
+        collapsed={collapsed}
+        onToggleCollapsed={(id) => setCollapsed((c) => flip(c, id))}
+        archivedOpen={archivedOpen}
+        onToggleArchived={(id) => setArchivedOpen((o) => flip(o, id))}
+      />
+    )
+  }
+  const labelOf = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: new RegExp(`^(\\S )?${name}( \\(\\d+\\))?$`, 'u') })
+  /** The row labels in the Tab order: one at a time. */
+  const tabStops = (): string[] =>
+    [...document.querySelectorAll<HTMLElement>('.row-label')]
+      .filter((l) => l.tabIndex === 0)
+      .map((l) => l.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+
+  it('keeps one row in the Tab order: the selected one, else the first, then the one last focused', () => {
+    const { unmount } = render(<Harness />)
+    expect(tabStops()).toEqual(['Client'])
+    unmount()
+    render(<Harness patch={{ selected: { themeId: 'Client', itemId: 'api', taskId: 'docs' } }} />)
+    expect(tabStops()).toEqual(['○ docs'])
+    act(() => labelOf('notes').focus())
+    expect(tabStops()).toEqual(['○ notes'])
+  })
+
+  it('moves between the rows with ↑ and ↓, Home and End, and between the filter and the first row', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    act(() => labelOf('Client').focus())
+    await user.keyboard('{ArrowDown}')
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}')
+    expect(labelOf('Archived')).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(labelOf('notes')).toHaveFocus()
+    await user.keyboard('{ArrowDown}') // the last row: stays
+    expect(labelOf('notes')).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(labelOf('Client')).toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expect(screen.getByRole('textbox', { name: 'Filter sidebar' })).toHaveFocus()
+    await user.keyboard('{ArrowDown}')
+    expect(labelOf('Client')).toHaveFocus()
+    expect(tabStops()).toEqual(['Client'])
+  })
+
+  it('collapses and expands with ← and →, or goes to the row above in the tree and the first row inside', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    act(() => labelOf('docs').focus())
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('api')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: '○ fix' })).not.toBeInTheDocument()
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('Client')).toHaveFocus()
+    await user.keyboard('{ArrowRight}') // already expanded: into it
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(labelOf('api')).toHaveAttribute('aria-expanded', 'true')
+    expect(labelOf('api')).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(labelOf('fix')).toHaveFocus()
+    await user.keyboard('{ArrowRight}') // a task: nothing inside
+    expect(labelOf('fix')).toHaveFocus()
+
+    // The Archived group opens and closes the same way, and its tasks lead back to it.
+    act(() => labelOf('Archived').focus())
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+    expect(screen.getByRole('button', { name: 'old' })).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(labelOf('Archived')).toHaveFocus()
+  })
+
+  it('leaves the arrows with modifiers to their own keys, and the row buttons alone', async () => {
+    const onMultiSelect = vi.fn()
+    render(<Harness patch={{ onMultiSelect }} />)
+    act(() => labelOf('fix').focus())
+    fireEvent.keyDown(labelOf('fix'), { key: 'ArrowDown', shiftKey: true }) // extends the selection
+    expect(onMultiSelect).toHaveBeenCalled()
+    fireEvent.keyDown(labelOf('docs'), { key: 'ArrowDown', ctrlKey: true })
+    expect(labelOf('docs')).toHaveFocus()
+    const rename = screen.getByRole('button', { name: 'Rename task docs' })
+    act(() => rename.focus())
+    fireEvent.keyDown(rename, { key: 'ArrowDown' })
+    expect(rename).toHaveFocus()
+  })
+})
+
 describe('Sidebar git badges', () => {
   it('shows ahead, behind and uncommitted badges with tooltips', () => {
     renderSidebar({ gitStatus: { fix: git({ ahead: 3, behind: 1, uncommitted: 2 }) } })
