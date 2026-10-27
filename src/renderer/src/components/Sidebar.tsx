@@ -198,6 +198,7 @@ function ArchivedTasks(props: {
             <button
               className="row-label"
               title={rowTitle(task.name, task.notes)}
+              aria-current={props.selectedTaskId === task.id ? 'true' : undefined}
               onClick={(e) => props.onSelect(task.id, e)}
               {...props.nav(`task:${task.id}`, 4)}
             >
@@ -696,6 +697,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                         <button
                           className="row-label"
                           title={rowTitle(item.name, `${item.path}${missing.has(item.id) ? ' (missing)' : ''}`)}
+                          aria-current={isSelected(item.id) ? 'true' : undefined}
                           onClick={(e) =>
                             clickOther(e, { themeId: theme.id, itemId: item.id }, 'Only tasks can be selected')
                           }
@@ -769,6 +771,7 @@ export function Sidebar({ filterRef, ...p }: SidebarProps): React.JSX.Element {
                                 <button
                                   className="row-label"
                                   title={rowTitle(task.name, task.notes)}
+                                  aria-current={isSelected(item.id, task.id) ? 'true' : undefined}
                                   onClick={(e) => clickTask(e, { themeId: theme.id, itemId: item.id, taskId: task.id })}
                                   {...rowNav(`task:${task.id}`, 3)}
                                 >

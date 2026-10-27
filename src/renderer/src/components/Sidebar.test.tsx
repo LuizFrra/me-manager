@@ -99,6 +99,32 @@ describe('Sidebar header and tree', () => {
     expect(screen.getByTitle('Path missing')).toHaveTextContent('⚠')
   })
 
+  it('tells screen readers which task or folder is open', () => {
+    const archived = { ...task('old'), archivedAt: '2026-02-01T10:00:00.000Z' }
+    const withArchived = appState(
+      theme('Client', [repo('api', [task('fix'), task('docs'), archived]), folder('notes')]),
+    )
+    const current = (): string[] =>
+      [...document.querySelectorAll('[aria-current]')].map((el) => `${el.textContent?.trim()}=${el.ariaCurrent}`)
+    const { rerender } = renderSidebar({ selected: { themeId: 'Client', itemId: 'api', taskId: 'fix' } })
+    expect(current()).toEqual(['○ fix=true'])
+    rerender(<Sidebar {...sidebarProps({ selected: { themeId: 'Client', itemId: 'notes' } })} />)
+    expect(screen.getByRole('button', { name: '○ notes' })).toHaveAttribute('aria-current', 'true')
+    expect(document.querySelectorAll('[aria-current]')).toHaveLength(1)
+    rerender(
+      <Sidebar
+        {...sidebarProps({
+          state: withArchived,
+          archivedOpen: new Set(['api']),
+          selected: { themeId: 'Client', itemId: 'api', taskId: 'old' },
+        })}
+      />,
+    )
+    expect(current()).toEqual(['old=true'])
+    rerender(<Sidebar {...sidebarProps()} />)
+    expect(current()).toEqual([])
+  })
+
   it('says whether each theme and repository is expanded', () => {
     renderSidebar({ collapsed: new Set(['api']) })
     expect(screen.getByRole('button', { name: 'Client' })).toHaveAttribute('aria-expanded', 'true')
