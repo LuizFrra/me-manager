@@ -87,6 +87,17 @@ describe('Orchestrator: themes and items', () => {
     const { orch, themeId } = await setup()
     await expect(orch.addRepo(themeId, '/not/a/repo')).rejects.toThrow(/Not a git repository/)
   })
+  it('refuses a folder path that is not absolute, or not there, before adding it', async () => {
+    const { orch, store, deps, themeId } = await setup()
+    deps.pathExists = (p) => p !== '/docs/gone'
+    const saves = store.saved.length
+    for (const path of ['docs/notes', '', 'C:', '/docs/a\0b', 42 as unknown as string, null as unknown as string]) {
+      await expect(orch.addFolder(themeId, path)).rejects.toThrow('Choose a folder to add')
+    }
+    await expect(orch.addFolder(themeId, '/docs/gone')).rejects.toThrow('Folder not found: /docs/gone')
+    expect(store.saved.length).toBe(saves)
+  })
+
   it('kills the folder session when removing a folder', async () => {
     const { orch, tmux, themeId } = await setup()
     const s = await orch.addFolder(themeId, '/docs/notes')
@@ -277,7 +288,8 @@ describe('Orchestrator: cloneRepo', () => {
   })
 
   it('refuses a name the theme already has before cloning', async () => {
-    const { orch, git, themeId } = await cloneSetup()
+    const { orch, git, existing, themeId } = await cloneSetup()
+    existing.add('/docs/my-api')
     await orch.addFolder(themeId, '/docs/my-api')
     await expect(orch.cloneRepo(themeId, URL, '/code', 'my-api')).rejects.toThrow(/already exists in this theme/)
     expect(git.calls).toEqual([])

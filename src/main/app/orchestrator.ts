@@ -667,7 +667,10 @@ export class Orchestrator implements AppService {
     return next
   }
 
+  /** The path comes from the renderer: it must be an absolute one that exists (it is the session's folder). */
   async addFolder(themeId: string, path: string): Promise<AppState> {
+    if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) throw new Error('Choose a folder to add')
+    if (!this.deps.pathExists(path)) throw new Error(`Folder not found: ${path}`)
     return this.exclusive(async () => this.commit(m.addFolder(this.state, themeId, path)))
   }
 
