@@ -17,7 +17,7 @@ describe('newTaskNameError', () => {
 
   it('needs letters or numbers, which the branch and folder are named after', () => {
     expect(newTaskNameError('!!!', tasks)).toMatch(/letters or numbers/)
-    expect(newTaskNameError('日本語', tasks)).toMatch(/letters or numbers/)
+    expect(newTaskNameError('日本語', tasks)).toBeNull() // any script's letters give a slug
   })
 
   it("refuses another task's name, ignoring case and surrounding spaces, archived ones included", () => {
