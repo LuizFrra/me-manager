@@ -93,7 +93,11 @@ export type ChangeScope = 'base' | 'uncommitted'
 
 /** The branches a new task can start from. */
 export interface BranchList {
-  /** The base a task gets when none is chosen, e.g. "origin/main". Always one of `branches`. */
+  /**
+   * The base to offer first: the repo's default, e.g. "origin/main" (what a task gets when none is chosen), or,
+   * when the repo has none (a detached HEAD and no main or master), the first listed branch, as a task can then
+   * only start from a chosen one. Always one of `branches`.
+   */
   default: string
   /** `default` first, then origin's branches (`origin/…`, without `origin/HEAD`), then local ones. */
   branches: string[]
