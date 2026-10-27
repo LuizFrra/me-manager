@@ -1050,6 +1050,7 @@ export class Orchestrator implements AppService {
   ): Promise<TabInfo[]> {
     return this.exclusive(
       async () => {
+        this.resolveOpenable(target) // not a new run tab in a session about to be killed
         const { session, cwd, item } = this.runTarget(target)
         if (!item.runCommand) throw new Error(`Set a run command for “${item.name}” first`)
         if (!(await this.deps.tmux.hasSession(session))) {
