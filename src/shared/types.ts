@@ -440,7 +440,8 @@ export interface MeManagerApi {
   getSettings(): Promise<SettingsView>
   /**
    * Merges the patch into the settings, normalized (see normalizeSettings), saves and returns the result, with
-   * `effective` as getSettings has it.
+   * `effective` as getSettings has it. The Claude profiles (`profiles`, `defaultProfileBilling`) are left out of the
+   * patch: they change through addProfile, updateProfile and removeProfile.
    */
   updateSettings(patch: Partial<Settings>): Promise<SettingsView>
 

@@ -1701,6 +1701,21 @@ describe('Orchestrator: settings and claude arguments', () => {
     expect(await orch.getSettings()).toEqual(next)
   })
 
+  it('leaves the Claude profiles out of a settings update: they have their own calls', async () => {
+    const { orch, settings } = await setup()
+    await orch.addProfile({ name: 'Work', configDir: '/home/me/.claude-work', billing: 'own' })
+    const before = settings.get()
+    const next = await orch.updateSettings({
+      pollIntervalMs: 2000,
+      profiles: [{ id: 'p-x', name: 'X', configDir: '/x', billing: 'own' }],
+      defaultProfileBilling: 'company',
+    })
+    expect(next).toMatchObject({ pollIntervalMs: 2000, profiles: before.profiles, defaultProfileBilling: 'own' })
+    expect(settings.get()).toMatchObject({ profiles: before.profiles, defaultProfileBilling: 'own' })
+    // Sent back as getSettings had them, they change nothing either.
+    await expect(orch.updateSettings({ ...next, profiles: [] })).resolves.toMatchObject({ profiles: before.profiles })
+  })
+
   it('says which built-in Claude flags apply, after the user arguments', async () => {
     const { orch, settings } = await setup()
     await orch.updateSettings({ remoteControl: true, skipPermissions: true })

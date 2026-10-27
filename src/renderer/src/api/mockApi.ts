@@ -188,8 +188,12 @@ export function createMockApi(overrides: Partial<MeManagerApi> = {}): MeManagerA
       uiState = normalizeUiState(clone(next), state)
     },
     getSettings: async () => clone(settings),
+    // Like main, the Claude profiles are left out: they have their own calls.
     updateSettings: async (patch) => {
-      settings = normalizeSettings({ ...settings, ...patch }, settings)
+      const rest = { ...patch }
+      delete rest.profiles
+      delete rest.defaultProfileBilling
+      settings = normalizeSettings({ ...settings, ...rest }, settings)
       return clone(settings)
     },
     createTheme: async (name) => {

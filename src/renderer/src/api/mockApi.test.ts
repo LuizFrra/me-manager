@@ -263,6 +263,12 @@ describe('createMockApi', () => {
     list = await api.updateProfile(workId, { name: 'Company', billing: 'own' })
     expect(list[1]).toMatchObject({ name: 'Company', billing: 'own', configDir: '/home/demo/.claude-work' })
     expect((await api.updateProfile('default', { billing: 'company' }))[0].billing).toBe('company')
+    // Not through updateSettings, like main.
+    await api.updateSettings({ profiles: [], defaultProfileBilling: 'own' })
+    expect((await api.listProfiles()).map((p) => [p.name, p.billing])).toEqual([
+      ['Default', 'company'],
+      ['Company', 'own'],
+    ])
     await expect(api.updateProfile('default', { name: 'Mine' })).rejects.toThrow("Default can't be renamed")
 
     const themeId = (await api.createTheme('Client X')).themes[0].id

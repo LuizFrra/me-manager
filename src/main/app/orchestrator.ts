@@ -563,10 +563,15 @@ export class Orchestrator implements AppService {
 
   /**
    * Settings have their own file and queue, so this doesn't wait for state mutations. A patch's `effective` (the
-   * renderer may send back what it got) is dropped by normalizeSettings like any unknown key.
+   * renderer may send back what it got) is dropped by normalizeSettings like any unknown key. So are `profiles` and
+   * `defaultProfileBilling`, which change only through addProfile, updateProfile and removeProfile (checked there,
+   * in the state queue): a patch sent back with what getSettings had would otherwise undo a change made since.
    */
   async updateSettings(patch: Partial<Settings>): Promise<SettingsView> {
-    return withEffective(await this.deps.settings.update(patch))
+    const rest: Record<string, unknown> = isRecord(patch) ? { ...patch } : {}
+    delete rest.profiles
+    delete rest.defaultProfileBilling
+    return withEffective(await this.deps.settings.update(rest))
   }
 
   /** What getStatus last returned, to whoever asked, and when (ms): the notification watcher reuses a recent one. */
