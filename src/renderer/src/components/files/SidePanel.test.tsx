@@ -618,6 +618,23 @@ describe('SidePanel', () => {
     expect(listChanges).toHaveBeenCalledTimes(2)
   })
 
+  it('re-reads the file list once when the open file goes missing, not on every poll after', async () => {
+    vi.useFakeTimers()
+    const api = createMockApi({ readFile: async () => ({ kind: 'missing' }) })
+    const listFiles = vi.spyOn(api, 'listFiles')
+    render(<Harness api={api} pollMs={1_000} initial={{ selected: 'gone.ts' }} />)
+    const flush = (ms = 0): Promise<void> =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
+      })
+    await flush()
+    expect(screen.getByText('File no longer exists')).toBeInTheDocument()
+    // The first load, and once more as the file is missing.
+    expect(listFiles).toHaveBeenCalledTimes(2)
+    await flush(4_000)
+    expect(listFiles).toHaveBeenCalledTimes(2)
+  })
+
   it('re-reads everything on ⟳', async () => {
     const user = userEvent.setup()
     const api = createMockApi()

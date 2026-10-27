@@ -149,8 +149,9 @@ export function SidePanel(p: SidePanelProps): React.JSX.Element {
           : oldPath === undefined
             ? await api.fileDiff(target, shownPath)
             : await api.fileDiff(target, shownPath, oldPath)
-      if (!alive()) return
-      if (changed(lastJson.current, 'view', { key: viewKey, value })) setView({ key: viewKey, value })
+      if (!alive() || !changed(lastJson.current, 'view', { key: viewKey, value })) return
+      setView({ key: viewKey, value })
+      // Gone: the tree drops it now, not at the next file-list poll (once, not on every poll while it is shown).
       if (typeof value === 'object' && value.kind === 'missing') await fetchFiles(alive)
     },
     [api, target, tab, shownPath, oldPath, viewKey, fetchFiles],
