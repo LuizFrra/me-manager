@@ -380,6 +380,15 @@ describe('Orchestrator: new-task options', () => {
     await expect(orch.listBranches(themeId, repoId)).rejects.toThrow('Could not find a base branch')
   })
 
+  it('says the repository is gone, before running git, when its folder was moved or deleted', async () => {
+    const { orch, git, deps, themeId, repoId } = await setup()
+    deps.pathExists = (path) => path !== '/code/my-api'
+    git.calls = []
+    await expect(orch.listBranches(themeId, repoId)).rejects.toThrow('Repository not found: /code/my-api')
+    await expect(orch.createTask(themeId, repoId, 'fix')).rejects.toThrow('Repository not found: /code/my-api')
+    expect(git.calls).toEqual([])
+  })
+
   it('creates the worktree from the chosen base branch and records it', async () => {
     const { orch, git, themeId, repoId } = await setup()
     const task = taskOf(await orch.createTask(themeId, repoId, 'fix', { baseRef: 'origin/develop' }))

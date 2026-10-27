@@ -650,9 +650,16 @@ export class Orchestrator implements AppService {
     return { default: defaultRef, branches: [defaultRef, ...branches.filter((b) => b !== defaultRef)] }
   }
 
+  /** A repo whose folder is there: git would only say it can't change to a moved or deleted one. */
+  private presentRepo(themeId: string, repoId: string): Repo {
+    const repo = m.getRepo(this.state, themeId, repoId)
+    if (!this.deps.pathExists(repo.path)) throw new Error(`Repository not found: ${repo.path}`)
+    return repo
+  }
+
   /** Read-only (fetch only updates remote-tracking refs), so it doesn't wait for queued mutations. */
   async listBranches(themeId: string, repoId: string): Promise<BranchList> {
-    const repo = m.getRepo(this.state, themeId, repoId)
+    const repo = this.presentRepo(themeId, repoId)
     await this.fetchWithTimeout(repo.path)
     return this.branchList(repo.path)
   }
@@ -667,10 +674,10 @@ export class Orchestrator implements AppService {
     return chosen
   }
 
-  /** The theme, repo and slug of a new task, checking that the repo takes the name. */
+  /** The theme, repo and slug of a new task, checking that the repo is there and takes the name. */
   private newTaskPlace(themeId: string, repoId: string, name: string): { theme: Theme; repo: Repo; slug: string } {
     const theme = m.getTheme(this.state, themeId)
-    const repo = m.getRepo(this.state, themeId, repoId)
+    const repo = this.presentRepo(themeId, repoId)
     const slug = m.requireSlug(name, 'Task')
     m.assertTaskSlugFree(repo, slug)
     m.assertTaskNameFree(repo, name)
