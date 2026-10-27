@@ -857,7 +857,7 @@ describe('Orchestrator: archiving tasks', () => {
     }
   })
 
-  it('refuses a new tab or a Claude restart while the task is being archived or removed', async () => {
+  it('refuses a new tab or a Claude (re)start while the task is being archived or removed', async () => {
     for (const close of ['archive', 'remove'] as const) {
       const { orch, tmux, themeId, repoId, target, task } = await withTask()
       let release = (): void => {}
@@ -876,6 +876,7 @@ describe('Orchestrator: archiving tasks', () => {
       tmux.sessions.get(SESSION)!.windows = [{ name: 'shell' }] // Claude exited: a restart would start a new one
       await expect(orch.newTab(target)).rejects.toThrow(refusal)
       await expect(orch.restartClaude(target)).rejects.toThrow(refusal)
+      await expect(orch.askClaudeToResolve(target, 'rebase', ['a.ts'])).rejects.toThrow(refusal)
       expect(tmux.sessions.get(SESSION)!.windows.map((w) => w.name)).toEqual(['shell'])
       release()
       await closing

@@ -1205,7 +1205,7 @@ export class Orchestrator implements AppService {
 
   async askClaudeToResolve(target: Target, strategy: UpdateStrategy, files: string[]): Promise<TabInfo[]> {
     const { task } = this.resolveTaskTarget(target)
-    const { session, cwd, label } = this.resolve(target)
+    const { session, cwd, label } = this.resolveOpenable(target) // it may start Claude again
     const text = resolvePrompt(strategy, task.baseRef, files)
     if (!(await this.deps.tmux.hasSession(session))) throw new Error('Open the task first: its session is not running')
     const claude = (await this.deps.tmux.listWindows(session)).find((t) => t.name === CLAUDE_WINDOW)
