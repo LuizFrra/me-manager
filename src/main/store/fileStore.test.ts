@@ -167,6 +167,34 @@ describe('FileStore', () => {
     expect(items.map((i) => i.runCommand)).toEqual(['npm run dev', 'hugo server', undefined, undefined, undefined])
     expect(items.map((i) => 'runCommand' in i)).toEqual([true, true, false, false, false])
   })
+  it('falls back to .bak when the main file is JSON but not a state the app saves (a hand edit)', async () => {
+    const store = new FileStore(file)
+    const first = addTheme(emptyState(), 'One')
+    await store.save(first)
+    await store.save(addTheme(first, 'Two'))
+    const theme = { id: 't', name: 'X', slug: 'x' }
+    const item = { id: 'r', kind: 'repo', name: 'a', slug: 'a', path: '/a' }
+    for (const broken of [
+      { version: 1, themes: [null] },
+      { version: 1, themes: [theme] }, // no items
+      { version: 1, themes: [{ ...theme, items: [item] }] }, // a repo without tasks
+      { version: 1, themes: [{ ...theme, items: [{ ...item, kind: 'thing', tasks: [] }] }] },
+      { version: 1, themes: [{ ...theme, items: [{ ...item, path: 7, tasks: [] }] }] },
+      { version: 1, themes: [{ ...theme, items: [{ ...item, tasks: [{ id: 'k', name: 'fix', slug: 'fix' }] }] }] },
+    ]) {
+      await writeFile(file, JSON.stringify(broken), 'utf8')
+      await expect(new FileStore(file).load()).resolves.toEqual(first)
+    }
+  })
+  it('says what is wrong when the backup is no state either', async () => {
+    await mkdir(join(dir, 'nested'), { recursive: true })
+    const broken = { version: 1, themes: [{ id: 't', name: 'X', slug: 'x', items: [{ id: 'f', kind: 'folder' }] }] }
+    await writeFile(file, JSON.stringify(broken), 'utf8')
+    await writeFile(file + '.bak', JSON.stringify(broken), 'utf8')
+    await expect(new FileStore(file).load()).rejects.toThrow(
+      `Could not read ${file}: themes[0].items[0] is not a repository or folder`,
+    )
+  })
   it('throws when both files are unreadable', async () => {
     const store = new FileStore(file)
     await store.save(emptyState())

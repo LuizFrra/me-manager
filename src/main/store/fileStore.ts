@@ -30,14 +30,49 @@ function checkItems(state: AppState): void {
   }
 }
 
+/** The text fields every theme, item and task has had since the first state file. */
+const THEME_TEXT = ['id', 'name', 'slug']
+const ITEM_TEXT = ['id', 'name', 'slug', 'path']
+const TASK_TEXT = ['id', 'name', 'slug', 'branch', 'worktreePath', 'baseRef', 'createdAt']
+
+const hasText = (v: Record<string, unknown>, keys: readonly string[]): boolean =>
+  keys.every((k) => typeof v[k] === 'string')
+
+/**
+ * Throws, naming the first entry that isn't a theme, repo, folder or task as the app saves them (a hand edit): the
+ * app would fail on it everywhere, and the window would show nothing. Only what every version saved is checked.
+ */
+function checkShape(themes: unknown[]): void {
+  for (const [t, theme] of themes.entries()) {
+    if (!isRecord(theme) || !hasText(theme, THEME_TEXT) || !Array.isArray(theme.items)) {
+      throw new Error(`themes[${t}] is not a theme`)
+    }
+    for (const [i, item] of (theme.items as unknown[]).entries()) {
+      const at = `themes[${t}].items[${i}]`
+      const repo = isRecord(item) && item.kind === 'repo' && Array.isArray(item.tasks)
+      if (!isRecord(item) || !hasText(item, ITEM_TEXT) || !(repo || item.kind === 'folder')) {
+        throw new Error(`${at} is not a repository or folder`)
+      }
+      if (!repo) continue
+      for (const [k, task] of (item.tasks as unknown[]).entries()) {
+        if (!isRecord(task) || !hasText(task, TASK_TEXT)) throw new Error(`${at}.tasks[${k}] is not a task`)
+      }
+    }
+  }
+}
+
 function parseState(data: unknown): AppState {
   const state = data as AppState | null
   if (state?.version !== 1 || !Array.isArray(state.themes)) throw new Error('unrecognized state format')
+  checkShape(state.themes)
   checkItems(state)
   return state
 }
 
-/** state.json. A corrupt file falls back to its .bak; if that is unreadable too, load() throws. */
+/**
+ * state.json. A corrupt file (or one that isn't a state, see checkShape) falls back to its .bak; if that is unusable
+ * too, load() throws.
+ */
 export class FileStore implements StoreApi {
   private readonly json: JsonFile<AppState>
 
