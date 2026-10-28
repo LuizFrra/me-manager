@@ -18,6 +18,17 @@ export type SpawnControl = (session: string, cwd: string) => ControlProcess
 
 type Reply = Extract<ControlEvent, { kind: 'reply' }>
 
+/**
+ * A line written and not fully answered yet. tmux answers each command on a line with a reply, but when one fails it
+ * sends one %error and skips the rest of the line (as for a line it can't parse), so `done` gets the replies that
+ * came: all `expected` of them, or fewer, the last one failed.
+ */
+interface PendingLine {
+  expected: number
+  replies: Reply[]
+  done: (replies: Reply[]) => void
+}
+
 /** One control client and what it is doing. */
 interface Client {
   proc: ControlProcess
@@ -25,8 +36,8 @@ interface Client {
   parser: ControlParser
   /** Decodes the shown pane's output; a UTF-8 character may be cut between two %output lines. */
   decoder: StringDecoder
-  /** What to do with the reply to each command written and not answered yet, oldest first. */
-  pending: ((r: Reply) => void)[]
+  /** The lines written and not answered yet, oldest first. */
+  pending: PendingLine[]
   /** The pane shown (its output goes to the terminal), none until a snapshot came in. */
   pane: string | null
   /** The latest snapshot asked for; an older one's result is stale. */
@@ -81,7 +92,7 @@ export class ControlTerminal implements PtyApi {
     })
     proc.stdout.on('data', (chunk: Buffer) => this.chunk(client, chunk))
     proc.on('exit', () => this.exit(client))
-    this.send(client, `refresh-client -C ${this.cols}x${this.rows}`, [this.checked('refresh-client')])
+    this.send(client, `refresh-client -C ${this.cols}x${this.rows}`, 1, this.checked('refresh-client'))
     this.snapshot(client)
   }
 
@@ -94,14 +105,14 @@ export class ControlTerminal implements PtyApi {
   write(data: string): void {
     const client = this.client
     if (!client?.pane) return
-    for (const cmd of inputCommands(client.pane, data)) this.send(client, cmd, [this.checked('input')])
+    for (const cmd of inputCommands(client.pane, data)) this.send(client, cmd, 1, this.checked('input'))
   }
 
   resize(cols: number, rows: number): void {
     if (!isTermSize(cols) || !isTermSize(rows)) return
     this.cols = cols
     this.rows = rows
-    if (this.client) this.send(this.client, `refresh-client -C ${cols}x${rows}`, [this.checked('refresh-client')])
+    if (this.client) this.send(this.client, `refresh-client -C ${cols}x${rows}`, 1, this.checked('refresh-client'))
   }
 
   onData(cb: (data: string) => void): () => void {
@@ -133,10 +144,13 @@ export class ControlTerminal implements PtyApi {
         return
       case 'reply': {
         if (!e.ours) return // the attach's own block
-        const handle = client.pending.shift()
-        if (handle) handle(e)
-        else this.warn(`tmux control mode: a reply to nothing: ${JSON.stringify(e.lines[0] ?? '')}`)
-        return
+        const line = client.pending[0]
+        if (!line) return this.warn(`tmux control mode: a reply to nothing: ${JSON.stringify(e.lines[0] ?? '')}`)
+        line.replies.push(e)
+        // A failure ends the line: tmux skips the rest of its commands.
+        if (e.ok && line.replies.length < line.expected) return
+        client.pending.shift()
+        return line.done(line.replies)
       }
       case 'window-changed':
       case 'pane-changed':
@@ -158,43 +172,38 @@ export class ControlTerminal implements PtyApi {
     }
     const generation = ++client.generation
     client.snapshotting = true
-    const replies: Reply[] = []
-    const collect = (r: Reply): void => {
-      replies.push(r)
+    this.send(client, cmd, SNAPSHOT_REPLIES, (replies) => {
       // A stale snapshot's replies are still read off the queue; only the latest one is shown.
-      if (replies.length < SNAPSHOT_REPLIES || generation !== client.generation) return
+      if (generation !== client.generation) return
       client.snapshotting = false
       const failed = replies.find((reply) => !reply.ok)
       const snapshot = failed ? null : parseSnapshot(replies.map((reply) => reply.lines))
       if (!snapshot) {
+        // The previous pane, if any, stays shown: its output flows again.
         client.out += notice(failed ? (failed.lines[0] ?? 'tmux refused') : 'tmux sent a malformed pane state')
         return
       }
       client.pane = snapshot.state.pane
       client.decoder = new StringDecoder('utf8')
       client.out += snapshotData(snapshot)
-    }
-    this.send(
-      client,
-      cmd,
-      Array.from({ length: SNAPSHOT_REPLIES }, () => collect),
-    )
+    })
   }
 
-  /** A reply handler that only warns when the command failed. */
-  private checked(what: string): (r: Reply) => void {
-    return (r) => {
-      if (!r.ok) this.warn(`tmux control mode: ${what} failed: ${r.lines.join(' ')}`)
+  /** A line's `done` that only warns when a command failed. */
+  private checked(what: string): (replies: Reply[]) => void {
+    return (replies) => {
+      const failed = replies.find((r) => !r.ok)
+      if (failed) this.warn(`tmux control mode: ${what} failed: ${failed.lines.join(' ')}`)
     }
   }
 
-  /** Writes one input line; `handlers` take its replies, one per command on the line. */
-  private send(client: Client, line: string, handlers: ((r: Reply) => void)[]): void {
+  /** Writes one input line of `expected` commands; `done` takes their replies once the line is answered. */
+  private send(client: Client, line: string, expected: number, done: (replies: Reply[]) => void): void {
     const { stdin } = client.proc
     if (stdin.destroyed || !stdin.writable) return
     try {
       stdin.write(`${line}\n`)
-      client.pending.push(...handlers)
+      client.pending.push({ expected, replies: [], done })
     } catch (err) {
       this.warn(`tmux control mode: ${String(err)}`)
     }

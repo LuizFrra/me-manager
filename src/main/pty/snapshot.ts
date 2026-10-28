@@ -68,7 +68,10 @@ const FIELDS: [string, 'pane' | Field | NumberField, 'pane' | 'flag' | 'number']
 
 const STATE_FORMAT = FIELDS.map(([format]) => `#{${format}}`).join(' ')
 
-/** One input line for a control client: three commands, so three replies, in this order (SNAPSHOT_REPLIES). */
+/**
+ * One input line for a control client: three commands, answered by three replies in this order (SNAPSHOT_REPLIES)
+ * when they all succeed. tmux runs them as a group: when one fails, its %error is the line's last reply.
+ */
 export function snapshotCommand(target: string): string {
   // The line goes through tmux's command parser: anything that ends a word, a command or the line is refused.
   if (!target || /['"\s;\\]/.test(target)) throw new Error(`Bad tmux target: ${JSON.stringify(target)}`)

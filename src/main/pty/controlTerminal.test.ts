@@ -209,14 +209,31 @@ describe('ControlTerminal: attach and snapshot', () => {
     expect(data).toEqual([shown('%6', ['fresh']) + 'z'])
   })
 
-  it('shows a notice when the snapshot fails, and keeps the previous pane', async () => {
-    const { proc, data } = await shownPane()
+  it('shows a notice when the snapshot fails, keeps the previous pane and the replies in step', async () => {
+    const { term, proc, data, warnings } = await shownPane()
     await proc().push('%session-window-changed $1 @2\n')
-    await proc().push(proc().reply(["can't find window: @2", 'more'], false), proc().reply(), proc().reply())
+    // tmux answers a group of commands that failed with one %error, and skips the rest of the group.
+    await proc().push(proc().reply(["can't find window: @2", 'more'], false))
     expect(data).toEqual([`${ESC}c${ESC}[2m[could not show this tab: can't find window: @2]${ESC}[0m\r\n`])
     data.length = 0
     await proc().push(output('%3', 'still'))
     expect(data).toEqual(['still'])
+    data.length = 0
+    // The next replies are the keystrokes', not taken for the snapshot's.
+    term.write('ab')
+    await tick()
+    await proc().push(proc().reply(), output('%3', 'ab'), proc().reply())
+    expect(data).toEqual(['ab'])
+    expect(warnings).toEqual([expect.stringContaining('a reply to nothing')])
+  })
+
+  it('lets a newer snapshot finish when an older one fails', async () => {
+    const { proc, data } = await shownPane()
+    await proc().push('%session-window-changed $1 @2\n', '%session-window-changed $1 @3\n')
+    await proc().push(proc().reply(["can't find window: @2"], false), output('%3', 'x'))
+    expect(data).toEqual([])
+    await proc().push(proc().snapshot('%6', ['fresh']), output('%6', 'z'))
+    expect(data).toEqual([shown('%6', ['fresh']) + 'z'])
   })
 
   it('shows a notice when the state line is malformed, with no pane to show before', async () => {
