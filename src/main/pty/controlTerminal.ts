@@ -110,8 +110,15 @@ export class ControlTerminal implements PtyApi {
 
   write(data: string): void {
     const client = this.client
-    if (!client?.pane) return
-    for (const cmd of inputCommands(client.pane, data)) this.send(client, cmd, 1, this.checked('input'))
+    if (!client) return
+    // Until a snapshot says which pane is shown, keys go to the session's active pane, the one it will show.
+    let cmds: string[]
+    try {
+      cmds = inputCommands(client.pane ?? `=${client.session}:`, data)
+    } catch (err) {
+      return this.warn(`tmux control mode: ${String(err)}`)
+    }
+    for (const cmd of cmds) this.send(client, cmd, 1, this.checked('input'))
   }
 
   resize(cols: number, rows: number): void {

@@ -128,7 +128,7 @@ export class TerminalHarness {
     harness.resizeEngine = (c, r) => control.resize(c, r)
     control.resize(cols, rows)
     control.attach(session, tmpdir())
-    // Input before the first snapshot is dropped (there is no pane to send it to yet).
+    // Tests compare the screen with the pane, which the terminal shows once the first snapshot is in.
     await harness.until(() => harness.raw.includes('\x1bc'), 'the snapshot')
     await harness.flush()
     return harness

@@ -1,19 +1,26 @@
 const PASTE_START = '\x1b[200~'
 const PASTE_END = '\x1b[201~'
-/** The paste buffer a paste into `pane` goes through (one per pane); paste-buffer -d deletes it once pasted. */
-const pasteBuffer = (pane: string): string => `mm-paste-${pane.slice(1)}`
+/** A pane ('%3'), or a session's active pane ('=name:'). */
+const PANE = /^%\d+$/
+const SESSION_PANE = /^=[\w-]+:$/
+/**
+ * The paste buffer a paste into `target` goes through (one per pane, or per session for its active pane);
+ * paste-buffer -d deletes it once pasted.
+ */
+const pasteBuffer = (target: string): string =>
+  PANE.test(target) ? `mm-paste-${target.slice(1)}` : `mm-paste-session-${target.slice(1, -1)}`
 /** Most bytes in one send-keys command. */
 const KEYS_MAX = 256
 /** Most characters (UTF-16 units) of a paste in one set-buffer command. */
 const PASTE_CHUNK = 4096
 
 /**
- * tmux commands (one per line to write) that deliver `data` — what the terminal sends — to `pane` ('%3'). A
- * bracketed paste goes through a paste buffer so tmux brackets it only if the program asked; anything else is
- * raw bytes.
+ * tmux commands (one per line to write) that deliver `data` — what the terminal sends — to `pane` ('%3', or
+ * '=name:' for a session's active pane). A bracketed paste goes through a paste buffer so tmux brackets it only if
+ * the program asked; anything else is raw bytes.
  */
 export function inputCommands(pane: string, data: string): string[] {
-  if (!/^%\d+$/.test(pane)) throw new Error(`Bad tmux pane: ${JSON.stringify(pane)}`)
+  if (!PANE.test(pane) && !SESSION_PANE.test(pane)) throw new Error(`Bad tmux pane: ${JSON.stringify(pane)}`)
   if (data.length >= PASTE_START.length + PASTE_END.length && data.startsWith(PASTE_START) && data.endsWith(PASTE_END))
     return pasteCommands(pane, data.slice(PASTE_START.length, -PASTE_END.length))
   // send-keys -H writes each byte as is, so a character split between two commands still arrives whole.

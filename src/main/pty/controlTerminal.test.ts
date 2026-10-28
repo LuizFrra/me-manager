@@ -342,14 +342,29 @@ describe('ControlTerminal: input and size', () => {
     expect(data).toEqual([shown('%5', ['w2'])])
   })
 
-  it('sends nothing before the first snapshot is in', async () => {
+  it("sends keys typed before the first snapshot is in to the session's active pane", async () => {
     const { term, proc } = setup()
     term.write('lost')
     term.attach('mm_s', '/work')
     await tick()
-    term.write('lost too')
+    term.write('early')
     await tick()
-    expect(proc().lines).toHaveLength(3)
+    expect(proc().lines.slice(3)).toEqual(inputCommands('=mm_s:', 'early'))
+    await proc().push(proc().attached(), proc().snapshot('%3', ['hi']), proc().reply())
+    term.write('late')
+    await tick()
+    expect(proc().lines.slice(4)).toEqual(inputCommands('%3', 'late'))
+  })
+
+  it('warns and sends nothing for keys to a session whose name cannot be a target', async () => {
+    const { term, proc, warnings } = setup()
+    term.attach('a b', '/work')
+    await tick()
+    const before = proc().lines.length
+    expect(() => term.write('x')).not.toThrow()
+    await tick()
+    expect(proc().lines).toHaveLength(before)
+    expect(warnings).toEqual([expect.stringContaining('Bad tmux pane')])
   })
 
   it('sizes the client, ignores sizes no terminal has, and remembers the size for the next attach', async () => {

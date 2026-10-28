@@ -46,8 +46,17 @@ describe('inputCommands: raw bytes', () => {
     }
   })
 
-  it('refuses a pane that is not a pane id', () => {
-    for (const bad of ['3', '%', '%3 ', '%3;', '=s:', '%3\n', '']) expect(() => inputCommands(bad, 'a')).toThrow()
+  it("takes a session's active pane as the target", () => {
+    expect(inputCommands('=mm_s-1:', 'a')).toEqual(['send-keys -t =mm_s-1: -H 61'])
+    expect(inputCommands('=mm_s-1:', paste('x'))).toEqual([
+      'set-buffer -b mm-paste-session-mm_s-1 "x"',
+      'paste-buffer -p -d -b mm-paste-session-mm_s-1 -t =mm_s-1:',
+    ])
+  })
+
+  it("refuses a target that is neither a pane id nor a session's active pane", () => {
+    for (const bad of ['3', '%', '%3 ', '%3;', '=s', 's:', '=s:0', '=a b:', "=a'b:", '=a;b:', '=:', '%3\n', ''])
+      expect(() => inputCommands(bad, 'a')).toThrow()
   })
 })
 
