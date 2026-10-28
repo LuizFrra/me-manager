@@ -2425,7 +2425,9 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
               <div className="terminal-area">
                 <TerminalView
                   api={api}
-                  sessionKey={targetKey(selected)}
+                  // A new mode re-attaches the target shown: the terminal starts over, as for another target.
+                  sessionKey={`${targetKey(selected)} ${settings.terminalMode}`}
+                  direct={settings.terminalMode !== 'classic'}
                   fontSize={settings.terminalFontSize}
                   modalOpen={modalOpen}
                   focusSeq={terminalFocus}

@@ -23,17 +23,28 @@ import { mockColorScheme } from './test/matchMedia'
 
 vi.mock('./components/TerminalView', () => ({
   TerminalView: ({
+    sessionKey,
     fontSize,
     focusSeq,
     appearance,
+    direct,
     onOpenFile,
   }: {
+    sessionKey: string
     fontSize: number
     focusSeq?: number
     appearance: string
+    direct?: boolean
     onOpenFile?: (path: string, line?: number) => void
   }) => (
-    <div data-testid="terminal" data-font-size={fontSize} data-focus-seq={focusSeq} data-appearance={appearance}>
+    <div
+      data-testid="terminal"
+      data-session-key={sessionKey}
+      data-font-size={fontSize}
+      data-focus-seq={focusSeq}
+      data-appearance={appearance}
+      data-direct={String(Boolean(direct))}
+    >
       {/* Stands in for a Ctrl+click on `src/app.ts:2` in the output. */}
       <button onClick={() => onOpenFile?.('src/app.ts', 2)}>terminal link src/app.ts:2</button>
     </div>
@@ -1663,6 +1674,26 @@ describe('App appearance', () => {
     expect(document.documentElement.dataset.appearance).toBe('light')
     act(() => scheme.setDark(true))
     expect(document.documentElement.dataset.appearance).toBe('dark')
+  })
+})
+
+describe('App terminal mode', () => {
+  it('shows a direct terminal by default, and a new classic one once Classic is saved', async () => {
+    const user = userEvent.setup()
+    const api = repoApi()
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    const terminal = (): HTMLElement => screen.getByTestId('terminal')
+    expect(terminal()).toHaveAttribute('data-direct', 'true')
+    const key = terminal().getAttribute('data-session-key')
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    const dialog = screen.getByRole('dialog', { name: 'Settings' })
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Terminal' }), 'classic')
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(terminal()).toHaveAttribute('data-direct', 'false'))
+    expect(terminal().getAttribute('data-session-key')).not.toBe(key) // the terminal resets for the new mode
+    expect((await api.getSettings()).terminalMode).toBe('classic')
   })
 })
 

@@ -9,7 +9,13 @@ type KeyHandler = (e: KeyboardEvent) => boolean
 const handlers: KeyHandler[] = []
 const noop = (): void => undefined
 interface FakeTerm {
-  options: { fontSize?: number; theme?: unknown; minimumContrastRatio?: number; linkHandler?: ILinkHandler }
+  options: {
+    fontSize?: number
+    theme?: unknown
+    minimumContrastRatio?: number
+    linkHandler?: ILinkHandler
+    scrollback?: number
+  }
   cols: number
   rows: number
   pasted: string[]
@@ -18,6 +24,10 @@ interface FakeTerm {
   selected: [number, number, number][]
   buffer: unknown
   title?: (title: string) => void
+  scrolled?: (position: number) => void
+  parsed?: () => void
+  toBottom: number
+  focused: number
 }
 const terms = vi.hoisted(() => [] as FakeTerm[])
 const fits = vi.hoisted(() => ({ count: 0 }))
@@ -38,11 +48,25 @@ vi.mock('@xterm/xterm', () => ({
     input?: (data: string) => void
     textarea = undefined
     unicode = { register: noop, activeVersion: '6' }
-    buffer: unknown = { active: { viewportY: 0, getLine: () => undefined } }
+    buffer: unknown = { active: { viewportY: 0, baseY: 0, getLine: () => undefined } }
     title?: (title: string) => void
     onTitleChange(cb: (title: string) => void): { dispose: () => void } {
       this.title = cb
       return { dispose: noop }
+    }
+    scrolled?: (position: number) => void
+    onScroll(cb: (position: number) => void): { dispose: () => void } {
+      this.scrolled = cb
+      return { dispose: noop }
+    }
+    parsed?: () => void
+    onWriteParsed(cb: () => void): { dispose: () => void } {
+      this.parsed = cb
+      return { dispose: noop }
+    }
+    toBottom = 0
+    scrollToBottom(): void {
+      this.toBottom++
     }
     loadAddon = noop
     open = noop
@@ -70,7 +94,10 @@ vi.mock('@xterm/xterm', () => ({
     }
     write = noop
     reset = noop
-    focus = noop
+    focused = 0
+    focus(): void {
+      this.focused++
+    }
     dispose = noop
     hasSelection(): boolean {
       return xtermSelection.text !== ''
@@ -749,5 +776,112 @@ describe('TerminalView link hint', () => {
     const hint = await screen.findByText('Ctrl+click to open link')
     expect(hint.style.left).toBe('620px')
     expect(hint.style.top).toBe('560px')
+  })
+})
+
+describe('TerminalView in direct mode', () => {
+  const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+  const writeText = vi.fn<(text: string) => Promise<void>>(async () => {})
+  beforeEach(() => {
+    api.ptyWrite.mockClear()
+    writeText.mockClear()
+    xtermSelection.text = ''
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText, readText: async () => '' },
+    })
+  })
+  const jump = (): HTMLElement | null => screen.queryByRole('button', { name: '↓ Jump to the bottom' })
+  const ctrlC = (): boolean | undefined =>
+    handlers.at(-1)?.(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', ctrlKey: true, cancelable: true }))
+
+  it('sends keys straight to the program, whatever the wheel or a title says', () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    const { container } = render(
+      <TerminalView api={api} sessionKey="s" fontSize={13} direct onLeaveCopyMode={onLeaveCopyMode} />,
+    )
+    const term = terms.at(-1) as FakeTerm
+    fireEvent.wheel(container.querySelector('.terminal-host') as Element, { deltaY: -120 })
+    term.input?.('a')
+    act(() => term.title?.('me-manager:1:5'))
+    term.input?.('\x1b')
+    term.input?.('b')
+    expect(onLeaveCopyMode).not.toHaveBeenCalled()
+    expect(api.ptyWrite.mock.calls.map(([d]) => d)).toEqual(['a', '\x1b', 'b'])
+    expect(jump()).toBeNull()
+  })
+
+  it('draws no tmux selection: Ctrl+C interrupts unless xterm has a selection of its own', async () => {
+    const { container } = render(<TerminalView api={api} sessionKey="s" fontSize={13} direct />)
+    const host = container.querySelector('.terminal-host') as Element
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 480 }) as DOMRect
+    const term = terms.at(-1) as FakeTerm
+    fireEvent.mouseDown(host, { button: 0, clientX: 5, clientY: 5 })
+    fireEvent.mouseUp(window, { button: 0, clientX: 95, clientY: 5 })
+    await act(async () => {
+      await providers.at(-1)?.writeText('' as never, 'picked')
+    })
+    expect(term.selected).toEqual([])
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(ctrlC()).toBe(true) // ^C
+    xtermSelection.text = 'mine'
+    expect(ctrlC()).toBe(false)
+    expect(writeText).toHaveBeenCalledWith('mine')
+    expect(writeText).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers to jump to the bottom while the view is scrolled back, and scrolls there', async () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} direct />)
+    const term = terms.at(-1) as FakeTerm
+    const active = { viewportY: 100, baseY: 100, getLine: () => undefined }
+    term.buffer = { active }
+    act(() => term.scrolled?.(100))
+    expect(jump()).toBeNull()
+    active.viewportY = 90
+    act(() => term.scrolled?.(90))
+    const focused = term.focused
+    fireEvent.click(await screen.findByRole('button', { name: '↓ Jump to the bottom' }))
+    expect(term.toBottom).toBe(1)
+    expect(term.focused).toBe(focused + 1)
+    active.viewportY = 100
+    act(() => term.scrolled?.(100))
+    expect(jump()).toBeNull()
+    active.viewportY = 40 // scrolled back, then output came in
+    act(() => term.parsed?.())
+    expect(jump()).not.toBeNull()
+    active.viewportY = active.baseY = 120
+    act(() => term.parsed?.())
+    expect(jump()).toBeNull()
+  })
+
+  it('keeps room for the snapshot history in the scrollback; classic keeps the default', () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} direct />)
+    expect(terms.at(-1)?.options.scrollback).toBe(20_000)
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} />)
+    expect(terms.at(-1)?.options.scrollback).toBeUndefined()
+  })
+
+  it('starts a new terminal of the other mode when the mode changes, at the current size and palette', async () => {
+    const onLeaveCopyMode = vi.fn(async () => true)
+    const props = { api, sessionKey: 's', onLeaveCopyMode }
+    const { container, rerender } = render(<TerminalView {...props} fontSize={13} />)
+    const host = container.querySelector('.terminal-host') as Element
+    rerender(<TerminalView {...props} fontSize={16} appearance="light" />)
+    const created = terms.length
+    rerender(<TerminalView {...props} fontSize={16} appearance="light" direct />)
+    expect(terms.length).toBe(created + 1)
+    const direct = terms.at(-1) as FakeTerm
+    expect(direct.options).toMatchObject({ fontSize: 16, scrollback: 20_000, theme: TERMINAL_THEMES.light })
+    fireEvent.wheel(host, { deltaY: -120 })
+    direct.input?.('a')
+    expect(onLeaveCopyMode).not.toHaveBeenCalled()
+    expect(api.ptyWrite).toHaveBeenLastCalledWith('a')
+
+    rerender(<TerminalView {...props} fontSize={16} appearance="light" />)
+    expect(terms.length).toBe(created + 2)
+    expect(terms.at(-1)?.options.scrollback).toBeUndefined()
+    fireEvent.wheel(host, { deltaY: -120 })
+    await act(async () => terms.at(-1)?.input?.('b'))
+    expect(onLeaveCopyMode).toHaveBeenCalledTimes(1) // classic again: copy mode is left first
   })
 })

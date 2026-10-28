@@ -42,6 +42,11 @@ export interface TerminalViewProps {
   loadLinkFiles?: () => Promise<LinkFiles | null>
   /** Leaves tmux's copy mode in the shown session (see MeManagerApi.leaveCopyMode). */
   onLeaveCopyMode?: () => Promise<boolean>
+  /**
+   * The pane's own output is shown (Settings.terminalMode `direct`), not a tmux client's screen: there is no copy mode,
+   * and xterm's own scrollback, selection and mouse handling apply. A change starts a new terminal.
+   */
+  direct?: boolean
 }
 
 /** Resizes (e.g. dragging the panel splitter) are applied once this long after the movement stops. */
@@ -56,6 +61,8 @@ const HINT_WIDTH = 180
 const COPY_KEY = isMac ? '⌘C' : 'Ctrl+C'
 /** How soon after a drag's release tmux's copy of it must arrive to be highlighted as that drag. */
 const DRAG_COPY_MS = 1000
+/** Direct mode's scrollback: a snapshot brings up to 10 000 lines of history, with room left for new output. */
+const DIRECT_SCROLLBACK = 20_000
 
 /** Following a link takes Ctrl+click (Cmd+click on macOS), so a plain click still focuses or selects. */
 const followsLink = (e: MouseEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
@@ -78,23 +85,28 @@ export function TerminalView({
   onOpenFile,
   loadLinkFiles,
   onLeaveCopyMode,
+  direct = false,
 }: TerminalViewProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   // Read by the handlers, which are attached once with the terminal.
   const modalOpenRef = useRef(modalOpen)
   const claudeTabRef = useRef(claudeTab)
   const handlersRef = useRef({ onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode })
+  // The size and palette a new terminal starts with (the first one, or one of the other mode); later changes are
+  // applied by the effects below, without recreating it.
+  const createWithRef = useRef({ fontSize, appearance })
   useEffect(() => {
     modalOpenRef.current = modalOpen
     claudeTabRef.current = claudeTab
     handlersRef.current = { onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode }
-  }, [modalOpen, claudeTab, onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode])
+    createWithRef.current = { fontSize, appearance }
+  }, [modalOpen, claudeTab, onOpenUrl, onOpenFile, loadLinkFiles, onLeaveCopyMode, fontSize, appearance])
   // The wheel scrolled back since the last key: tmux may be in copy mode before its title (below) says so.
   const wheelRef = useRef(false)
   // Input held while copy mode is left; it goes to the program once tmux is out of it.
   const pendingRef = useRef<string[] | null>(null)
   // tmux's title says whether it is in copy mode, where keys would go to tmux (see TMUX_TITLE). scrolledBack: the view
-  // is above the bottom, so "Jump to the bottom" is offered.
+  // is above the bottom (tmux's, or xterm's own in direct mode), so "Jump to the bottom" is offered.
   const [scrolledBack, setScrolledBack] = useState(false)
   const inCopyModeRef = useRef(false)
   const viewScrolledRef = useRef(false)
@@ -109,10 +121,6 @@ export function TerminalView({
   const dragRef = useRef<{ range: ReturnType<typeof dragRange>; at: number } | null>(null)
   const drawnRef = useRef(false)
   const fitRef = useRef<FitAddon | null>(null)
-  // The size and palette to create the terminal with; later changes are applied by the effects below, without
-  // recreating it.
-  const [initialFontSize] = useState(fontSize)
-  const [initialAppearance] = useState(appearance)
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // The link under the pointer (for the hint and the context menu).
@@ -145,9 +153,13 @@ export function TerminalView({
     else openFile?.(link.path, link.line)
   }, [])
 
+  // The terminal is made for one mode: `direct` is a dependency, so a mode switch disposes it and starts one of the
+  // other mode (with its own scrollback and handlers) rather than every handler asking which mode it is in. The
+  // session effect below then resets what the old one held, as for another session.
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
+    const { fontSize: initialFontSize, appearance: initialAppearance } = createWithRef.current
     const leaveLink = (): void => {
       hoveredRef.current = null
       setHovered(null)
@@ -164,6 +176,7 @@ export function TerminalView({
       allowProposedApi: true, // for term.unicode
       theme: TERMINAL_THEMES[initialAppearance],
       minimumContrastRatio: TERMINAL_MIN_CONTRAST[initialAppearance],
+      ...(direct && { scrollback: DIRECT_SCROLLBACK }),
       // OSC 8 hyperlinks (tmux passes them on): followed like the links found in the text. Without a handler xterm
       // would ask with a blocking confirm() and then open a window the app refuses.
       linkHandler: {
@@ -182,7 +195,7 @@ export function TerminalView({
     const fit = new FitAddon()
     term.loadAddon(fit)
     // OSC 52 is write-only: programs in the pty may set the clipboard but never read it. tmux's mouse selections
-    // are held for an explicit copy.
+    // are held for an explicit copy; in direct mode tmux makes none (the mouse selects in xterm).
     // The last drag tmux copied, highlighted once tmux is out of copy mode (in it, tmux highlights it itself) while the
     // selection is still fresh.
     let toDraw: ReturnType<typeof dragRange> | null = null
@@ -196,6 +209,7 @@ export function TerminalView({
     const clipboard = createWriteOnlyClipboard({
       write: (text) => navigator.clipboard.writeText(text),
       hold: (text) => {
+        if (direct) return
         heldRef.current = text
         setFresh(text !== '')
         const drag = dragRef.current
@@ -255,9 +269,13 @@ export function TerminalView({
      * Input for the program. In copy mode (after a scroll back or a mouse selection) tmux would swallow typed text or
      * read it as copy-mode commands: the first key leaves copy mode, and it and what follows are held until tmux is
      * out of it. Scrolling keys still scroll while the view is scrolled back. An Escape that left copy mode isn't
-     * also sent on (it would interrupt Claude).
+     * also sent on (it would interrupt Claude). In direct mode there is no copy mode: everything goes straight on.
      */
     const send = (data: string): void => {
+      if (direct) {
+        api.ptyWrite(data)
+        return
+      }
       const mouse = data.startsWith('\x1b[<')
       // Focus in/out reports (focus-events) are no keystroke.
       const focus = FOCUS_REPORT.test(data)
@@ -348,7 +366,7 @@ export function TerminalView({
     const onWheel = (e: WheelEvent): void => {
       if (e.deltaY < 0) wheelRef.current = true
     }
-    host.addEventListener('wheel', onWheel, { capture: true, passive: true })
+    if (!direct) host.addEventListener('wheel', onWheel, { capture: true, passive: true })
     // A new click or drag replaces the selection; tmux reports a drag's text once the button is released. A drag that
     // starts on the live screen (not scrolled back in copy mode, where tmux keeps its own highlight) is remembered for
     // the copy that follows it.
@@ -375,8 +393,10 @@ export function TerminalView({
       if (end && (end.col !== start.col || end.row !== start.row))
         dragRef.current = { range: dragRange(start, end, term.cols), at: Date.now() }
     }
-    host.addEventListener('mousedown', onMouseDown)
-    window.addEventListener('mouseup', onMouseUp)
+    if (!direct) {
+      host.addEventListener('mousedown', onMouseDown)
+      window.addEventListener('mouseup', onMouseUp)
+    }
 
     term.attachCustomKeyEventHandler((e) => {
       if (modalOpenRef.current) return false
@@ -404,7 +424,15 @@ export function TerminalView({
 
     const offData = api.onPtyData((data) => term.write(data))
     const input = term.onData(send)
+    // Direct mode: xterm's own view, scrolled back when it is above the bottom, after a scroll or new output.
+    const followView = (): void => {
+      const { viewportY, baseY } = term.buffer.active
+      setScrolledBack(viewportY < baseY)
+    }
+    const viewEvents = direct ? [term.onScroll(followView), term.onWriteParsed(followView)] : []
+    // Classic mode: tmux's title says where its view is (programs' titles are no business of ours in direct mode).
     const title = term.onTitleChange((text) => {
+      if (direct) return
       const mode = parseTmuxTitle(text)
       if (!mode) return
       inCopyModeRef.current = mode.inCopyMode
@@ -446,11 +474,12 @@ export function TerminalView({
       input.dispose()
       pendingRef.current = null // a leave still on its way must not type into the next terminal
       title.dispose()
+      for (const event of viewEvents) event.dispose()
       term.dispose()
       termRef.current = null
       fitRef.current = null
     }
-  }, [api, initialFontSize, initialAppearance, setFresh, showNotice, openLink])
+  }, [api, direct, setFresh, showNotice, openLink])
 
   useEffect(() => {
     const term = termRef.current
@@ -467,7 +496,7 @@ export function TerminalView({
     fitRef.current?.fit()
     api.ptyResize(term.cols, term.rows)
     term.focus()
-  }, [sessionKey, api, setFresh])
+  }, [sessionKey, direct, api, setFresh])
 
   useEffect(() => {
     if (focusSeq > 0) termRef.current?.focus()
@@ -515,8 +544,11 @@ export function TerminalView({
         <button
           className="terminal-jump"
           onClick={() => {
-            wheelRef.current = false
-            void handlersRef.current.onLeaveCopyMode?.().catch(() => false)
+            if (direct) termRef.current?.scrollToBottom()
+            else {
+              wheelRef.current = false
+              void handlersRef.current.onLeaveCopyMode?.().catch(() => false)
+            }
             termRef.current?.focus()
           }}
         >
