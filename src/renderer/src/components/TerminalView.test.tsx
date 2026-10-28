@@ -826,8 +826,17 @@ describe('TerminalView in direct mode', () => {
     expect(ctrlC()).toBe(true) // ^C
     xtermSelection.text = 'mine'
     expect(ctrlC()).toBe(false)
-    expect(writeText).toHaveBeenCalledWith('mine')
-    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(writeText).toHaveBeenLastCalledWith('mine')
+  })
+
+  it('writes the clipboard for a copy with no selection name: programs mean the default clipboard', async () => {
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} direct />)
+    await act(async () => {
+      await providers.at(-1)?.writeText('' as never, 'from a program')
+    })
+    expect(writeText).toHaveBeenCalledWith('from a program')
+    expect(screen.queryByRole('status')).toBeNull() // nothing held for Ctrl+C
+    expect(ctrlC()).toBe(true)
   })
 
   it('offers to jump to the bottom while the view is scrolled back, and scrolls there', async () => {

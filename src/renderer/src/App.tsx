@@ -1056,6 +1056,22 @@ export function App({ api }: { api: MeManagerApi }): React.JSX.Element {
     if (result && sameTarget(selectedRef.current, target)) setTabs(result)
   }
 
+  // A new terminal mode: main attaches the target shown again (the terminal picks its mode when it attaches), unless
+  // its session ended (opening it would start it again; Start again does that, in the new mode). This runs in an
+  // effect on purpose: React runs TerminalView's effects, which make the terminal of the new mode, before App's in
+  // the same commit, so the new terminal is up before main attaches and nothing the new client sends is lost. Only
+  // a change counts, so nothing opens again on mount; the saved settings arriving with another mode than the default
+  // re-open only a target already shown (restored before they came) in a terminal of the default mode.
+  const shownMode = useRef(settings.terminalMode)
+  const reopenInMode = useLatestCallback((): void => {
+    if (!sessionEnded) void tabAction((t) => api.openTarget(t))
+  })
+  useEffect(() => {
+    if (shownMode.current === settings.terminalMode) return
+    shownMode.current = settings.terminalMode
+    reopenInMode()
+  }, [settings.terminalMode, reopenInMode])
+
   /** A dev-server URL, in the system browser (main takes http(s) only). */
   const openUrl = (url: string): void => void attempt(() => api.openExternal(url))
 

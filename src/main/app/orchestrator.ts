@@ -595,32 +595,14 @@ export class Orchestrator implements AppService {
    * renderer may send back what it got) is dropped by normalizeSettings like any unknown key. So are `profiles` and
    * `defaultProfileBilling`, which change only through addProfile, updateProfile and removeProfile (checked there,
    * in the state queue): a patch sent back with what getSettings had would otherwise undo a change made since.
-   * A new terminal mode shows the target shown, if any, again: the terminal picks its mode when it attaches.
+   * A new terminal mode doesn't attach again by itself: the renderer opens the target shown again once its new
+   * terminal is up (the terminal picks its mode when it attaches), so nothing the new client sends is lost.
    */
   async updateSettings(patch: Partial<Settings>): Promise<SettingsView> {
     const rest: Record<string, unknown> = isRecord(patch) ? { ...patch } : {}
     delete rest.profiles
     delete rest.defaultProfileBilling
-    const mode = this.deps.settings.get().terminalMode
-    const next = await this.deps.settings.update(rest)
-    if (next.terminalMode !== mode) this.reattach()
-    return withEffective(next)
-  }
-
-  /**
-   * Attaches the terminal to the target shown again, as openTarget did (its session is running). Doesn't bump
-   * openSeq: an open still in flight attaches afterwards, as it would have. One being archived or removed is left
-   * as it is: that detaches it.
-   */
-  private reattach(): void {
-    if (!this.current) return
-    let resolved: ReturnType<Orchestrator['resolve']>
-    try {
-      resolved = this.resolveOpenable(this.current)
-    } catch {
-      return
-    }
-    this.deps.pty.attach(resolved.session, resolved.cwd)
+    return withEffective(await this.deps.settings.update(rest))
   }
 
   /** What getStatus last returned, to whoever asked, and when (ms): the notification watcher reuses a recent one. */

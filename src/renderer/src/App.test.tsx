@@ -1678,22 +1678,55 @@ describe('App appearance', () => {
 })
 
 describe('App terminal mode', () => {
+  const terminal = (): HTMLElement => screen.getByTestId('terminal')
+  const saveMode = async (user: UserEvent, mode: string): Promise<void> => {
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    const dialog = screen.getByRole('dialog', { name: 'Settings' })
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Terminal' }), mode)
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull())
+  }
+
   it('shows a direct terminal by default, and a new classic one once Classic is saved', async () => {
     const user = userEvent.setup()
     const api = repoApi()
+    const openTarget = vi.spyOn(api, 'openTarget')
     render(<App api={api} />)
     await createRepoAndTask(user)
-    const terminal = (): HTMLElement => screen.getByTestId('terminal')
     expect(terminal()).toHaveAttribute('data-direct', 'true')
     const key = terminal().getAttribute('data-session-key')
+    expect(openTarget).toHaveBeenCalledTimes(1) // selecting the task; loading the settings opened nothing again
+    const [target] = openTarget.mock.calls[0]
 
-    await user.click(screen.getByRole('button', { name: 'Settings' }))
-    const dialog = screen.getByRole('dialog', { name: 'Settings' })
-    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'Terminal' }), 'classic')
-    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await saveMode(user, 'classic')
     await waitFor(() => expect(terminal()).toHaveAttribute('data-direct', 'false'))
     expect(terminal().getAttribute('data-session-key')).not.toBe(key) // the terminal resets for the new mode
     expect((await api.getSettings()).terminalMode).toBe('classic')
+    // Main attaches again only now, to the new terminal.
+    await waitFor(() => expect(openTarget).toHaveBeenCalledTimes(2))
+    expect(openTarget).toHaveBeenLastCalledWith(target)
+
+    await saveMode(user, 'classic') // no change
+    expect(openTarget).toHaveBeenCalledTimes(2)
+  })
+
+  it("doesn't start an ended session again when the mode changes", async () => {
+    const user = userEvent.setup()
+    let exit: (code: number) => void = () => {}
+    const api = repoApi({
+      onPtyExit: (cb: (code: number) => void) => {
+        exit = cb
+        return () => {}
+      },
+    })
+    const openTarget = vi.spyOn(api, 'openTarget')
+    render(<App api={api} />)
+    await createRepoAndTask(user)
+    act(() => exit(0))
+    await screen.findByText('Session ended.')
+    await saveMode(user, 'classic')
+    expect(terminal()).toHaveAttribute('data-direct', 'false')
+    expect(openTarget).toHaveBeenCalledTimes(1)
   })
 })
 

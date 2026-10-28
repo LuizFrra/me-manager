@@ -1097,35 +1097,13 @@ describe('Orchestrator: sessions and tabs', () => {
     expect(orch.currentTarget()).toEqual(target)
   })
 
-  it('shows the target again, in the new mode, when the terminal mode changes', async () => {
+  it("doesn't attach again when the terminal mode changes: the renderer opens the target again", async () => {
     const { orch, pty, settings, target } = await withTask()
     await orch.openTarget(target)
-    // The terminal reads the mode when it attaches: the new one must be saved by then.
-    const modes: string[] = []
-    const attach = pty.attach.bind(pty)
-    pty.attach = (session: string, cwd: string): void => {
-      modes.push(settings.get().terminalMode)
-      attach(session, cwd)
-    }
     await orch.updateSettings({ terminalMode: 'classic' })
-    expect(modes).toEqual(['classic'])
-    expect(pty.attaches).toHaveLength(2)
-    expect(pty.attached).toEqual({ session: 'mmt_client-x_my-api_fix', cwd: '/wt/client-x/my-api/fix' })
+    expect(pty.attaches).toHaveLength(1)
+    expect(settings.get().terminalMode).toBe('classic')
     expect(orch.currentTarget()).toEqual(target)
-  })
-
-  it("doesn't attach again when the terminal mode stays, or when nothing is shown", async () => {
-    const { orch, pty, settings, target } = await withTask()
-    await orch.updateSettings({ terminalMode: 'classic' }) // nothing shown
-    expect(pty.attaches).toEqual([])
-    await orch.openTarget(target)
-    await orch.updateSettings({ terminalMode: 'classic', pollIntervalMs: 2000 })
-    await orch.updateSettings({ ...(await orch.getSettings()), terminalFontSize: 15 })
-    expect(pty.attaches).toHaveLength(1)
-    await orch.detachTerminal()
-    await orch.updateSettings({ terminalMode: 'direct' })
-    expect(pty.attaches).toHaveLength(1)
-    expect(settings.get().terminalMode).toBe('direct')
   })
 
   it('detaches the terminal on request, cancelling an open still in flight', async () => {

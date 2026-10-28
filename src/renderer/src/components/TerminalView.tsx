@@ -195,7 +195,8 @@ export function TerminalView({
     const fit = new FitAddon()
     term.loadAddon(fit)
     // OSC 52 is write-only: programs in the pty may set the clipboard but never read it. tmux's mouse selections
-    // are held for an explicit copy; in direct mode tmux makes none (the mouse selects in xterm).
+    // are held for an explicit copy. In direct mode tmux makes none (the mouse selects in xterm): a copy with no
+    // selection name comes from a program, which means the default clipboard, so it is written too.
     // The last drag tmux copied, highlighted once tmux is out of copy mode (in it, tmux highlights it itself) while the
     // selection is still fresh.
     let toDraw: ReturnType<typeof dragRange> | null = null
@@ -209,7 +210,10 @@ export function TerminalView({
     const clipboard = createWriteOnlyClipboard({
       write: (text) => navigator.clipboard.writeText(text),
       hold: (text) => {
-        if (direct) return
+        if (direct) {
+          navigator.clipboard.writeText(text).catch(() => {})
+          return
+        }
         heldRef.current = text
         setFresh(text !== '')
         const drag = dragRef.current
