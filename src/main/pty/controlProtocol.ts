@@ -54,12 +54,19 @@ export function decodeOutput(escaped: Buffer): Buffer {
   return out.subarray(0, n)
 }
 
+/** A reply block being read; `guard` is its `%begin` line's `<time> <number> <flags>`. */
+interface Block {
+  guard: string
+  ours: boolean
+  lines: string[]
+}
+
 /** Feeds raw stdout chunks; calls `emit` for each complete event. Never throws on bad input (warns and skips). */
 export class ControlParser {
   /** The pieces of a line whose `\n` hasn't arrived yet. */
   private partial: Buffer[] = []
-  /** The reply block being read: every line is its text until the `%end`/`%error` with the same number. */
-  private block: { num: string; ours: boolean; lines: string[] } | null = null
+  /** The reply block being read: every line is its text until the `%end`/`%error` with the same guard. */
+  private block: Block | null = null
 
   constructor(
     private readonly emit: (e: ControlEvent) => void,
@@ -94,9 +101,9 @@ export class ControlParser {
     const words = text.split(' ')
     switch (words[0]) {
       case '%begin': {
-        const [, , num, flags] = words
-        if (!num || !/^\d+$/.test(num) || !flags || !/^\d+$/.test(flags)) return this.bad('malformed', text)
-        this.block = { num, ours: (Number(flags) & 1) === 1, lines: [] }
+        const guard = words.slice(1)
+        if (guard.length !== 3 || !guard.every((w) => /^\d+$/.test(w))) return this.bad('malformed', text)
+        this.block = { guard: guard.join(' '), ours: (Number(guard[2]) & 1) === 1, lines: [] }
         return
       }
       case '%session-window-changed': {
@@ -120,12 +127,12 @@ export class ControlParser {
     }
   }
 
-  private blockLine(block: { num: string; ours: boolean; lines: string[] }, line: Buffer): void {
+  private blockLine(block: Block, line: Buffer): void {
     const ok = startsWith(line, END)
     if (ok || startsWith(line, ERROR)) {
-      // Only the guard with this block's number ends it; any other line, even a lookalike, is reply text.
-      const num = line.toString('latin1').split(' ')[2]
-      if (num === block.num) {
+      // Only the guard with this block's time, number and flags ends it; any other line, even a lookalike (a
+      // capture of a pane that printed one), is reply text.
+      if (line.toString('latin1', (ok ? END : ERROR).length) === block.guard) {
         this.block = null
         return this.emit({ kind: 'reply', ok, lines: block.lines, ours: block.ours })
       }

@@ -85,6 +85,15 @@ describe('ControlParser', () => {
     expect(events).toEqual([{ kind: 'reply', ok: true, lines: ['%end 1 8 1', 'last'], ours: true }])
   })
 
+  it('ends a block only at a guard with its time and flags too, so captured text cannot fake the end', () => {
+    // A pane can print a line that looks like a guard, and a capture of it is reply text; its time won't match.
+    const { p, events } = parser()
+    p.feed(b('%begin 1793 7 1\n%end 1792 7 1\n%error 1793 7 0\n%end 1793 7 1 x\nlast\n%end 1793 7 1\n'))
+    expect(events).toEqual([
+      { kind: 'reply', ok: true, lines: ['%end 1792 7 1', '%error 1793 7 0', '%end 1793 7 1 x', 'last'], ours: true },
+    ])
+  })
+
   it('decodes reply lines as UTF-8, across chunks', () => {
     const { p, events } = parser()
     const all = b('%begin 1 2 1\nolá 😀\n%end 1 2 1\n')
