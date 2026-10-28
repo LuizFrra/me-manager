@@ -8,6 +8,7 @@ import { run } from '../exec'
 import { ControlParser, type ControlEvent } from './controlProtocol'
 import {
   HISTORY_LINES,
+  leaveModeCommand,
   parseSnapshot,
   SNAPSHOT_REPLIES,
   snapshotCommand,
@@ -72,6 +73,16 @@ describe('snapshotCommand', () => {
 
   it('refuses a target that could break out of the command line', () => {
     for (const bad of ["a'b", 'a"b', 'a b', 'a;b', 'a\nb', '']) expect(() => snapshotCommand(bad)).toThrow()
+  })
+})
+
+describe('leaveModeCommand', () => {
+  it('leaves copy mode and any other mode of the target pane, in one command', () => {
+    expect(leaveModeCommand('=mm_x:')).toBe('copy-mode -q -t =mm_x:')
+  })
+
+  it('refuses a target that could break out of the command line', () => {
+    for (const bad of ["a'b", 'a"b', 'a b', 'a;b', 'a\nb', '']) expect(() => leaveModeCommand(bad)).toThrow()
   })
 })
 

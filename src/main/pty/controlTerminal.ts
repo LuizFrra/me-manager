@@ -3,7 +3,7 @@ import { StringDecoder } from 'node:string_decoder'
 import type { PtyApi } from '../contracts'
 import { inputCommands } from './controlInput'
 import { ControlParser, type ControlEvent } from './controlProtocol'
-import { parseSnapshot, SNAPSHOT_REPLIES, snapshotCommand, snapshotData } from './snapshot'
+import { leaveModeCommand, parseSnapshot, SNAPSHOT_REPLIES, snapshotCommand, snapshotData } from './snapshot'
 import { isTermSize } from './termSize'
 
 /** A `tmux -C attach` process, talking over pipes. */
@@ -174,15 +174,21 @@ export class ControlTerminal implements PtyApi {
     }
   }
 
-  /** Asks for a snapshot of the session's active pane, which replaces whatever the terminal shows. */
+  /**
+   * Asks for a snapshot of the session's active pane, which replaces whatever the terminal shows. The pane leaves
+   * any mode first, so typed keys reach its program; on a line of its own, so its failure doesn't stop the snapshot.
+   */
   private snapshot(client: Client): void {
+    let leave: string
     let cmd: string
     try {
+      leave = leaveModeCommand(`=${client.session}:`)
       cmd = snapshotCommand(`=${client.session}:`)
     } catch (err) {
       client.out += notice(String(err))
       return
     }
+    this.send(client, leave, 1, this.checked('leaving the mode'))
     const generation = ++client.generation
     client.snapshotting = true
     this.send(client, cmd, SNAPSHOT_REPLIES, (replies) => {

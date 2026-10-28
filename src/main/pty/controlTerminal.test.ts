@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { run } from '../exec'
 import { inputCommands } from './controlInput'
 import { ControlTerminal, type ControlProcess } from './controlTerminal'
-import { parseSnapshot, snapshotCommand, snapshotData, type Snapshot } from './snapshot'
+import { leaveModeCommand, parseSnapshot, snapshotCommand, snapshotData, type Snapshot } from './snapshot'
 
 const ESC = '\x1b'
 
@@ -70,9 +70,9 @@ class FakeControl implements ControlProcess {
     return `%begin 1 ${n} ${flags}\n${body}%${ok ? 'end' : 'error'} 1 ${n} ${flags}\n`
   }
 
-  /** The three replies to a snapshot of `pane` (in `window` of session $1) showing `lines`. */
+  /** The replies to leaving the pane's mode and to a snapshot of `pane` (in `window` of session $1) showing `lines`. */
   snapshot(pane: string, lines: string[], window = '@1'): string {
-    return this.reply(lines) + this.reply() + this.reply([stateLine(pane, window)])
+    return this.reply() + this.reply(lines) + this.reply() + this.reply([stateLine(pane, window)])
   }
 
   /** The attach's own block and the reply to the first refresh-client. */
@@ -129,14 +129,32 @@ describe('ControlTerminal: attach and snapshot', () => {
     term.attach('mm_s', '/work')
     await tick()
     expect([proc().session, proc().cwd]).toEqual(['mm_s', '/work'])
-    expect(proc().lines).toEqual(['refresh-client -C 120x30', snapshotCommand('=mm_s:')])
+    expect(proc().lines).toEqual(['refresh-client -C 120x30', leaveModeCommand('=mm_s:'), snapshotCommand('=mm_s:')])
+  })
+
+  it('takes the pane out of any mode before each snapshot, on a line of its own', async () => {
+    // In copy mode, keys go to tmux's copy-mode key table instead of the program.
+    const { proc } = await shownPane()
+    const before = proc().lines.length
+    await proc().push('%session-window-changed $1 @2\n')
+    expect(proc().lines.slice(before)).toEqual([leaveModeCommand('=mm_s:'), snapshotCommand('=mm_s:')])
+  })
+
+  it('still shows the snapshot when leaving the mode failed, and warns', async () => {
+    const { term, proc, data, warnings } = setup()
+    term.attach('mm_s', '/work')
+    await tick()
+    await proc().push(proc().attached(), proc().reply(['unknown flag -q'], false))
+    await proc().push(proc().reply(['a']), proc().reply(), proc().reply([stateLine('%3')]))
+    expect(data).toEqual([shown('%3', ['a'])])
+    expect(warnings).toEqual([expect.stringContaining('unknown flag -q')])
   })
 
   it('shows the snapshot once its three replies are in', async () => {
     const { term, proc, data } = setup()
     term.attach('mm_s', '/work')
     await tick()
-    await proc().push(proc().attached(), proc().reply(['a', 'b']), proc().reply())
+    await proc().push(proc().attached(), proc().reply(), proc().reply(['a', 'b']), proc().reply())
     expect(data).toEqual([])
     await proc().push(proc().reply([stateLine('%3')]))
     expect(data).toEqual([shown('%3', ['a', 'b'])])
@@ -220,7 +238,12 @@ describe('ControlTerminal: attach and snapshot', () => {
     const before = proc().lines.length
     // The window is known before the new snapshot is in: its pane changes count already.
     await proc().push('%session-window-changed $1 @2\n', '%window-pane-changed @2 %6\n', '%window-pane-changed @1 %4\n')
-    expect(proc().lines.slice(before)).toEqual([snapshotCommand('=mm_s:'), snapshotCommand('=mm_s:')])
+    expect(
+      proc()
+        .lines.slice(before)
+        .filter((l) => l === snapshotCommand('=mm_s:')),
+    ).toHaveLength(2)
+    expect(proc().lines).toHaveLength(before + 4)
   })
 
   it('takes a new snapshot on any window change while no snapshot was shown yet', async () => {
@@ -244,7 +267,7 @@ describe('ControlTerminal: attach and snapshot', () => {
     const { term, proc, data, warnings } = await shownPane()
     await proc().push('%session-window-changed $1 @2\n')
     // tmux answers a group of commands that failed with one %error, and skips the rest of the group.
-    await proc().push(proc().reply(["can't find window: @2", 'more'], false))
+    await proc().push(proc().reply(), proc().reply(["can't find window: @2", 'more'], false))
     expect(data).toEqual([`${ESC}c${ESC}[2m[could not show this tab: can't find window: @2]${ESC}[0m\r\n`])
     data.length = 0
     await proc().push(output('%3', 'still'))
@@ -261,7 +284,7 @@ describe('ControlTerminal: attach and snapshot', () => {
   it('lets a newer snapshot finish when an older one fails', async () => {
     const { proc, data } = await shownPane()
     await proc().push('%session-window-changed $1 @2\n', '%session-window-changed $1 @3\n')
-    await proc().push(proc().reply(["can't find window: @2"], false), output('%3', 'x'))
+    await proc().push(proc().reply(), proc().reply(["can't find window: @2"], false), output('%3', 'x'))
     expect(data).toEqual([])
     await proc().push(proc().snapshot('%6', ['fresh']), output('%6', 'z'))
     expect(data).toEqual([shown('%6', ['fresh']) + 'z'])
@@ -271,7 +294,7 @@ describe('ControlTerminal: attach and snapshot', () => {
     const { term, proc, data } = setup()
     term.attach('mm_s', '/work')
     await tick()
-    await proc().push(proc().attached(), proc().reply(['a']), proc().reply(), proc().reply(['garbage']))
+    await proc().push(proc().attached(), proc().reply(), proc().reply(['a']), proc().reply(), proc().reply(['garbage']))
     expect(data).toEqual([`${ESC}c${ESC}[2m[could not show this tab: tmux sent a malformed pane state]${ESC}[0m\r\n`])
     data.length = 0
     await proc().push(output('%3', 'x'))
@@ -326,7 +349,7 @@ describe('ControlTerminal: input and size', () => {
     await tick()
     term.write('lost too')
     await tick()
-    expect(proc().lines).toHaveLength(2)
+    expect(proc().lines).toHaveLength(3)
   })
 
   it('sizes the client, ignores sizes no terminal has, and remembers the size for the next attach', async () => {

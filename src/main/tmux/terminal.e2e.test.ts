@@ -47,11 +47,17 @@ with open(sys.argv[1], 'ab', buffering=0) as f:
 /**
  * A session running `command` (a shell command line), shown by `engine`. With `ready`, attaches once the pane holds
  * that text: what the program did before then reaches the terminal through the attach (a snapshot in direct mode).
+ * `before` runs just before the attach.
  */
 async function open(
   engine: TerminalEngine,
   command: string,
-  { ready, cols, rows }: { ready?: string; cols?: number; rows?: number } = {},
+  {
+    ready,
+    cols,
+    rows,
+    before,
+  }: { ready?: string; cols?: number; rows?: number; before?: (session: string) => Promise<void> } = {},
 ): Promise<TerminalHarness> {
   const session = `mmt_e2e_${++sessions}`
   await svc.newSession(session, cwd, 'claude', command)
@@ -63,6 +69,7 @@ async function open(
       await pause(25)
     }
   }
+  await before?.(session)
   harness = await TerminalHarness.attach(engine, svc, socket, session, { cols, rows })
   return harness
 }
@@ -222,6 +229,23 @@ describe.skipIf(!hasTmux || !hasScript || process.platform !== 'linux')('termina
       await t.showsPane()
       expect(t.warnings).toEqual([])
       await svc.killSession(other)
+    })
+
+    it('takes a pane left in copy mode out of it, so typed keys reach the program', async () => {
+      // As the classic terminal's wheel scrolling leaves a pane, or a switch to direct while scrolled back.
+      const tmux = (...args: string[]): Promise<string> => run('tmux', ['-L', socket, ...args])
+      const t = await open('direct', `echo ready; exec cat`, {
+        ready: 'ready',
+        before: async (session) => {
+          await tmux('copy-mode', '-t', `=${session}:`)
+          expect((await tmux('display-message', '-p', '-t', `=${session}:`, '#{pane_in_mode}')).trim()).toBe('1')
+        },
+      })
+      t.send('typed\r')
+      await t.until(() => t.screen().filter((l) => l === 'typed').length === 2, 'the program to get the keys')
+      expect(await t.format('#{pane_in_mode}')).toBe('0')
+      await t.showsPane()
+      expect(t.warnings).toEqual([])
     })
 
     it('shows a program on the alternate screen as it is, and the normal screen once it leaves', async () => {

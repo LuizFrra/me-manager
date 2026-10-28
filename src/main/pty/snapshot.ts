@@ -77,13 +77,27 @@ const FIELDS: [string, Id | Field | NumberField, 'id' | 'flag' | 'number'][] = [
 
 const STATE_FORMAT = FIELDS.map(([format]) => `#{${format}}`).join(' ')
 
+/** Refuses a target that would end a word, a command or the line in tmux's command parser. */
+function checkTarget(target: string): void {
+  if (!target || /['"\s;\\]/.test(target)) throw new Error(`Bad tmux target: ${JSON.stringify(target)}`)
+}
+
+/**
+ * One input line for a control client, one reply: takes the pane out of copy mode or any other mode, where keys go
+ * to tmux's key tables instead of the program (the classic terminal's wheel scrolling leaves panes in copy mode).
+ * -q leaves every mode, and is a plain success for a pane in none.
+ */
+export function leaveModeCommand(target: string): string {
+  checkTarget(target)
+  return `copy-mode -q -t ${target}`
+}
+
 /**
  * One input line for a control client: three commands, answered by three replies in this order (SNAPSHOT_REPLIES)
  * when they all succeed. tmux runs them as a group: when one fails, its %error is the line's last reply.
  */
 export function snapshotCommand(target: string): string {
-  // The line goes through tmux's command parser: anything that ends a word, a command or the line is refused.
-  if (!target || /['"\s;\\]/.test(target)) throw new Error(`Bad tmux target: ${JSON.stringify(target)}`)
+  checkTarget(target)
   // -e keeps colours as SGR escapes; -J joins wrapped lines (xterm re-wraps them at its own width). The second
   // capture is the saved normal screen while a program is on the alternate one, and nothing otherwise (-q).
   return [
