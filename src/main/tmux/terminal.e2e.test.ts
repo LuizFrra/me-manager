@@ -201,6 +201,29 @@ describe.skipIf(!hasTmux || !hasScript || process.platform !== 'linux')('termina
       expect(t.warnings).toEqual([])
     })
 
+    it('stays as it is while another session changes its windows and panes', async () => {
+      const t = await open('direct', `seq 1 50; echo session-a; exec cat`, { ready: 'session-a' })
+      await t.showsPane()
+      const resets = (): number => t.raw.split('\x1bc').length - 1
+      const before = resets()
+      // tmux tells every control client about these, whichever session they are attached to.
+      const other = `mmt_e2e_${++sessions}`
+      await svc.newSession(other, cwd, 'claude', 'exec cat')
+      await svc.newWindow(other, cwd, 'w2', 'exec cat')
+      await t.tmux('select-window', '-t', `=${other}:0`)
+      await t.tmux('kill-window', '-t', `=${other}:1`)
+      await t.tmux('new-window', '-t', `=${other}:`, 'exec cat')
+      await t.tmux('split-window', '-t', `=${other}:`, 'exec cat')
+      await t.tmux('select-pane', '-t', `=${other}:.0`)
+      // The notifications came before the echo of what is typed now.
+      t.send('typed\r')
+      await t.until(() => t.screen().filter((l) => l === 'typed').length === 2, 'the program to get the keys')
+      expect(resets()).toBe(before)
+      await t.showsPane()
+      expect(t.warnings).toEqual([])
+      await svc.killSession(other)
+    })
+
     it('shows a program on the alternate screen as it is, and the normal screen once it leaves', async () => {
       await writeFile(join(cwd, 'numbers'), Array.from({ length: 100 }, (_, i) => `number ${i + 1}`).join('\n'))
       // LESS from the environment could hold -X (no alternate screen).

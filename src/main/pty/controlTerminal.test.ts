@@ -14,8 +14,9 @@ const ESC = '\x1b'
 /** Lets the streams deliver what was written to them. */
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
-/** A state line for `pane`: 40x10 on the normal screen, nothing special set. */
-const stateLine = (pane: string): string => `${pane} 0 4294967295 4294967295 1 0 0 0 0 0 0 0 0 0 0 0 0 9 1 10`
+/** A state line for `pane` in `window` of session $1: 40x10 on the normal screen, nothing special set. */
+const stateLine = (pane: string, window = '@1'): string =>
+  `${pane} $1 ${window} 0 4294967295 4294967295 1 0 0 0 0 0 0 0 0 0 0 0 0 9 1 10`
 
 /** What the terminal shows for a snapshot of `pane` with these lines. */
 const shown = (pane: string, lines: string[]): string =>
@@ -69,9 +70,9 @@ class FakeControl implements ControlProcess {
     return `%begin 1 ${n} ${flags}\n${body}%${ok ? 'end' : 'error'} 1 ${n} ${flags}\n`
   }
 
-  /** The three replies to a snapshot of `pane` showing `lines`. */
-  snapshot(pane: string, lines: string[]): string {
-    return this.reply(lines) + this.reply() + this.reply([stateLine(pane)])
+  /** The three replies to a snapshot of `pane` (in `window` of session $1) showing `lines`. */
+  snapshot(pane: string, lines: string[], window = '@1'): string {
+    return this.reply(lines) + this.reply() + this.reply([stateLine(pane, window)])
   }
 
   /** The attach's own block and the reply to the first refresh-client. */
@@ -191,13 +192,43 @@ describe('ControlTerminal: attach and snapshot', () => {
     const { proc, data } = await shownPane()
     await proc().push('%session-window-changed $1 @2\n')
     expect(proc().lines.at(-1)).toBe(snapshotCommand('=mm_s:'))
-    await proc().push(output('%3', 'old'), proc().snapshot('%5', ['w2']), output('%3', 'old'), output('%5', 'new'))
+    await proc().push(
+      output('%3', 'old'),
+      proc().snapshot('%5', ['w2'], '@2'),
+      output('%3', 'old'),
+      output('%5', 'new'),
+    )
     expect(data).toEqual([shown('%5', ['w2']) + 'new'])
     data.length = 0
     await proc().push('%window-pane-changed @2 %6\n')
     expect(proc().lines.filter((l) => l === snapshotCommand('=mm_s:'))).toHaveLength(3)
-    await proc().push(proc().snapshot('%6', ['split']))
+    await proc().push(proc().snapshot('%6', ['split'], '@2'))
     expect(data).toEqual([shown('%6', ['split'])])
+  })
+
+  it('ignores window and pane changes of other sessions and windows', async () => {
+    // tmux tells every control client about every session's window changes and every window's pane changes.
+    const { proc, data } = await shownPane()
+    const before = proc().lines.length
+    await proc().push('%session-window-changed $2 @7\n', '%window-pane-changed @7 %8\n', output('%3', 'x'))
+    expect(proc().lines).toHaveLength(before)
+    expect(data).toEqual(['x'])
+  })
+
+  it('follows its own session to a new window, and that window’s pane changes', async () => {
+    const { proc } = await shownPane()
+    const before = proc().lines.length
+    // The window is known before the new snapshot is in: its pane changes count already.
+    await proc().push('%session-window-changed $1 @2\n', '%window-pane-changed @2 %6\n', '%window-pane-changed @1 %4\n')
+    expect(proc().lines.slice(before)).toEqual([snapshotCommand('=mm_s:'), snapshotCommand('=mm_s:')])
+  })
+
+  it('takes a new snapshot on any window change while no snapshot was shown yet', async () => {
+    const { term, proc } = setup()
+    term.attach('mm_s', '/work')
+    await tick()
+    await proc().push(proc().attached(), '%session-window-changed $9 @9\n')
+    expect(proc().lines.filter((l) => l === snapshotCommand('=mm_s:'))).toHaveLength(2)
   })
 
   it('discards a snapshot that a newer one replaced, and shows only the newer one', async () => {

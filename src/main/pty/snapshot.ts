@@ -4,6 +4,9 @@ export const HISTORY_LINES = 10_000
 /** A pane's terminal state, as tmux holds it (rows and columns are 0-based). */
 export interface PaneState {
   pane: string
+  /** The session ('$1') and window ('@2') the pane was shown in. */
+  session: string
+  window: string
   alternate: boolean
   /** Where the cursor was when the program switched to the alternate screen (UNSET when it never did). */
   altSavedX: number
@@ -39,11 +42,17 @@ export interface Snapshot {
 const UNSET = 4294967295
 
 type Field = { [K in keyof PaneState]: PaneState[K] extends boolean ? K : never }[keyof PaneState]
-type NumberField = Exclude<keyof PaneState, Field | 'pane'>
+type Id = 'pane' | 'session' | 'window'
+type NumberField = Exclude<keyof PaneState, Field | Id>
+
+/** How each id starts. */
+const SIGILS: Record<Id, string> = { pane: '%', session: '$', window: '@' }
 
 /** The state line's fields, in order: the tmux format and the PaneState key it fills. */
-const FIELDS: [string, 'pane' | Field | NumberField, 'pane' | 'flag' | 'number'][] = [
-  ['pane_id', 'pane', 'pane'],
+const FIELDS: [string, Id | Field | NumberField, 'id' | 'flag' | 'number'][] = [
+  ['pane_id', 'pane', 'id'],
+  ['session_id', 'session', 'id'],
+  ['window_id', 'window', 'id'],
   ['alternate_on', 'alternate', 'flag'],
   ['alternate_saved_x', 'altSavedX', 'number'],
   ['alternate_saved_y', 'altSavedY', 'number'],
@@ -92,8 +101,8 @@ function parseState(line: string | undefined): PaneState | null {
   const state: Record<string, string | boolean | number> = {}
   for (const [i, [, key, kind]] of FIELDS.entries()) {
     const word = words[i] as string
-    if (kind === 'pane') {
-      if (!/^%\d+$/.test(word)) return null
+    if (kind === 'id') {
+      if (!word.startsWith(SIGILS[key as Id]) || !/^.\d+$/.test(word)) return null
       state[key] = word
     } else if (kind === 'flag') {
       if (word !== '0' && word !== '1') return null

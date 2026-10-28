@@ -122,7 +122,7 @@ describe('ControlParser', () => {
     const { p, events } = parser()
     p.feed(b('%session-window-changed $0 @1\n%window-pane-changed @1 %3\n'))
     expect(events).toEqual([
-      { kind: 'window-changed', window: '@1' },
+      { kind: 'window-changed', session: '$0', window: '@1' },
       { kind: 'pane-changed', window: '@1', pane: '%3' },
     ])
   })
@@ -154,11 +154,11 @@ describe('ControlParser', () => {
       p.feed(
         b(
           'garbage here\n%output\n%output nopane\n%begin x\n%session-window-changed $0\n' +
-            '%window-pane-changed @1\n\n%output %0 ok\n',
+            '%session-window-changed 0 @1\n%window-pane-changed @1\n\n%output %0 ok\n',
         ),
       ),
     ).not.toThrow()
-    expect(warn).toHaveBeenCalledTimes(7) // the empty line too
+    expect(warn).toHaveBeenCalledTimes(8) // the empty line too
     expect(events).toEqual([{ kind: 'output', pane: '%0', data: b('ok') }])
   })
 

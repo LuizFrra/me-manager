@@ -21,6 +21,8 @@ const ESC = '\x1b'
 /** A pane on the normal screen with nothing special set: 40x10, cursor visible, wrapping, whole-screen region. */
 const plain: PaneState = {
   pane: '%3',
+  session: '$1',
+  window: '@2',
   alternate: false,
   altSavedX: 4294967295,
   altSavedY: 4294967295,
@@ -58,7 +60,9 @@ describe('snapshotCommand', () => {
     expect(parts).toHaveLength(SNAPSHOT_REPLIES)
     expect(parts[0]).toBe(`capture-pane -p -e -J -S -${HISTORY_LINES} -t =mm_x:`)
     expect(parts[1]).toBe('capture-pane -p -e -J -a -q -t =mm_x:')
-    expect(parts[2]).toMatch(/^display-message -p -t =mm_x: '#\{pane_id\} #\{alternate_on\} [^']*#\{pane_height\}'$/)
+    expect(parts[2]).toMatch(
+      /^display-message -p -t =mm_x: '#\{pane_id\} #\{session_id\} #\{window_id\} #\{alternate_on\} [^']*#\{pane_height\}'$/,
+    )
     expect(cmd).not.toContain('\n')
   })
 
@@ -73,7 +77,7 @@ describe('snapshotCommand', () => {
 
 describe('parseSnapshot', () => {
   const stateLine = (alt: 0 | 1, extra = ''): string =>
-    `%7 ${alt} ${alt ? '2 3' : '4294967295 4294967295'} 0 5 6 1 1 1 1 1 1 1 1 1 2 8 0 10${extra}`
+    `%7 $4 @5 ${alt} ${alt ? '2 3' : '4294967295 4294967295'} 0 5 6 1 1 1 1 1 1 1 1 1 2 8 0 10${extra}`
 
   it('reads the normal screen and every state field', () => {
     const s = parseSnapshot([['1', '2', ''], [], [stateLine(0)]])
@@ -82,6 +86,8 @@ describe('parseSnapshot', () => {
       alternate: null,
       state: {
         pane: '%7',
+        session: '$4',
+        window: '@5',
         alternate: false,
         altSavedX: 4294967295,
         altSavedY: 4294967295,
@@ -124,6 +130,8 @@ describe('parseSnapshot', () => {
     expect(parseSnapshot([['a'], [], ['']])).toBeNull()
     expect(parseSnapshot([['a'], [], [stateLine(0, ' 1')]])).toBeNull()
     expect(parseSnapshot([['a'], [], [stateLine(0).replace('%7', '7')]])).toBeNull()
+    expect(parseSnapshot([['a'], [], [stateLine(0).replace('$4', '4')]])).toBeNull()
+    expect(parseSnapshot([['a'], [], [stateLine(0).replace('@5', '%5')]])).toBeNull()
     expect(parseSnapshot([['a'], [], [stateLine(0).replace(' 0 5 ', ' x 5 ')]])).toBeNull()
     expect(parseSnapshot([['a'], [], [stateLine(0).replace(' 0 5 ', ' 2 5 ')]])).toBeNull()
   })
@@ -261,7 +269,10 @@ describe.skipIf(!hasTmux)('snapshot of a real tmux pane', () => {
 
   it('shows the normal screen as tmux holds it, with the cursor, and the history in the scrollback', async () => {
     await session('mmsnap_n', `seq 1 30; printf '\\033[5;10Hx'; exec cat`, 'x')
-    const term = await show(await snapshotOf('mmsnap_n'))
+    const s = await snapshotOf('mmsnap_n')
+    const ids = await tmux('display-message', '-p', '-t', '=mmsnap_n:', '#{pane_id} #{session_id} #{window_id}')
+    expect(`${s.state.pane} ${s.state.session} ${s.state.window}`).toBe(ids.trim())
+    const term = await show(s)
     const pane = (await tmux('capture-pane', '-p', '-t', '=mmsnap_n:')).split('\n').slice(0, 10)
     expect(screen(term)).toEqual(pane.map((l) => l.trimEnd()))
     expect(term.buffer.active.cursorX).toBe(10) // just after the 'x' printed at column 10 (1-based)

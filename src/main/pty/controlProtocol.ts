@@ -4,9 +4,9 @@ export type ControlEvent =
   | { kind: 'output'; pane: string; data: Buffer }
   /** A `%begin`…`%end`/`%error` block; `ours` when this client sent the command (flags & 1). */
   | { kind: 'reply'; ok: boolean; lines: string[]; ours: boolean }
-  /** `%session-window-changed $s @w`: the session's current window is now '@w'. */
-  | { kind: 'window-changed'; window: string }
-  /** `%window-pane-changed @w %p`: the window's active pane is now '%p'. */
+  /** `%session-window-changed $s @w`: session '$s' (any session, not only the attached one) is now on '@w'. */
+  | { kind: 'window-changed'; session: string; window: string }
+  /** `%window-pane-changed @w %p`: window '@w' (any window) has '%p' as its active pane now. */
   | { kind: 'pane-changed'; window: string; pane: string }
   /** `%exit [reason]`: the client is leaving; the reason may be ''. */
   | { kind: 'exit'; reason: string }
@@ -107,9 +107,9 @@ export class ControlParser {
         return
       }
       case '%session-window-changed': {
-        const window = words[2]
-        if (!window?.startsWith('@')) return this.bad('malformed', text)
-        return this.emit({ kind: 'window-changed', window })
+        const [, session, window] = words
+        if (!session?.startsWith('$') || !window?.startsWith('@')) return this.bad('malformed', text)
+        return this.emit({ kind: 'window-changed', session, window })
       }
       case '%window-pane-changed': {
         const [, window, pane] = words

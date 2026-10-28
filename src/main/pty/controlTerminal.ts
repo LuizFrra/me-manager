@@ -40,6 +40,10 @@ interface Client {
   pending: PendingLine[]
   /** The pane shown (its output goes to the terminal), none until a snapshot came in. */
   pane: string | null
+  /** The session's id ('$1'), from a snapshot shown; none until one was. */
+  sessionId: string | null
+  /** The session's current window ('@2'): from the last snapshot shown, or the session's last window change. */
+  window: string | null
   /** The latest snapshot asked for; an older one's result is stale. */
   generation: number
   /** A snapshot is on its way: the pane's output until then is in it. */
@@ -80,6 +84,8 @@ export class ControlTerminal implements PtyApi {
       decoder: new StringDecoder('utf8'),
       pending: [],
       pane: null,
+      sessionId: null,
+      window: null,
       generation: 0,
       snapshotting: false,
       out: '',
@@ -152,8 +158,15 @@ export class ControlTerminal implements PtyApi {
         client.pending.shift()
         return line.done(line.replies)
       }
+      // tmux tells every control client about every session's window changes and every window's pane changes; a
+      // new snapshot resets the terminal (scroll position, selection), so only ours take one. Before a snapshot
+      // said which session and window are ours, any change may be: one more snapshot is harmless then.
       case 'window-changed':
+        if (client.sessionId !== null && e.session !== client.sessionId) return
+        client.window = e.window
+        return this.snapshot(client)
       case 'pane-changed':
+        if (client.window !== null && e.window !== client.window) return
         return this.snapshot(client)
       case 'exit':
         client.exiting = true
@@ -184,6 +197,8 @@ export class ControlTerminal implements PtyApi {
         return
       }
       client.pane = snapshot.state.pane
+      client.sessionId = snapshot.state.session
+      client.window = snapshot.state.window
       client.decoder = new StringDecoder('utf8')
       client.out += snapshotData(snapshot)
     })
