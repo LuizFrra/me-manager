@@ -21,6 +21,7 @@ interface FakeTerm {
   pasted: string[]
   linkProviders: ILinkProvider[]
   input?: (data: string) => void
+  binary?: (data: string) => void
   selected: [number, number, number][]
   buffer: unknown
   title?: (title: string) => void
@@ -79,6 +80,11 @@ vi.mock('@xterm/xterm', () => ({
     }
     onData(cb: (data: string) => void): { dispose: () => void } {
       this.input = cb
+      return { dispose: () => {} }
+    }
+    binary?: (data: string) => void
+    onBinary(cb: (data: string) => void): { dispose: () => void } {
+      this.binary = cb
       return { dispose: () => {} }
     }
     paste(text: string): void {
@@ -892,5 +898,15 @@ describe('TerminalView in direct mode', () => {
     fireEvent.wheel(host, { deltaY: -120 })
     await act(async () => terms.at(-1)?.input?.('b'))
     expect(onLeaveCopyMode).toHaveBeenCalledTimes(1) // classic again: copy mode is left first
+  })
+})
+
+describe('TerminalView mouse reports in the old encoding', () => {
+  // A program that asked for the mouse without SGR (1006) gets X10-style reports, which xterm emits on onBinary.
+  it('sends them on in direct mode', () => {
+    const api = { ptyWrite: vi.fn(), ptyResize: vi.fn(), onPtyData: () => () => {} }
+    render(<TerminalView api={api} sessionKey="s" fontSize={13} direct />)
+    act(() => terms.at(-1)?.binary?.('\x1b[M %$'))
+    expect(api.ptyWrite).toHaveBeenCalledWith('\x1b[M %$')
   })
 })

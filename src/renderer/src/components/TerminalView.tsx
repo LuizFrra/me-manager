@@ -428,6 +428,10 @@ export function TerminalView({
 
     const offData = api.onPtyData((data) => term.write(data))
     const input = term.onData(send)
+    // Mouse reports in the old X10 encoding (a program that asked for the mouse without SGR) come on onBinary. In
+    // classic mode tmux always asks for SGR. Their bytes stay below 0x80 up to column 95, past which that encoding
+    // can't be sent as text anyway.
+    const binary = term.onBinary(send)
     // Direct mode: xterm's own view, scrolled back when it is above the bottom, after a scroll or new output.
     const followView = (): void => {
       const { viewportY, baseY } = term.buffer.active
@@ -476,6 +480,7 @@ export function TerminalView({
       settled.cancel()
       offData()
       input.dispose()
+      binary.dispose()
       pendingRef.current = null // a leave still on its way must not type into the next terminal
       title.dispose()
       for (const event of viewEvents) event.dispose()

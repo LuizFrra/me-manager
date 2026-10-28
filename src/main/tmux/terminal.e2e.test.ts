@@ -224,6 +224,13 @@ describe.skipIf(!hasTmux || !hasScript || process.platform !== 'linux')('termina
       await t.until(async () => (await asked.read()) === '\x1b[<0;5;4M\x1b[<0;5;4m', 'the click to reach the program')
       await t.close()
 
+      // Without SGR (1006) the reports are in the old X10 encoding, which xterm emits on onBinary.
+      const x10 = dumper('1000')
+      const v = await open('direct', x10.command, { ready: 'ready' })
+      await v.drag(3, 4, 4)
+      await v.until(async () => (await x10.read()) === '\x1b[M %$\x1b[M#%$', 'the X10 click to reach the program')
+      await v.close()
+
       const not = dumper('-')
       const u = await open('direct', not.command, { ready: 'ready' })
       expect(u.term.modes.mouseTrackingMode).toBe('none')

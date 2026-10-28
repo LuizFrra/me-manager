@@ -67,9 +67,10 @@ export class TerminalHarness {
     this.term.unicode.register(SYSTEM_UNICODE)
     this.term.unicode.activeVersion = SYSTEM_UNICODE.version
     if (engine === 'classic') this.term.onTitleChange((title) => (this.mode = parseTmuxTitle(title) ?? this.mode))
-    // xterm's answers to queries, its pastes and mouse reports. Not onBinary (mouse reports in the X10 encoding),
-    // which TerminalView doesn't take either.
+    // xterm's answers to queries, its pastes and mouse reports; onBinary has mouse reports in the old X10
+    // encoding. TerminalView takes both the same way.
     this.term.onData((data) => this.send(data))
+    this.term.onBinary((data) => this.send(data))
   }
 
   /** Attaches to `session` (already started on `svc`'s socket) with a `cols` x `rows` terminal. */
