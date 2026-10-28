@@ -1,7 +1,7 @@
 const PASTE_START = '\x1b[200~'
 const PASTE_END = '\x1b[201~'
-/** The paste buffer a paste goes through; paste-buffer -d deletes it once pasted. */
-const PASTE_BUFFER = 'mm-paste'
+/** The paste buffer a paste into `pane` goes through (one per pane); paste-buffer -d deletes it once pasted. */
+const pasteBuffer = (pane: string): string => `mm-paste-${pane.slice(1)}`
 /** Most bytes in one send-keys command. */
 const KEYS_MAX = 256
 /** Most characters (UTF-16 units) of a paste in one set-buffer command. */
@@ -28,20 +28,26 @@ export function inputCommands(pane: string, data: string): string[] {
 
 function pasteCommands(pane: string, raw: string): string[] {
   // Terminals send a newline as CR; the buffer holds LF, which paste-buffer turns back into CR. A tmux string
-  // can't hold NUL.
-  const text = raw.replace(/\r\n?/g, '\n').replace(/\0/g, '')
+  // can't hold NUL. A bracket marker inside the text would end the paste early and run the rest as typed
+  // (paste-jacking), so remove them, again until none is left, as removing one can join the pieces of another.
+  let text = raw.replace(/\r\n?/g, '\n').replace(/\0/g, '')
+  for (let prev = ''; prev !== text;) {
+    prev = text
+    text = text.replaceAll(PASTE_START, '').replaceAll(PASTE_END, '')
+  }
   if (!text) return []
+  const buffer = pasteBuffer(pane)
   const cmds: string[] = []
   for (let i = 0; i < text.length;) {
     let end = Math.min(i + PASTE_CHUNK, text.length)
     // Don't cut a surrogate pair: the half on each side would be lost.
     const last = text.charCodeAt(end - 1)
     if (end < text.length && last >= 0xd800 && last <= 0xdbff) end--
-    cmds.push(`set-buffer ${i === 0 ? '' : '-a '}-b ${PASTE_BUFFER} ${tmuxQuote(text.slice(i, end))}`)
+    cmds.push(`set-buffer ${i === 0 ? '' : '-a '}-b ${buffer} ${tmuxQuote(text.slice(i, end))}`)
     i = end
   }
   // -p: tmux adds the brackets only if the pane's program turned bracketed paste on.
-  cmds.push(`paste-buffer -p -d -b ${PASTE_BUFFER} -t ${pane}`)
+  cmds.push(`paste-buffer -p -d -b ${buffer} -t ${pane}`)
   return cmds
 }
 

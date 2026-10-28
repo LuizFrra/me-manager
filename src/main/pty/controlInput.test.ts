@@ -54,15 +54,15 @@ describe('inputCommands: raw bytes', () => {
 describe('inputCommands: pastes', () => {
   it('pastes through a buffer that tmux brackets only if the program asked', () => {
     expect(inputCommands('%3', paste('hello'))).toEqual([
-      'set-buffer -b mm-paste "hello"',
-      'paste-buffer -p -d -b mm-paste -t %3',
+      'set-buffer -b mm-paste-3 "hello"',
+      'paste-buffer -p -d -b mm-paste-3 -t %3',
     ])
   })
 
   it('turns CRLF and lone CR into LF (tmux turns LF into CR when pasting)', () => {
     expect(inputCommands('%3', paste('a\r\nb\rc\nd'))).toEqual([
-      'set-buffer -b mm-paste "a\\012b\\012c\\012d"',
-      'paste-buffer -p -d -b mm-paste -t %3',
+      'set-buffer -b mm-paste-3 "a\\012b\\012c\\012d"',
+      'paste-buffer -p -d -b mm-paste-3 -t %3',
     ])
   })
 
@@ -72,8 +72,8 @@ describe('inputCommands: pastes', () => {
 
   it('drops NUL, which a tmux string cannot hold', () => {
     expect(inputCommands('%3', paste('a\0b'))).toEqual([
-      'set-buffer -b mm-paste "ab"',
-      'paste-buffer -p -d -b mm-paste -t %3',
+      'set-buffer -b mm-paste-3 "ab"',
+      'paste-buffer -p -d -b mm-paste-3 -t %3',
     ])
     expect(inputCommands('%3', paste('\0'))).toEqual([])
   })
@@ -82,13 +82,35 @@ describe('inputCommands: pastes', () => {
     const text = Array.from({ length: 10 * 1024 }, (_, i) => String.fromCharCode(97 + (i % 26))).join('')
     const cmds = inputCommands('%3', paste(text))
     expect(cmds).toHaveLength(4)
-    expect(cmds[0]).toMatch(/^set-buffer -b mm-paste "/)
-    expect(cmds[1]).toMatch(/^set-buffer -a -b mm-paste "/)
-    expect(cmds[2]).toMatch(/^set-buffer -a -b mm-paste "/)
-    expect(cmds[3]).toBe('paste-buffer -p -d -b mm-paste -t %3')
+    expect(cmds[0]).toMatch(/^set-buffer -b mm-paste-3 "/)
+    expect(cmds[1]).toMatch(/^set-buffer -a -b mm-paste-3 "/)
+    expect(cmds[2]).toMatch(/^set-buffer -a -b mm-paste-3 "/)
+    expect(cmds[3]).toBe('paste-buffer -p -d -b mm-paste-3 -t %3')
     const chunks = cmds.slice(0, 3).map((c) => c.slice(c.indexOf('"') + 1, -1))
     expect(chunks.map((c) => c.length)).toEqual([4096, 4096, 2048])
     expect(chunks.join('')).toBe(text)
+  })
+
+  it('uses a buffer per pane, so pastes into two panes cannot mix', () => {
+    expect(inputCommands('%12', paste('x'))).toEqual([
+      'set-buffer -b mm-paste-12 "x"',
+      'paste-buffer -p -d -b mm-paste-12 -t %12',
+    ])
+  })
+
+  it('removes bracket markers inside the pasted text, so it cannot end the paste early', () => {
+    const inner = `a${ESC}[201~rm -rf x\r${ESC}[200~b`
+    expect(inputCommands('%3', paste(inner))).toEqual([
+      'set-buffer -b mm-paste-3 "arm -rf x\\012b"',
+      'paste-buffer -p -d -b mm-paste-3 -t %3',
+    ])
+  })
+
+  it('removes markers that removing others (or NUL) would put together', () => {
+    // Each of these is only markers once the inner one (or the NUL) is gone.
+    for (const inner of [`${ESC}[201~`, `${ESC}[20${ESC}[201~1~`, `${ESC}[2\x0001~`, `${ESC}[201${ESC}[200~~`]) {
+      expect(inputCommands('%3', paste(inner))).toEqual([])
+    }
   })
 
   it('does not split a surrogate pair between chunks', () => {
