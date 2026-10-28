@@ -17,7 +17,8 @@ export interface PaneState {
   keypad: boolean
   mouseStandard: boolean
   mouseButton: boolean
-  mouseAny: boolean
+  /** Every motion reported (1003). */
+  mouseAll: boolean
   mouseSgr: boolean
   mouseUtf8: boolean
   origin: boolean
@@ -54,7 +55,8 @@ const FIELDS: [string, 'pane' | Field | NumberField, 'pane' | 'flag' | 'number']
   ['keypad_flag', 'keypad', 'flag'],
   ['mouse_standard_flag', 'mouseStandard', 'flag'],
   ['mouse_button_flag', 'mouseButton', 'flag'],
-  ['mouse_any_flag', 'mouseAny', 'flag'],
+  // Not mouse_any_flag: that one is set by any of the mouse modes.
+  ['mouse_all_flag', 'mouseAll', 'flag'],
   ['mouse_sgr_flag', 'mouseSgr', 'flag'],
   ['mouse_utf8_flag', 'mouseUtf8', 'flag'],
   ['origin_flag', 'origin', 'flag'],
@@ -137,7 +139,7 @@ export function snapshotData(s: Snapshot): string {
   if (state.keypadCursor) out += '\x1b[?1h'
   if (state.mouseStandard) out += '\x1b[?1000h'
   if (state.mouseButton) out += '\x1b[?1002h'
-  if (state.mouseAny) out += '\x1b[?1003h'
+  if (state.mouseAll) out += '\x1b[?1003h'
   if (state.mouseSgr) out += '\x1b[?1006h'
   if (state.mouseUtf8) out += '\x1b[?1005h'
   if (!state.cursorVisible) out += '\x1b[?25l'

@@ -32,7 +32,7 @@ const plain: PaneState = {
   keypad: false,
   mouseStandard: false,
   mouseButton: false,
-  mouseAny: false,
+  mouseAll: false,
   mouseSgr: false,
   mouseUtf8: false,
   origin: false,
@@ -93,7 +93,7 @@ describe('parseSnapshot', () => {
         keypad: true,
         mouseStandard: true,
         mouseButton: true,
-        mouseAny: true,
+        mouseAll: true,
         mouseSgr: true,
         mouseUtf8: true,
         origin: true,
@@ -148,7 +148,7 @@ describe('snapshotData', () => {
       [{ keypadCursor: true }, `${ESC}[?1h`],
       [{ mouseStandard: true }, `${ESC}[?1000h`],
       [{ mouseButton: true }, `${ESC}[?1002h`],
-      [{ mouseAny: true }, `${ESC}[?1003h`],
+      [{ mouseAll: true }, `${ESC}[?1003h`],
       [{ mouseSgr: true }, `${ESC}[?1006h`],
       [{ mouseUtf8: true }, `${ESC}[?1005h`],
     ]
@@ -268,6 +268,21 @@ describe.skipIf(!hasTmux)('snapshot of a real tmux pane', () => {
     expect(term.buffer.active.cursorY).toBe(4)
     expect(term.buffer.active.length).toBeGreaterThan(10)
     expect(line(term, 0)).toBe('1')
+    term.dispose()
+  })
+
+  it('turns on only the mouse modes the program asked for', async () => {
+    // tmux's mouse_any_flag is set by any mouse mode; 1003 (every motion reported) is its mouse_all_flag.
+    await session('mmsnap_m', `printf '\\033[?1000h\\033[?1006hmouse'; exec cat`, 'mouse')
+    const s = await snapshotOf('mmsnap_m')
+    expect([s.state.mouseStandard, s.state.mouseButton, s.state.mouseAll, s.state.mouseSgr]).toEqual([
+      true,
+      false,
+      false,
+      true,
+    ])
+    const term = await show(s)
+    expect(term.modes.mouseTrackingMode).toBe('vt200')
     term.dispose()
   })
 
