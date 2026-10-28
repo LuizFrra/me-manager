@@ -13,6 +13,7 @@ import {
   type Settings,
   type TabInfo,
   type Target,
+  type TerminalMode,
   type UpdateStrategy,
 } from '../../../shared/types'
 import { slugify } from '../../../shared/naming'
@@ -761,6 +762,11 @@ const APPEARANCE_CHOICES: { value: Appearance; label: string }[] = [
   { value: 'light', label: 'Light' },
 ]
 
+const TERMINAL_MODE_CHOICES: { value: TerminalMode; label: string }[] = [
+  { value: 'direct', label: 'Direct (recommended)' },
+  { value: 'classic', label: 'Classic (tmux attach)' },
+]
+
 /**
  * Edits the app settings. Fields are checked as you type; Save is off while one is invalid, and a button beside it
  * counts them and takes you to the first (it may be scrolled out of view). Esc cancels; with changes made, it asks
@@ -811,6 +817,7 @@ export function SettingsDialog(props: {
         | 'showStatusBar'
         | 'taskTemplates'
         | 'appearance'
+        | 'terminalMode'
       >,
     ) =>
     (e: React.ChangeEvent<HTMLInputElement>): void =>
@@ -1028,6 +1035,24 @@ export function SettingsDialog(props: {
               )}
             </Field>
           </div>
+          <Field
+            label="Terminal"
+            hint="Direct shows each program's own output; Classic attaches a tmux client, as before. Switching re-opens the terminal."
+          >
+            {(aria) => (
+              <select
+                {...aria}
+                value={form.terminalMode}
+                onChange={(e) => setForm((f) => ({ ...f, terminalMode: e.target.value as TerminalMode }))}
+              >
+                {TERMINAL_MODE_CHOICES.map(({ value, label }) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
           <div className="settings-field">
             <label className="checkbox">
               <input

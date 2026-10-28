@@ -1133,6 +1133,7 @@ button:disabled {
   gap: 6px;
 }
 .settings-input input,
+.settings-input select,
 .settings-input textarea {
   flex: 1;
   min-width: 0;
@@ -1153,6 +1154,7 @@ button:disabled {
   color: var(--muted);
 }
 .settings-input input:focus,
+.settings-input select:focus,
 .settings-input textarea:focus {
   border-color: var(--border-strong);
 }

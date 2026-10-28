@@ -102,6 +102,32 @@ describe('SettingsDialog: appearance', () => {
   })
 })
 
+describe('SettingsDialog: terminal mode', () => {
+  it('shows Direct by default and saves Classic', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => {})
+    render(<SettingsDialog settings={DEFAULT_SETTINGS} onSave={onSave} onCancel={vi.fn()} />)
+    const mode = screen.getByRole('combobox', { name: 'Terminal' })
+    expect(mode).toHaveValue('direct')
+    expect(screen.getByRole('option', { name: 'Direct (recommended)' })).toHaveProperty('selected', true)
+    expect(mode).toHaveAccessibleDescription(/Switching re-opens the terminal/)
+    await user.selectOptions(mode, 'Classic (tmux attach)')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ terminalMode: 'classic' }))
+  })
+
+  it('shows the saved mode', () => {
+    render(
+      <SettingsDialog
+        settings={{ ...DEFAULT_SETTINGS, terminalMode: 'classic' }}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('combobox', { name: 'Terminal' })).toHaveValue('classic')
+  })
+})
+
 describe('SettingsDialog: claude arguments with a line break', () => {
   const settings = {
     ...DEFAULT_SETTINGS,
