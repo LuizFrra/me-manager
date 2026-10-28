@@ -1,22 +1,10 @@
 import type { Readable, Writable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
+import type { PtyApi } from '../contracts'
 import { inputCommands } from './controlInput'
 import { ControlParser, type ControlEvent } from './controlProtocol'
 import { parseSnapshot, SNAPSHOT_REPLIES, snapshotCommand, snapshotData } from './snapshot'
 import { isTermSize } from './termSize'
-
-/** A terminal showing a tmux session's active pane. */
-export interface SessionTerminal {
-  /** Starts showing `session`, replacing (killing) any previous one. */
-  attach(session: string, cwd: string): void
-  /** Stops showing the current session without emitting exit. */
-  detach(): void
-  write(data: string): void
-  /** Remembers the size and resizes the current client, if any. */
-  resize(cols: number, rows: number): void
-  onData(cb: (data: string) => void): () => void
-  onExit(cb: (code: number) => void): () => void
-}
 
 /** A `tmux -C attach` process, talking over pipes. */
 export interface ControlProcess {
@@ -59,7 +47,7 @@ const notice = (why: string): string => `\x1bc\x1b[2m[could not show this tab: $
  * pane's output, and a new snapshot whenever the active window or pane changes. Input goes to the pane as tmux
  * commands. Never throws on what tmux says or on a broken pipe.
  */
-export class ControlTerminal implements SessionTerminal {
+export class ControlTerminal implements PtyApi {
   private client: Client | null = null
   private cols = 120
   private rows = 30

@@ -161,7 +161,6 @@ export interface TmuxApi {
   captureTail(windowId: string, lines: number): Promise<string | null>
   selectWindow(session: string, index: number): Promise<void>
   killWindow(session: string, index: number): Promise<void>
-  attachCommand(session: string): { file: string; args: string[] }
   /**
    * `#{window_activity}` (the last time it printed anything, in Unix seconds) of the window named `windowName` in
    * every session on our socket, by session name, from one `list-windows -a` call. {} when the server isn't running.
@@ -230,13 +229,14 @@ export interface PromptFilesApi {
   release(path: string, immediately?: boolean): void
 }
 
+/** The terminal: shows one tmux session at a time. */
 export interface PtyApi {
-  /** Spawns file/args in a pty, replacing (killing) any previous one. */
-  attach(file: string, args: string[], cwd: string): void
-  /** Kills the current pty without emitting exit. */
+  /** Shows `session` (its active window), replacing (killing) any session shown before. */
+  attach(session: string, cwd: string): void
+  /** Stops showing the current session without emitting exit. */
   detach(): void
   write(data: string): void
-  /** Remembers the size and resizes the current pty, if any. */
+  /** Remembers the size and resizes the current one, if any. */
   resize(cols: number, rows: number): void
   onData(cb: (data: string) => void): () => void
   onExit(cb: (code: number) => void): () => void

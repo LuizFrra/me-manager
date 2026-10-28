@@ -405,9 +405,6 @@ export class FakeTmux implements TmuxApi {
     s.active = 0
     if (s.windows.length === 0) this.sessions.delete(session)
   }
-  attachCommand(session: string): { file: string; args: string[] } {
-    return { file: 'tmux', args: ['attach', session] }
-  }
   /** `window_activity` of each session's claude window (Unix seconds); sessions without one are left out. */
   activity = new Map<string, number>()
   /** Screen text by session, for capturePane. */
@@ -454,10 +451,13 @@ export class FakeTmux implements TmuxApi {
 }
 
 export class FakePty implements PtyApi {
-  attached: { file: string; args: string[]; cwd: string } | null = null
+  attached: { session: string; cwd: string } | null = null
+  /** Every attach, oldest first. */
+  attaches: { session: string; cwd: string }[] = []
   detached = 0
-  attach(file: string, args: string[], cwd: string): void {
-    this.attached = { file, args, cwd }
+  attach(session: string, cwd: string): void {
+    this.attached = { session, cwd }
+    this.attaches.push({ session, cwd })
   }
   detach(): void {
     this.attached = null

@@ -31,7 +31,10 @@ import {
 } from './paths'
 import { ProfileFolders } from './profileFolders'
 import { PromptFiles } from './promptFiles'
+import { ControlTerminal } from './pty/controlTerminal'
 import { PtyService } from './pty/ptyService'
+import { spawnControl } from './pty/spawnControl'
+import { TerminalSwitch } from './pty/terminalSwitch'
 import { ensureUtf8Locale, loadLoginShellPath } from './shellEnv'
 import { FileStore } from './store/fileStore'
 import { BudgetAlertStore } from './store/budgetAlerts'
@@ -43,7 +46,8 @@ import { claudeConfigDir, UsageService } from './usage/usageService'
 import { isAppUrl, isHttpUrl } from './urls'
 
 let mainWindow: BrowserWindow | null = null
-let ptyService: PtyService | null = null
+/** The terminal (in the mode the settings ask for), for the quit handler. */
+let terminal: TerminalSwitch | null = null
 /** The orchestrator once started, for the quit handler. */
 let started: Orchestrator | null = null
 /** Set once quitting waited for the changes still running (or the user quit a second time): the next quit goes. */
@@ -138,9 +142,16 @@ async function bootstrap(): Promise<void> {
   await tmux.ensureConfig()
   const promptFiles = new PromptFiles(promptsDir())
   await promptFiles.sweep()
-  ptyService = new PtyService(nodePty.spawn)
   const settings = new SettingsService(new SettingsStore(settingsFile(), claudeConfigDir()))
   await settings.init()
+  const warn = (msg: string): void => console.warn(msg)
+  terminal = new TerminalSwitch(
+    {
+      classic: new PtyService(nodePty.spawn, (session) => tmux.attachCommand(session)),
+      direct: new ControlTerminal((session, cwd) => spawnControl(tmux.controlCommand(session), cwd, warn), warn),
+    },
+    () => settings.get().terminalMode,
+  )
   // Before the window exists, so its first frame and the page's prefers-color-scheme already match the setting.
   windowBackground = followAppearance({ theme: nativeTheme, settings, getWindow: () => mainWindow })
   const orchestrator = new Orchestrator({
@@ -148,7 +159,7 @@ async function bootstrap(): Promise<void> {
     git: new GitService(),
     gh: new GhService(), // looks gh up on PATH when asked (after loadLoginShellPath), until found
     tmux,
-    pty: ptyService,
+    pty: terminal,
     files: new FilesService(),
     settings,
     ui: new UiStateStore(uiStateFile()),
@@ -168,7 +179,7 @@ async function bootstrap(): Promise<void> {
   await orchestrator.init()
   started = orchestrator
 
-  registerIpc({ app: orchestrator, pty: ptyService, getWindow: () => mainWindow })
+  registerIpc({ app: orchestrator, pty: terminal, getWindow: () => mainWindow })
   buildMenu()
 
   // Desktop notifications when a background task's Claude finishes or waits for input (Settings.notifications).
@@ -225,7 +236,7 @@ app
 app.on('before-quit', (event) => {
   notificationWatcher?.stop()
   budgetWatcher?.stop()
-  ptyService?.detach()
+  terminal?.detach()
   if (quitReady || !started) return
   event.preventDefault()
   quitReady = true

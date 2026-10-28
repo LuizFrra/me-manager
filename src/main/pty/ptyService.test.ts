@@ -16,6 +16,9 @@ function fakeSpawn(): {
 
 const noop = (): void => undefined
 
+/** What PtyService spawns for a session, like TmuxService.attachCommand. */
+const command = (session: string): { file: string; args: string[] } => ({ file: 'tmux', args: ['attach', session] })
+
 class FakePty {
   dataCb: (d: string) => void = () => {}
   exitCb: (e: { exitCode: number }) => void = () => {}
@@ -47,18 +50,20 @@ class FakePty {
 }
 
 describe('PtyService', () => {
-  it('spawns with the remembered size and a clean env', () => {
+  it("spawns the session's command with the remembered size and a clean env", () => {
     const { spawn, procs } = fakeSpawn()
     process.env.TMUX = '/tmp/tmux-1/default,1,0'
-    const svc = new PtyService(spawn)
+    const svc = new PtyService(spawn, command)
     svc.resize(100, 40)
-    svc.attach('tmux', ['attach'], '/work')
+    svc.attach('mmt_a', '/work')
     const opts = procs[0].opts as {
       cols: number
       rows: number
       cwd: string
       env: Record<string, string>
     }
+    expect(procs[0].file).toBe('tmux')
+    expect(procs[0].args).toEqual(['attach', 'mmt_a'])
     expect([opts.cols, opts.rows, opts.cwd]).toEqual([100, 40, '/work'])
     expect(opts.env.TERM).toBe('xterm-256color')
     expect(opts.env.TMUX).toBeUndefined()
@@ -67,10 +72,10 @@ describe('PtyService', () => {
 
   it('forwards data, writes and resizes for the current pty', () => {
     const { spawn, procs } = fakeSpawn()
-    const svc = new PtyService(spawn)
+    const svc = new PtyService(spawn, command)
     const data: string[] = []
     svc.onData((d) => data.push(d))
-    svc.attach('tmux', [], '/w')
+    svc.attach('mmt_a', '/w')
     procs[0].dataCb('hello')
     svc.write('ls\r')
     svc.resize(90, 30)
@@ -81,8 +86,8 @@ describe('PtyService', () => {
 
   it('ignores a size that is not a whole number of at least 2, or more than tmux takes', () => {
     const { spawn, procs } = fakeSpawn()
-    const svc = new PtyService(spawn)
-    svc.attach('tmux', [], '/w')
+    const svc = new PtyService(spawn, command)
+    svc.attach('mmt_a', '/w')
     svc.resize(90, 30)
     for (const [c, r] of [
       [1, 30],
@@ -95,19 +100,19 @@ describe('PtyService', () => {
       svc.resize(c, r)
     }
     expect(procs[0].size).toEqual([90, 30])
-    svc.attach('tmux', [], '/w') // the next pty starts at the last good size
+    svc.attach('mmt_a', '/w') // the next pty starts at the last good size
     expect([procs[1].opts.cols, procs[1].opts.rows]).toEqual([90, 30])
   })
 
   it('kills the previous pty on re-attach and ignores its late events', () => {
     const { spawn, procs } = fakeSpawn()
-    const svc = new PtyService(spawn)
+    const svc = new PtyService(spawn, command)
     const data: string[] = []
     const exits: number[] = []
     svc.onData((d) => data.push(d))
     svc.onExit((c) => exits.push(c))
-    svc.attach('tmux', ['a'], '/w')
-    svc.attach('tmux', ['b'], '/w')
+    svc.attach('mmt_a', '/w')
+    svc.attach('mmt_b', '/w')
     expect(procs[0].killed).toBe(true)
     procs[0].dataCb('stale')
     procs[0].exitCb({ exitCode: 0 })
@@ -117,10 +122,10 @@ describe('PtyService', () => {
 
   it('emits exit when the current pty ends', () => {
     const { spawn, procs } = fakeSpawn()
-    const svc = new PtyService(spawn)
+    const svc = new PtyService(spawn, command)
     const exits: number[] = []
     svc.onExit((c) => exits.push(c))
-    svc.attach('tmux', [], '/w')
+    svc.attach('mmt_a', '/w')
     procs[0].exitCb({ exitCode: 1 })
     expect(exits).toEqual([1])
     svc.write('ignored')
@@ -129,14 +134,14 @@ describe('PtyService', () => {
 
   it('detach kills without emitting exit; unsubscribe works', () => {
     const { spawn, procs } = fakeSpawn()
-    const svc = new PtyService(spawn)
+    const svc = new PtyService(spawn, command)
     const exits: number[] = []
     const off = svc.onExit((c) => exits.push(c))
-    svc.attach('tmux', [], '/w')
+    svc.attach('mmt_a', '/w')
     svc.detach()
     expect(procs[0].killed).toBe(true)
     off()
-    svc.attach('tmux', [], '/w')
+    svc.attach('mmt_a', '/w')
     procs[1].exitCb({ exitCode: 0 })
     expect(exits).toEqual([])
   })

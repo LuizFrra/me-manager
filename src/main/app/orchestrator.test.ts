@@ -591,7 +591,7 @@ describe('Orchestrator: rename', () => {
     expect(git.calls).toEqual([])
     expect(tmux.calls).toEqual([])
     await orch.openTarget({ themeId, itemId: repoId, taskId: task.id })
-    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+    expect(pty.attached?.session).toBe('mmt_client-x_my-api_fix')
   })
 
   it('rejects empty and duplicate names without saving', async () => {
@@ -1075,7 +1075,7 @@ describe('Orchestrator: sessions and tabs', () => {
     tmux.calls = []
     const tabs = await orch.openTarget(target)
     expect(tmux.calls).toEqual([])
-    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+    expect(pty.attached?.session).toBe('mmt_client-x_my-api_fix')
     expect(pty.attached?.cwd).toBe('/wt/client-x/my-api/fix')
     expect(tabs).toEqual([{ index: 0, name: 'claude', active: true }])
   })
@@ -1093,8 +1093,39 @@ describe('Orchestrator: sessions and tabs', () => {
     const tabs = await Promise.all([orch.openTarget(target), orch.openTarget(target)])
     expect(tabs).toEqual([[{ index: 0, name: 'claude', active: true }], [{ index: 0, name: 'claude', active: true }]])
     expect(tmux.sessions.get('mmt_client-x_my-api_fix')?.windows).toHaveLength(1)
-    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_fix'])
+    expect(pty.attached?.session).toBe('mmt_client-x_my-api_fix')
     expect(orch.currentTarget()).toEqual(target)
+  })
+
+  it('shows the target again, in the new mode, when the terminal mode changes', async () => {
+    const { orch, pty, settings, target } = await withTask()
+    await orch.openTarget(target)
+    // The terminal reads the mode when it attaches: the new one must be saved by then.
+    const modes: string[] = []
+    const attach = pty.attach.bind(pty)
+    pty.attach = (session: string, cwd: string): void => {
+      modes.push(settings.get().terminalMode)
+      attach(session, cwd)
+    }
+    await orch.updateSettings({ terminalMode: 'classic' })
+    expect(modes).toEqual(['classic'])
+    expect(pty.attaches).toHaveLength(2)
+    expect(pty.attached).toEqual({ session: 'mmt_client-x_my-api_fix', cwd: '/wt/client-x/my-api/fix' })
+    expect(orch.currentTarget()).toEqual(target)
+  })
+
+  it("doesn't attach again when the terminal mode stays, or when nothing is shown", async () => {
+    const { orch, pty, settings, target } = await withTask()
+    await orch.updateSettings({ terminalMode: 'classic' }) // nothing shown
+    expect(pty.attaches).toEqual([])
+    await orch.openTarget(target)
+    await orch.updateSettings({ terminalMode: 'classic', pollIntervalMs: 2000 })
+    await orch.updateSettings({ ...(await orch.getSettings()), terminalFontSize: 15 })
+    expect(pty.attaches).toHaveLength(1)
+    await orch.detachTerminal()
+    await orch.updateSettings({ terminalMode: 'direct' })
+    expect(pty.attaches).toHaveLength(1)
+    expect(settings.get().terminalMode).toBe('direct')
   })
 
   it('detaches the terminal on request, cancelling an open still in flight', async () => {
@@ -1146,10 +1177,10 @@ describe('Orchestrator: sessions and tabs', () => {
 
     const openA = orch.openTarget(a)
     await orch.openTarget(b)
-    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_other'])
+    expect(pty.attached?.session).toBe('mmt_client-x_my-api_other')
     releaseA()
     const tabsA = await openA
-    expect(pty.attached?.args).toEqual(['attach', 'mmt_client-x_my-api_other'])
+    expect(pty.attached?.session).toBe('mmt_client-x_my-api_other')
     expect(tabsA).toEqual([{ index: 0, name: 'claude', active: true }])
 
     // B is still the current target: removing A must not detach the terminal.

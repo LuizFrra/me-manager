@@ -4,6 +4,10 @@ import { isTermSize } from './termSize'
 
 export type SpawnFn = (file: string, args: string[], options: IPtyForkOptions) => IPty
 
+/** The command attaching a tmux client to a session (TmuxService.attachCommand). */
+export type AttachCommand = (session: string) => { file: string; args: string[] }
+
+/** The classic terminal: a tmux client attached to the session, in a pty. */
 export class PtyService implements PtyApi {
   private proc: IPty | null = null
   private cols = 120
@@ -11,10 +15,14 @@ export class PtyService implements PtyApi {
   private readonly dataListeners = new Set<(data: string) => void>()
   private readonly exitListeners = new Set<(code: number) => void>()
 
-  constructor(private readonly spawn: SpawnFn) {}
+  constructor(
+    private readonly spawn: SpawnFn,
+    private readonly command: AttachCommand,
+  ) {}
 
-  attach(file: string, args: string[], cwd: string): void {
+  attach(session: string, cwd: string): void {
     this.detach()
+    const { file, args } = this.command(session)
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
     env.TERM = 'xterm-256color'
